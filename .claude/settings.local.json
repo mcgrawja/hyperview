@@ -49,7 +49,12 @@
       "Bash(rm -rf /Applications/Hyperview.app)",
       "Bash(cp -R \"/Users/mcgrawja/Library/Developer/Xcode/DerivedData/Hyperview-cytnqhwmpjwtjqgzyltymcljcvgc/Build/Products/Debug/Hyperview.app\" /Applications/Hyperview.app)",
       "Bash(open /Applications/Hyperview.app)",
-      "Bash(curl -s -H 'x-hyperview-token: __TRACKED_VAR__' http://127.0.0.1:48219/tools)"
+      "Bash(curl -s -H 'x-hyperview-token: __TRACKED_VAR__' http://127.0.0.1:48219/tools)",
+      "Read(//Users/mcgrawja/.ssh/**)",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=5 -T git@github.com)",
+      "Bash(ssh-keyscan github.com)",
+      "Bash(git remote *)",
+      "Bash(git push *)"
     ]
   }
 }
