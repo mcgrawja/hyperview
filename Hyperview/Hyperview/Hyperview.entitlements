@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App Sandbox (D8: Developer ID direct install still runs sandboxed) -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+
+	<!-- Outbound network: Anthropic API, Gmail REST, IMAP/SMTP (D9, D10) -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- Inbound: local MCP streamable-HTTP server on localhost (§7.2) -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+
+	<!-- Per-module TCC surfaces (§6); prompts are staggered at runtime, not launch -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+	<key>com.apple.security.personal-information.addressbook</key>
+	<true/>
+	<key>com.apple.security.personal-information.photos-library</key>
+	<true/>
+
+	<!-- User-selected file access is driven by the ENABLE_USER_SELECTED_FILES build
+	     setting (readonly today); Phase 4 mail attachments revisit it there. -->
+
+	<!-- iCloud/CloudKit private database (D2). SwiftData binds to this container
+	     via cloudKitDatabase: .automatic. The production schema is promoted
+	     exactly once at the end of Phase 2 (§9 phase-gate); development runs
+	     against the CloudKit development environment until then. -->
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.mcgraw.Hyperview</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+</dict>
+</plist>

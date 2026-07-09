@@ -1,0 +1,82 @@
+//
+//  Snapshots.swift
+//  Hyperview
+//
+//  Sendable value snapshots returned across the broker boundary. These are the
+//  types the UI renders and (later) the MCP tools serialize — they must stay
+//  free of EventKit/Contacts framework references and Codable-friendly so a
+//  tool response is a trivial encode.
+//
+
+import Foundation
+
+/// A calendar the user can write events to (from `EventKitBroker`).
+nonisolated struct CalendarSnapshot: Identifiable, Sendable, Hashable, Codable {
+    /// EventKit `calendarIdentifier`.
+    let id: String
+    var title: String
+    var colorHex: String?
+}
+
+/// A calendar event (from `EventKitBroker`).
+nonisolated struct EventSnapshot: Identifiable, Sendable, Hashable, Codable {
+    /// EventKit `eventIdentifier`.
+    let id: String
+    var title: String
+    var start: Date
+    var end: Date
+    var isAllDay: Bool
+    var location: String?
+    var notes: String?
+    var calendarTitle: String
+    /// Calendar color as a hex string (e.g. "#4A90D9") for theming; the Theme
+    /// layer decides how/whether to use it.
+    var calendarColorHex: String?
+}
+
+/// A reminder (from `EventKitBroker`).
+nonisolated struct ReminderSnapshot: Identifiable, Sendable, Hashable, Codable {
+    /// EventKit `calendarItemIdentifier`.
+    let id: String
+    var title: String
+    var dueDate: Date?
+    var isCompleted: Bool
+    /// EventKit priority 0–9 (0 = none, 1 = highest).
+    var priority: Int
+    var notes: String?
+    var listTitle: String
+}
+
+/// A photo library asset (from `PhotoBroker`). Pixels are fetched separately
+/// via `PhotoBroker.thumbnail` — snapshots stay tiny.
+nonisolated struct PhotoSnapshot: Identifiable, Sendable, Hashable, Codable {
+    /// PhotoKit `localIdentifier`.
+    let id: String
+    var creationDate: Date?
+    var isFavorite: Bool
+    var pixelWidth: Int
+    var pixelHeight: Int
+}
+
+/// A contact (from `ContactsBroker`).
+nonisolated struct ContactSnapshot: Identifiable, Sendable, Hashable, Codable {
+    /// `CNContact.identifier`.
+    let id: String
+    var givenName: String
+    var familyName: String
+    var organizationName: String?
+    var emailAddresses: [String]
+    var phoneNumbers: [String]
+    /// Small thumbnail image data if the contact has one.
+    var thumbnail: Data?
+
+    /// Display name, falling back to organization, then a placeholder.
+    var displayName: String {
+        let full = [givenName, familyName]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        if !full.isEmpty { return full }
+        if let org = organizationName, !org.isEmpty { return org }
+        return "No Name"
+    }
+}

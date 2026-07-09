@@ -1,0 +1,301 @@
+//
+//  EventKitBroker.swift
+//  Hyperview
+//
+//  §3 / §6 — Calendar + Reminders. One actor owns one EKEventStore. Access is
+//  requested lazily, per module, on first open (never at launch): calendar and
+//  reminders are distinct TCC prompts, so each has its own request verb.
+//
+//  Every public verb here is destined to become an MCP tool (§7):
+//    fetch / fetchEvents      -> calendar_today, calendar_query
+//    createEvent              -> calendar_create_event
+//    fetchReminders           -> reminders_due
+//    createReminder           -> reminders_create
+//    completeReminder         -> reminders_complete
+//
+
+import Foundation
+import EventKit
+
+actor EventKitBroker: DataBroker {
+    typealias Item = EventSnapshot
+
+    private let store = EKEventStore()
+
+    // MARK: Authorization
+
+    /// Requests full **calendar** access (primary item). Reminders access is a
+    /// separate prompt — see `requestRemindersAccess()`.
+    func requestAccess() async throws {
+        let granted = try await store.requestFullAccessToEvents()
+        guard granted else { throw BrokerError.accessDenied }
+    }
+
+    func requestRemindersAccess() async throws {
+        let granted = try await store.requestFullAccessToReminders()
+        guard granted else { throw BrokerError.accessDenied }
+    }
+
+    nonisolated var calendarAuthorization: BrokerAuthorization {
+        Self.map(EKEventStore.authorizationStatus(for: .event))
+    }
+
+    nonisolated var remindersAuthorization: BrokerAuthorization {
+        Self.map(EKEventStore.authorizationStatus(for: .reminder))
+    }
+
+    private static func map(_ status: EKAuthorizationStatus) -> BrokerAuthorization {
+        switch status {
+        case .notDetermined: return .notDetermined
+        case .restricted: return .restricted
+        case .denied: return .denied
+        case .fullAccess: return .authorized
+        case .writeOnly: return .limited
+        case .authorized: return .authorized
+        @unknown default: return .denied
+        }
+    }
+
+    // MARK: Calendar (DataBroker.Item == EventSnapshot)
+
+    /// `fetch` returns calendar events. Honors `dateRange` (defaults to today)
+    /// and `limit`.
+    func fetch(_ query: BrokerQuery) async throws -> [EventSnapshot] {
+        guard calendarAuthorization == .authorized || calendarAuthorization == .limited else {
+            throw BrokerError.accessDenied
+        }
+        let range = query.dateRange ?? Self.todayRange()
+        let predicate = store.predicateForEvents(
+            withStart: range.lowerBound,
+            end: range.upperBound,
+            calendars: nil
+        )
+        var events = store.events(matching: predicate)
+            .sorted { $0.startDate < $1.startDate }
+
+        if let text = query.searchText, !text.isEmpty {
+            events = events.filter { ($0.title ?? "").localizedCaseInsensitiveContains(text) }
+        }
+        if let limit = query.limit { events = Array(events.prefix(limit)) }
+        return events.map(Self.snapshot(from:))
+    }
+
+    /// Convenience for the dashboard "today" card.
+    func fetchTodayEvents() async throws -> [EventSnapshot] {
+        try await fetch(BrokerQuery(dateRange: Self.todayRange()))
+    }
+
+    /// Calendars the user can write events to.
+    func eventCalendars() async throws -> [CalendarSnapshot] {
+        guard calendarAuthorization == .authorized || calendarAuthorization == .limited else {
+            throw BrokerError.accessDenied
+        }
+        return store.calendars(for: .event)
+            .filter(\.allowsContentModifications)
+            .map { calendar in
+                CalendarSnapshot(
+                    id: calendar.calendarIdentifier,
+                    title: calendar.title,
+                    colorHex: calendar.cgColor.flatMap(Self.hexString(from:))
+                )
+            }
+            .sorted { $0.title < $1.title }
+    }
+
+    /// Creates an event and returns its snapshot. `calendarID` selects the
+    /// target calendar (default calendar when nil/unknown).
+    @discardableResult
+    func createEvent(
+        title: String,
+        start: Date,
+        end: Date,
+        isAllDay: Bool = false,
+        location: String? = nil,
+        notes: String? = nil,
+        calendarID: String? = nil
+    ) async throws -> EventSnapshot {
+        guard calendarAuthorization == .authorized else { throw BrokerError.accessDenied }
+        guard end >= start else { throw BrokerError.invalidInput("end must not precede start") }
+
+        let event = EKEvent(eventStore: store)
+        event.title = title
+        event.startDate = start
+        event.endDate = end
+        event.isAllDay = isAllDay
+        event.location = location
+        event.notes = notes
+        event.calendar = calendarID.flatMap { store.calendar(withIdentifier: $0) }
+            ?? store.defaultCalendarForNewEvents
+        do {
+            try store.save(event, span: .thisEvent, commit: true)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+        return Self.snapshot(from: event)
+    }
+
+    // MARK: Reminders (domain-specific verbs, §3)
+
+    /// Incomplete reminders due within `dateRange` (or all incomplete if none),
+    /// plus completed ones when `includeCompleted` is set.
+    func fetchReminders(_ query: BrokerQuery) async throws -> [ReminderSnapshot] {
+        guard remindersAuthorization == .authorized || remindersAuthorization == .limited else {
+            throw BrokerError.accessDenied
+        }
+        let predicate: NSPredicate
+        if let range = query.dateRange {
+            predicate = store.predicateForIncompleteReminders(
+                withDueDateStarting: range.lowerBound,
+                ending: range.upperBound,
+                calendars: nil
+            )
+        } else {
+            predicate = store.predicateForReminders(in: nil)
+        }
+
+        var reminders = try await fetchReminderSnapshots(matching: predicate)
+        if !query.includeCompleted {
+            reminders = reminders.filter { !$0.isCompleted }
+        }
+        if let text = query.searchText, !text.isEmpty {
+            reminders = reminders.filter { $0.title.localizedCaseInsensitiveContains(text) }
+        }
+        reminders.sort(by: Self.byDueDate)
+        if let limit = query.limit { reminders = Array(reminders.prefix(limit)) }
+        return reminders
+    }
+
+    /// Dashboard "due" card: incomplete reminders with a due date up to now+window.
+    func fetchDueReminders(within window: TimeInterval = 7 * 24 * 60 * 60) async throws -> [ReminderSnapshot] {
+        let now = Date()
+        return try await fetchReminders(
+            BrokerQuery(dateRange: now.addingTimeInterval(-window)...now.addingTimeInterval(window))
+        )
+    }
+
+    @discardableResult
+    func createReminder(
+        title: String,
+        dueDate: Date? = nil,
+        priority: Int = 0,
+        notes: String? = nil
+    ) async throws -> ReminderSnapshot {
+        guard remindersAuthorization == .authorized else { throw BrokerError.accessDenied }
+        guard let list = store.defaultCalendarForNewReminders() else {
+            throw BrokerError.underlying("No default reminders list")
+        }
+        let reminder = EKReminder(eventStore: store)
+        reminder.title = title
+        reminder.calendar = list
+        reminder.priority = priority
+        reminder.notes = notes
+        if let dueDate {
+            reminder.dueDateComponents = Calendar.current.dateComponents(
+                [.year, .month, .day, .hour, .minute], from: dueDate
+            )
+        }
+        do {
+            try store.save(reminder, commit: true)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+        return Self.snapshot(from: reminder)
+    }
+
+    /// Marks a reminder complete by identifier.
+    func completeReminder(id: String) async throws {
+        guard remindersAuthorization == .authorized else { throw BrokerError.accessDenied }
+        guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else {
+            throw BrokerError.notFound
+        }
+        reminder.isCompleted = true
+        do {
+            try store.save(reminder, commit: true)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+    }
+
+    // MARK: Change feed
+
+    /// EKEventStoreChanged is store-wide (covers both events and reminders), so
+    /// every notification is surfaced as `.reloaded`.
+    nonisolated func changes() -> AsyncStream<BrokerChange<EventSnapshot>> {
+        AsyncStream { continuation in
+            // Token is only ever passed to removeObserver; safe to share.
+            nonisolated(unsafe) let token = NotificationCenter.default.addObserver(
+                forName: .EKEventStoreChanged,
+                object: nil,
+                queue: nil
+            ) { _ in
+                continuation.yield(.reloaded)
+            }
+            continuation.onTermination = { _ in
+                NotificationCenter.default.removeObserver(token)
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private static func todayRange() -> ClosedRange<Date> {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: Date())
+        let end = cal.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+        return start...end
+    }
+
+    /// Converts to Sendable snapshots inside the completion handler so no
+    /// EKReminder (non-Sendable) crosses back to the actor.
+    private func fetchReminderSnapshots(matching predicate: NSPredicate) async throws -> [ReminderSnapshot] {
+        try await withCheckedThrowingContinuation { continuation in
+            store.fetchReminders(matching: predicate) { reminders in
+                let snapshots = (reminders ?? []).map(Self.snapshot(from:))
+                continuation.resume(returning: snapshots)
+            }
+        }
+    }
+
+    private static func byDueDate(_ a: ReminderSnapshot, _ b: ReminderSnapshot) -> Bool {
+        switch (a.dueDate, b.dueDate) {
+        case let (x?, y?): return x < y
+        case (_?, nil): return true
+        case (nil, _?): return false
+        case (nil, nil): return a.title < b.title
+        }
+    }
+
+    private static func snapshot(from event: EKEvent) -> EventSnapshot {
+        EventSnapshot(
+            id: event.eventIdentifier ?? UUID().uuidString,
+            title: event.title ?? "(No Title)",
+            start: event.startDate ?? Date(),
+            end: event.endDate ?? event.startDate ?? Date(),
+            isAllDay: event.isAllDay,
+            location: event.location,
+            notes: event.notes,
+            calendarTitle: event.calendar?.title ?? "",
+            calendarColorHex: event.calendar?.cgColor.flatMap(hexString(from:))
+        )
+    }
+
+    private static func snapshot(from reminder: EKReminder) -> ReminderSnapshot {
+        ReminderSnapshot(
+            id: reminder.calendarItemIdentifier,
+            title: reminder.title ?? "(No Title)",
+            dueDate: reminder.dueDateComponents?.date,
+            isCompleted: reminder.isCompleted,
+            priority: reminder.priority,
+            notes: reminder.notes,
+            listTitle: reminder.calendar?.title ?? ""
+        )
+    }
+
+    private static func hexString(from color: CGColor) -> String? {
+        guard let components = color.components, components.count >= 3 else { return nil }
+        let r = Int((components[0] * 255).rounded())
+        let g = Int((components[1] * 255).rounded())
+        let b = Int((components[2] * 255).rounded())
+        return String(format: "#%02X%02X%02X", r, g, b)
+    }
+}

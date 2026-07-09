@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<link rel="stylesheet" href="editor.css">
+</head>
+<body>
+<!--
+  INTERIM editor (D6). A dependency-free contentEditable that implements the
+  exact §5 bridge contract and the same ProseMirror doc JSON shape as Swift's
+  BlockSerializer. It is deliberately NOT the final editor: when a JS toolchain
+  is available, a bundled TipTap build replaces editor.js and speaks the same
+  bridge — no Swift changes required.
+-->
+<div id="editor" spellcheck="true"></div>
+<script src="editor.js"></script>
+</body>
+</html>
