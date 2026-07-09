@@ -14,13 +14,36 @@ struct ClaudeView: View {
     @Environment(\.mcp) private var mcp
     @Environment(\.automationContainer) private var automationContainer
 
+    private enum Pane: String, CaseIterable {
+        case chat = "Chat"
+        case automation = "Automation"
+    }
+
+    @State private var pane: Pane = .chat
+
     var body: some View {
         Group {
             if let mcp, let automationContainer {
-                ClaudeContent(mcp: mcp)
-                    .modelContainer(automationContainer)
+                VStack(spacing: 0) {
+                    Picker("", selection: $pane) {
+                        ForEach(Pane.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
+                    .padding(.vertical, Theme.Spacing.sm)
+
+                    switch pane {
+                    case .chat:
+                        ClaudeChatView()
+                    case .automation:
+                        ClaudeContent(mcp: mcp)
+                            .modelContainer(automationContainer)
+                    }
+                }
+                .background(Theme.Palette.background)
             } else {
-                Text("MCP unavailable.").foregroundStyle(Theme.Palette.textSecondary)
+                Text("Claude layer unavailable.").foregroundStyle(Theme.Palette.textSecondary)
             }
         }
         .navigationTitle("Claude")

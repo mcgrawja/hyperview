@@ -16334,6 +16334,9 @@ img.ProseMirror-separator {
     }
     return false;
   }
+  function escapeForRegEx(string) {
+    return string.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  }
 
   // node_modules/@tiptap/extension-blockquote/dist/index.js
   var inputRegex = /^\s*>\s$/;
@@ -18554,6 +18557,404 @@ img.ProseMirror-separator {
     }
   });
 
+  // node_modules/@tiptap/suggestion/dist/index.js
+  function findSuggestionMatch(config) {
+    var _a;
+    const { char, allowSpaces: allowSpacesOption, allowToIncludeChar, allowedPrefixes, startOfLine, $position } = config;
+    const allowSpaces = allowSpacesOption && !allowToIncludeChar;
+    const escapedChar = escapeForRegEx(char);
+    const suffix = new RegExp(`\\s${escapedChar}$`);
+    const prefix = startOfLine ? "^" : "";
+    const finalEscapedChar = allowToIncludeChar ? "" : escapedChar;
+    const regexp = allowSpaces ? new RegExp(`${prefix}${escapedChar}.*?(?=\\s${finalEscapedChar}|$)`, "gm") : new RegExp(`${prefix}(?:^)?${escapedChar}[^\\s${finalEscapedChar}]*`, "gm");
+    const text = ((_a = $position.nodeBefore) === null || _a === void 0 ? void 0 : _a.isText) && $position.nodeBefore.text;
+    if (!text) {
+      return null;
+    }
+    const textFrom = $position.pos - text.length;
+    const match = Array.from(text.matchAll(regexp)).pop();
+    if (!match || match.input === void 0 || match.index === void 0) {
+      return null;
+    }
+    const matchPrefix = match.input.slice(Math.max(0, match.index - 1), match.index);
+    const matchPrefixIsAllowed = new RegExp(`^[${allowedPrefixes === null || allowedPrefixes === void 0 ? void 0 : allowedPrefixes.join("")}\0]?$`).test(matchPrefix);
+    if (allowedPrefixes !== null && !matchPrefixIsAllowed) {
+      return null;
+    }
+    const from2 = textFrom + match.index;
+    let to = from2 + match[0].length;
+    if (allowSpaces && suffix.test(text.slice(to - 1, to + 1))) {
+      match[0] += " ";
+      to += 1;
+    }
+    if (from2 < $position.pos && to >= $position.pos) {
+      return {
+        range: {
+          from: from2,
+          to
+        },
+        query: match[0].slice(char.length),
+        text: match[0]
+      };
+    }
+    return null;
+  }
+  var SuggestionPluginKey = new PluginKey("suggestion");
+  function Suggestion({ pluginKey = SuggestionPluginKey, editor: editor2, char = "@", allowSpaces = false, allowToIncludeChar = false, allowedPrefixes = [" "], startOfLine = false, decorationTag = "span", decorationClass = "suggestion", decorationContent = "", decorationEmptyClass = "is-empty", command: command2 = () => null, items = () => [], render = () => ({}), allow = () => true, findSuggestionMatch: findSuggestionMatch$1 = findSuggestionMatch }) {
+    let props;
+    const renderer = render === null || render === void 0 ? void 0 : render();
+    const plugin = new Plugin({
+      key: pluginKey,
+      view() {
+        return {
+          update: async (view, prevState) => {
+            var _a, _b, _c, _d, _e, _f, _g;
+            const prev = (_a = this.key) === null || _a === void 0 ? void 0 : _a.getState(prevState);
+            const next = (_b = this.key) === null || _b === void 0 ? void 0 : _b.getState(view.state);
+            const moved = prev.active && next.active && prev.range.from !== next.range.from;
+            const started = !prev.active && next.active;
+            const stopped = prev.active && !next.active;
+            const changed = !started && !stopped && prev.query !== next.query;
+            const handleStart = started || moved && changed;
+            const handleChange = changed || moved;
+            const handleExit = stopped || moved && changed;
+            if (!handleStart && !handleChange && !handleExit) {
+              return;
+            }
+            const state = handleExit && !handleStart ? prev : next;
+            const decorationNode = view.dom.querySelector(`[data-decoration-id="${state.decorationId}"]`);
+            props = {
+              editor: editor2,
+              range: state.range,
+              query: state.query,
+              text: state.text,
+              items: [],
+              command: (commandProps) => {
+                return command2({
+                  editor: editor2,
+                  range: state.range,
+                  props: commandProps
+                });
+              },
+              decorationNode,
+              // virtual node for popper.js or tippy.js
+              // this can be used for building popups without a DOM node
+              clientRect: decorationNode ? () => {
+                var _a2;
+                const { decorationId } = (_a2 = this.key) === null || _a2 === void 0 ? void 0 : _a2.getState(editor2.state);
+                const currentDecorationNode = view.dom.querySelector(`[data-decoration-id="${decorationId}"]`);
+                return (currentDecorationNode === null || currentDecorationNode === void 0 ? void 0 : currentDecorationNode.getBoundingClientRect()) || null;
+              } : null
+            };
+            if (handleStart) {
+              (_c = renderer === null || renderer === void 0 ? void 0 : renderer.onBeforeStart) === null || _c === void 0 ? void 0 : _c.call(renderer, props);
+            }
+            if (handleChange) {
+              (_d = renderer === null || renderer === void 0 ? void 0 : renderer.onBeforeUpdate) === null || _d === void 0 ? void 0 : _d.call(renderer, props);
+            }
+            if (handleChange || handleStart) {
+              props.items = await items({
+                editor: editor2,
+                query: state.query
+              });
+            }
+            if (handleExit) {
+              (_e = renderer === null || renderer === void 0 ? void 0 : renderer.onExit) === null || _e === void 0 ? void 0 : _e.call(renderer, props);
+            }
+            if (handleChange) {
+              (_f = renderer === null || renderer === void 0 ? void 0 : renderer.onUpdate) === null || _f === void 0 ? void 0 : _f.call(renderer, props);
+            }
+            if (handleStart) {
+              (_g = renderer === null || renderer === void 0 ? void 0 : renderer.onStart) === null || _g === void 0 ? void 0 : _g.call(renderer, props);
+            }
+          },
+          destroy: () => {
+            var _a;
+            if (!props) {
+              return;
+            }
+            (_a = renderer === null || renderer === void 0 ? void 0 : renderer.onExit) === null || _a === void 0 ? void 0 : _a.call(renderer, props);
+          }
+        };
+      },
+      state: {
+        // Initialize the plugin's internal state.
+        init() {
+          const state = {
+            active: false,
+            range: {
+              from: 0,
+              to: 0
+            },
+            query: null,
+            text: null,
+            composing: false
+          };
+          return state;
+        },
+        // Apply changes to the plugin state from a view transaction.
+        apply(transaction, prev, _oldState, state) {
+          const { isEditable } = editor2;
+          const { composing } = editor2.view;
+          const { selection } = transaction;
+          const { empty: empty2, from: from2 } = selection;
+          const next = { ...prev };
+          next.composing = composing;
+          if (isEditable && (empty2 || editor2.view.composing)) {
+            if ((from2 < prev.range.from || from2 > prev.range.to) && !composing && !prev.composing) {
+              next.active = false;
+            }
+            const match = findSuggestionMatch$1({
+              char,
+              allowSpaces,
+              allowToIncludeChar,
+              allowedPrefixes,
+              startOfLine,
+              $position: selection.$from
+            });
+            const decorationId = `id_${Math.floor(Math.random() * 4294967295)}`;
+            if (match && allow({
+              editor: editor2,
+              state,
+              range: match.range,
+              isActive: prev.active
+            })) {
+              next.active = true;
+              next.decorationId = prev.decorationId ? prev.decorationId : decorationId;
+              next.range = match.range;
+              next.query = match.query;
+              next.text = match.text;
+            } else {
+              next.active = false;
+            }
+          } else {
+            next.active = false;
+          }
+          if (!next.active) {
+            next.decorationId = null;
+            next.range = { from: 0, to: 0 };
+            next.query = null;
+            next.text = null;
+          }
+          return next;
+        }
+      },
+      props: {
+        // Call the keydown hook if suggestion is active.
+        handleKeyDown(view, event) {
+          var _a;
+          const { active, range } = plugin.getState(view.state);
+          if (!active) {
+            return false;
+          }
+          return ((_a = renderer === null || renderer === void 0 ? void 0 : renderer.onKeyDown) === null || _a === void 0 ? void 0 : _a.call(renderer, { view, event, range })) || false;
+        },
+        // Setup decorator on the currently active suggestion.
+        decorations(state) {
+          const { active, range, decorationId, query } = plugin.getState(state);
+          if (!active) {
+            return null;
+          }
+          const isEmpty = !(query === null || query === void 0 ? void 0 : query.length);
+          const classNames = [decorationClass];
+          if (isEmpty) {
+            classNames.push(decorationEmptyClass);
+          }
+          return DecorationSet.create(state.doc, [
+            Decoration.inline(range.from, range.to, {
+              nodeName: decorationTag,
+              class: classNames.join(" "),
+              "data-decoration-id": decorationId,
+              "data-decoration-content": decorationContent
+            })
+          ]);
+        }
+      }
+    });
+    return plugin;
+  }
+
+  // src/slash-menu.js
+  var ITEMS = [
+    {
+      title: "Text",
+      hint: "Plain paragraph",
+      keywords: "paragraph plain",
+      run: (e, r) => e.chain().focus().deleteRange(r).setParagraph().run()
+    },
+    {
+      title: "Heading 1",
+      hint: "Large section heading",
+      keywords: "h1 title",
+      run: (e, r) => e.chain().focus().deleteRange(r).setHeading({ level: 1 }).run()
+    },
+    {
+      title: "Heading 2",
+      hint: "Medium section heading",
+      keywords: "h2 subtitle",
+      run: (e, r) => e.chain().focus().deleteRange(r).setHeading({ level: 2 }).run()
+    },
+    {
+      title: "Heading 3",
+      hint: "Small section heading",
+      keywords: "h3",
+      run: (e, r) => e.chain().focus().deleteRange(r).setHeading({ level: 3 }).run()
+    },
+    {
+      title: "Bulleted list",
+      hint: "Simple bullet points",
+      keywords: "ul bullet list -",
+      run: (e, r) => e.chain().focus().deleteRange(r).toggleBulletList().run()
+    },
+    {
+      title: "Numbered list",
+      hint: "Ordered list",
+      keywords: "ol number 1.",
+      run: (e, r) => e.chain().focus().deleteRange(r).toggleOrderedList().run()
+    },
+    {
+      title: "To-do list",
+      hint: "Checklist with checkboxes",
+      keywords: "todo task check []",
+      run: (e, r) => e.chain().focus().deleteRange(r).toggleTaskList().run()
+    },
+    {
+      title: "Quote",
+      hint: "Block quotation",
+      keywords: "blockquote >",
+      run: (e, r) => e.chain().focus().deleteRange(r).toggleBlockquote().run()
+    },
+    {
+      title: "Code block",
+      hint: "Monospaced code",
+      keywords: "code ```",
+      run: (e, r) => e.chain().focus().deleteRange(r).toggleCodeBlock().run()
+    },
+    {
+      title: "Divider",
+      hint: "Horizontal rule",
+      keywords: "hr rule line ---",
+      run: (e, r) => e.chain().focus().deleteRange(r).setHorizontalRule().run()
+    }
+  ];
+  var SlashMenu = class {
+    constructor() {
+      this.element = document.createElement("div");
+      this.element.className = "slash-menu";
+      document.body.appendChild(this.element);
+      this.items = [];
+      this.selected = 0;
+      this.command = null;
+      this.hide();
+    }
+    update(props) {
+      this.items = props.items;
+      this.command = props.command;
+      if (!this.items.length) {
+        this.hide();
+        return;
+      }
+      if (this.selected >= this.items.length) this.selected = 0;
+      this.renderItems();
+      const rect = props.clientRect && props.clientRect();
+      if (rect) {
+        this.element.style.display = "block";
+        const menuHeight = this.element.offsetHeight;
+        const below = rect.bottom + 6;
+        const top = below + menuHeight > window.innerHeight ? Math.max(6, rect.top - menuHeight - 6) : below;
+        this.element.style.top = `${top}px`;
+        this.element.style.left = `${Math.min(rect.left, window.innerWidth - 240)}px`;
+      }
+    }
+    renderItems() {
+      this.element.innerHTML = "";
+      this.items.forEach((item, index) => {
+        const row = document.createElement("div");
+        row.className = "slash-item" + (index === this.selected ? " selected" : "");
+        const title = document.createElement("div");
+        title.className = "slash-title";
+        title.textContent = item.title;
+        const hint = document.createElement("div");
+        hint.className = "slash-hint";
+        hint.textContent = item.hint;
+        row.appendChild(title);
+        row.appendChild(hint);
+        row.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          this.command(item);
+        });
+        row.addEventListener("mouseenter", () => {
+          this.selected = index;
+          this.renderItems();
+        });
+        this.element.appendChild(row);
+      });
+    }
+    onKeyDown(event) {
+      if (event.key === "ArrowDown") {
+        this.selected = (this.selected + 1) % this.items.length;
+        this.renderItems();
+        return true;
+      }
+      if (event.key === "ArrowUp") {
+        this.selected = (this.selected - 1 + this.items.length) % this.items.length;
+        this.renderItems();
+        return true;
+      }
+      if (event.key === "Enter") {
+        const item = this.items[this.selected];
+        if (item) this.command(item);
+        return true;
+      }
+      if (event.key === "Escape") {
+        this.hide();
+        return true;
+      }
+      return false;
+    }
+    hide() {
+      this.element.style.display = "none";
+    }
+    destroy() {
+      this.hide();
+    }
+  };
+  var SlashCommands = Extension.create({
+    name: "slashCommands",
+    addProseMirrorPlugins() {
+      let menu = null;
+      return [
+        Suggestion({
+          editor: this.editor,
+          char: "/",
+          allowSpaces: false,
+          items: ({ query }) => {
+            const q = query.toLowerCase();
+            return ITEMS.filter(
+              (item) => item.title.toLowerCase().includes(q) || item.keywords.includes(q)
+            ).slice(0, 10);
+          },
+          command: ({ editor: editor2, range, props }) => props.run(editor2, range),
+          render: () => ({
+            onStart: (props) => {
+              menu = new SlashMenu();
+              menu.selected = 0;
+              menu.update(props);
+            },
+            onUpdate: (props) => menu && menu.update(props),
+            onKeyDown: (props) => menu ? menu.onKeyDown(props.event) : false,
+            onExit: () => {
+              if (menu) {
+                menu.destroy();
+                menu = null;
+              }
+            }
+          })
+        })
+      ];
+    }
+  });
+
   // src/main.js
   function post(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -18575,7 +18976,8 @@ img.ProseMirror-separator {
       StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
       TaskList,
       TaskItem.configure({ nested: true }),
-      Placeholder.configure({ placeholder: "Type \u2018/\u2019 for commands\u2026" })
+      Placeholder.configure({ placeholder: "Type \u2018/\u2019 for commands\u2026" }),
+      SlashCommands
     ],
     content: EMPTY_DOC,
     autofocus: false,

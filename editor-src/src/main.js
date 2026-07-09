@@ -16,6 +16,7 @@ import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Placeholder from "@tiptap/extension-placeholder";
+import { SlashCommands } from "./slash-menu.js";
 
 function post(msg) {
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -41,6 +42,7 @@ const editor = new Editor({
     TaskList,
     TaskItem.configure({ nested: true }),
     Placeholder.configure({ placeholder: "Type ‘/’ for commands…" }),
+    SlashCommands,
   ],
   content: EMPTY_DOC,
   autofocus: false,

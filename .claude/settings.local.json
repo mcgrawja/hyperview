@@ -44,7 +44,8 @@
       "Bash(git rm *)",
       "Bash(rm -rf Hyperview/.git Hyperview/.gitignore)",
       "Bash(git add *)",
-      "Bash(git -c user.name=\"Jason McGraw\" -c user.email=\"jamcgraw01@gmail.com\" commit --amend --no-edit)"
+      "Bash(git -c user.name=\"Jason McGraw\" -c user.email=\"jamcgraw01@gmail.com\" commit --amend --no-edit)",
+      "Skill(claude-api)"
     ]
   }
 }

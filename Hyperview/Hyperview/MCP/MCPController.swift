@@ -72,7 +72,8 @@ final class MCPController {
     let token: String
 
     @ObservationIgnored private var server: MCPHTTPServer?
-    @ObservationIgnored private var executor: MCPToolExecutor?
+    /// Shared with the in-app Claude chat (Phase 5) — same tools, same audit.
+    @ObservationIgnored private(set) var executor: MCPToolExecutor?
     @ObservationIgnored private let automationContainer: ModelContainer
 
     init(brokers: Brokers, notesContainer: ModelContainer, mailContainer: ModelContainer,
