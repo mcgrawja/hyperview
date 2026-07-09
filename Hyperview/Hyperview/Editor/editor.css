@@ -81,8 +81,10 @@ html, body {
   gap: 0.5em;
 }
 .ProseMirror ul[data-type="taskList"] li > label {
-  /* Center the checkbox against the first line of text */
-  margin-top: calc((1.6em - 15px) / 2);
+  /* Sit the checkbox's bottom edge on the text baseline: line box is 1.6em,
+     the baseline sits ~0.35em above its bottom at this font, checkbox is
+     15px tall. */
+  margin-top: calc(1.6em - 0.32em - 15px);
   user-select: none;
   display: flex;
 }

@@ -94,6 +94,16 @@ nonisolated enum MCPToolRegistry {
             description: "Toggle a todo block's checked state by block id.",
             schema: MCPTool.object(["block_id": MCPTool.prop("string", "Block UUID")], required: ["block_id"])
         ),
+        MCPTool(
+            name: "notes_archive",
+            description: "Archive a note (reversible soft-delete; it leaves the sidebar but can be restored).",
+            schema: MCPTool.object(["id": MCPTool.prop("string", "Note UUID")], required: ["id"])
+        ),
+        MCPTool(
+            name: "notes_restore",
+            description: "Restore an archived note.",
+            schema: MCPTool.object(["id": MCPTool.prop("string", "Note UUID")], required: ["id"])
+        ),
 
         // MARK: Calendar (EventKitBroker)
         MCPTool(
@@ -122,6 +132,24 @@ nonisolated enum MCPToolRegistry {
             ], required: ["title", "start", "end"])
         ),
 
+        MCPTool(
+            name: "calendar_update_event",
+            description: "Update an existing calendar event by id (from calendar_today/calendar_query). Only provided fields change.",
+            schema: MCPTool.object([
+                "id": MCPTool.prop("string", "Event identifier"),
+                "title": MCPTool.prop("string", "New title"),
+                "start": MCPTool.prop("string", "New ISO 8601 start"),
+                "end": MCPTool.prop("string", "New ISO 8601 end"),
+                "location": MCPTool.prop("string", "New location"),
+                "notes": MCPTool.prop("string", "New notes"),
+            ], required: ["id"])
+        ),
+        MCPTool(
+            name: "calendar_delete_event",
+            description: "Delete a calendar event by id (this occurrence only, for recurring events). Confirm with the user before deleting.",
+            schema: MCPTool.object(["id": MCPTool.prop("string", "Event identifier")], required: ["id"])
+        ),
+
         // MARK: Reminders (EventKitBroker)
         MCPTool(
             name: "reminders_due",
@@ -140,6 +168,26 @@ nonisolated enum MCPToolRegistry {
         MCPTool(
             name: "reminders_complete",
             description: "Mark a reminder complete by id (from reminders_due).",
+            schema: MCPTool.object(["id": MCPTool.prop("string", "Reminder identifier")], required: ["id"])
+        ),
+        MCPTool(
+            name: "reminders_uncomplete",
+            description: "Restore a completed reminder to incomplete (undo a completion).",
+            schema: MCPTool.object(["id": MCPTool.prop("string", "Reminder identifier")], required: ["id"])
+        ),
+        MCPTool(
+            name: "reminders_update",
+            description: "Update an existing reminder by id. Only provided fields change.",
+            schema: MCPTool.object([
+                "id": MCPTool.prop("string", "Reminder identifier"),
+                "title": MCPTool.prop("string", "New title"),
+                "due": MCPTool.prop("string", "New ISO 8601 due date"),
+                "notes": MCPTool.prop("string", "New notes"),
+            ], required: ["id"])
+        ),
+        MCPTool(
+            name: "reminders_delete",
+            description: "Delete a reminder by id. Confirm with the user before deleting.",
             schema: MCPTool.object(["id": MCPTool.prop("string", "Reminder identifier")], required: ["id"])
         ),
 

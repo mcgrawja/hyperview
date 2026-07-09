@@ -69,6 +69,8 @@ final class MCPToolExecutor {
         case "notes_append_blocks": return try notesAppend(id: try requireUUID(args, "id"), content: try require(args, "content"))
         case "notes_update_block": return try notesUpdateBlock(id: try requireUUID(args, "block_id"), content: try require(args, "content"))
         case "notes_toggle_todo": return try notesToggleTodo(id: try requireUUID(args, "block_id"))
+        case "notes_archive": return try notesSetArchived(id: try requireUUID(args, "id"), archived: true)
+        case "notes_restore": return try notesSetArchived(id: try requireUUID(args, "id"), archived: false)
 
         case "calendar_today":
             return try encode(try await brokers.eventKit.fetchTodayEvents())
@@ -84,6 +86,19 @@ final class MCPToolExecutor {
                 notes: str(args, "notes")
             )
             return try encode(event)
+        case "calendar_update_event":
+            let updated = try await brokers.eventKit.updateEvent(
+                id: try require(args, "id"),
+                title: str(args, "title"),
+                start: str(args, "start").flatMap { try? isoDate($0) },
+                end: str(args, "end").flatMap { try? isoDate($0) },
+                location: str(args, "location"),
+                notes: str(args, "notes")
+            )
+            return try encode(updated)
+        case "calendar_delete_event":
+            try await brokers.eventKit.deleteEvent(id: try require(args, "id"))
+            return #"{"deleted":true}"#
 
         case "reminders_due":
             let days = (args["days"] as? Double).map(Int.init) ?? 7
@@ -98,6 +113,20 @@ final class MCPToolExecutor {
         case "reminders_complete":
             try await brokers.eventKit.completeReminder(id: try require(args, "id"))
             return #"{"completed":true}"#
+        case "reminders_uncomplete":
+            try await brokers.eventKit.uncompleteReminder(id: try require(args, "id"))
+            return #"{"completed":false,"restored":true}"#
+        case "reminders_update":
+            let updated = try await brokers.eventKit.updateReminder(
+                id: try require(args, "id"),
+                title: str(args, "title"),
+                dueDate: str(args, "due").flatMap { try? isoDate($0) },
+                notes: str(args, "notes")
+            )
+            return try encode(updated)
+        case "reminders_delete":
+            try await brokers.eventKit.deleteReminder(id: try require(args, "id"))
+            return #"{"deleted":true}"#
 
         case "mail_unread": return try mailUnread(limit: (args["limit"] as? Double).map(Int.init) ?? 25)
         case "mail_sync": return try await mailSync()
@@ -206,6 +235,13 @@ final class MCPToolExecutor {
         block.note?.modifiedAt = Date()
         try notesContext.save()
         return #"{"updated":true}"#
+    }
+
+    private func notesSetArchived(id: UUID, archived: Bool) throws -> String {
+        guard let note = try allNotes().first(where: { $0.id == id }) else { throw MCPError("Note not found") }
+        NotesStore(context: notesContext).archive(note, archived)
+        try notesContext.save()
+        return try json(["archived": archived, "title": note.title])
     }
 
     private func notesToggleTodo(id: UUID) throws -> String {

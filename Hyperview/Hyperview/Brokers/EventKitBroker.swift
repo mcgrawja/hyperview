@@ -134,6 +134,45 @@ actor EventKitBroker: DataBroker {
         return Self.snapshot(from: event)
     }
 
+    /// Update an existing event; nil fields are left unchanged.
+    @discardableResult
+    func updateEvent(
+        id: String,
+        title: String? = nil,
+        start: Date? = nil,
+        end: Date? = nil,
+        location: String? = nil,
+        notes: String? = nil
+    ) async throws -> EventSnapshot {
+        guard calendarAuthorization == .authorized else { throw BrokerError.accessDenied }
+        guard let event = store.event(withIdentifier: id) else { throw BrokerError.notFound }
+        if let title { event.title = title }
+        if let start { event.startDate = start }
+        if let end { event.endDate = end }
+        if let location { event.location = location }
+        if let notes { event.notes = notes }
+        guard event.endDate >= event.startDate else {
+            throw BrokerError.invalidInput("end must not precede start")
+        }
+        do {
+            try store.save(event, span: .thisEvent, commit: true)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+        return Self.snapshot(from: event)
+    }
+
+    /// Delete an event (this occurrence only for recurring events).
+    func deleteEvent(id: String) async throws {
+        guard calendarAuthorization == .authorized else { throw BrokerError.accessDenied }
+        guard let event = store.event(withIdentifier: id) else { throw BrokerError.notFound }
+        do {
+            try store.remove(event, span: .thisEvent, commit: true)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+    }
+
     // MARK: Reminders (domain-specific verbs, §3)
 
     /// Incomplete reminders due within `dateRange` (or all incomplete if none),
@@ -204,13 +243,62 @@ actor EventKitBroker: DataBroker {
 
     /// Marks a reminder complete by identifier.
     func completeReminder(id: String) async throws {
+        try await setReminderCompleted(id: id, completed: true)
+    }
+
+    /// Restores a completed reminder to incomplete.
+    func uncompleteReminder(id: String) async throws {
+        try await setReminderCompleted(id: id, completed: false)
+    }
+
+    private func setReminderCompleted(id: String, completed: Bool) async throws {
         guard remindersAuthorization == .authorized else { throw BrokerError.accessDenied }
         guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else {
             throw BrokerError.notFound
         }
-        reminder.isCompleted = true
+        reminder.isCompleted = completed
         do {
             try store.save(reminder, commit: true)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+    }
+
+    /// Update an existing reminder; nil fields are left unchanged.
+    @discardableResult
+    func updateReminder(
+        id: String,
+        title: String? = nil,
+        dueDate: Date? = nil,
+        notes: String? = nil
+    ) async throws -> ReminderSnapshot {
+        guard remindersAuthorization == .authorized else { throw BrokerError.accessDenied }
+        guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else {
+            throw BrokerError.notFound
+        }
+        if let title { reminder.title = title }
+        if let dueDate {
+            reminder.dueDateComponents = Calendar.current.dateComponents(
+                [.year, .month, .day, .hour, .minute], from: dueDate
+            )
+        }
+        if let notes { reminder.notes = notes }
+        do {
+            try store.save(reminder, commit: true)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+        return Self.snapshot(from: reminder)
+    }
+
+    /// Delete a reminder.
+    func deleteReminder(id: String) async throws {
+        guard remindersAuthorization == .authorized else { throw BrokerError.accessDenied }
+        guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else {
+            throw BrokerError.notFound
+        }
+        do {
+            try store.remove(reminder, commit: true)
         } catch {
             throw BrokerError.underlying(error.localizedDescription)
         }

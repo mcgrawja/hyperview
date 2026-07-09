@@ -48,7 +48,8 @@
       "Skill(claude-api)",
       "Bash(rm -rf /Applications/Hyperview.app)",
       "Bash(cp -R \"/Users/mcgrawja/Library/Developer/Xcode/DerivedData/Hyperview-cytnqhwmpjwtjqgzyltymcljcvgc/Build/Products/Debug/Hyperview.app\" /Applications/Hyperview.app)",
-      "Bash(open /Applications/Hyperview.app)"
+      "Bash(open /Applications/Hyperview.app)",
+      "Bash(curl -s -H 'x-hyperview-token: __TRACKED_VAR__' http://127.0.0.1:48219/tools)"
     ]
   }
 }
