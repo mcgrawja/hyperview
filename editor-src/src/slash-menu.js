@@ -92,11 +92,13 @@ class SlashMenu {
     if (event.key === "ArrowDown") {
       this.selected = (this.selected + 1) % this.items.length;
       this.renderItems();
+      this.scrollSelectedIntoView();
       return true;
     }
     if (event.key === "ArrowUp") {
       this.selected = (this.selected - 1 + this.items.length) % this.items.length;
       this.renderItems();
+      this.scrollSelectedIntoView();
       return true;
     }
     if (event.key === "Enter") {
@@ -109,6 +111,11 @@ class SlashMenu {
       return true;
     }
     return false;
+  }
+
+  scrollSelectedIntoView() {
+    const row = this.element.children[this.selected];
+    if (row) row.scrollIntoView({ block: "nearest" });
   }
 
   hide() {

@@ -19,6 +19,7 @@ struct HyperviewApp: App {
     private let brokers = Brokers()
     private let mailService: MailService
     private let mcp: MCPController
+    private let claudeChat: ClaudeChatController
 
     init() {
         // Flush stdout immediately so diagnostic logs appear in real time even
@@ -39,6 +40,10 @@ struct HyperviewApp: App {
             mailService: service,
             automationContainer: automationContainer
         )
+
+        let chat = ClaudeChatController()
+        chat.attach(mcp: mcp)
+        claudeChat = chat
     }
 
     var body: some Scene {
@@ -49,6 +54,7 @@ struct HyperviewApp: App {
                 .environment(\.mailService, mailService)
                 .environment(\.mcp, mcp)
                 .environment(\.automationContainer, automationContainer)
+                .environment(\.claudeChat, claudeChat)
         }
         .modelContainer(modelContainer)
     }

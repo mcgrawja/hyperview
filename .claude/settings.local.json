@@ -45,7 +45,10 @@
       "Bash(rm -rf Hyperview/.git Hyperview/.gitignore)",
       "Bash(git add *)",
       "Bash(git -c user.name=\"Jason McGraw\" -c user.email=\"jamcgraw01@gmail.com\" commit --amend --no-edit)",
-      "Skill(claude-api)"
+      "Skill(claude-api)",
+      "Bash(rm -rf /Applications/Hyperview.app)",
+      "Bash(cp -R \"/Users/mcgrawja/Library/Developer/Xcode/DerivedData/Hyperview-cytnqhwmpjwtjqgzyltymcljcvgc/Build/Products/Debug/Hyperview.app\" /Applications/Hyperview.app)",
+      "Bash(open /Applications/Hyperview.app)"
     ]
   }
 }

@@ -10,8 +10,10 @@
 import SwiftUI
 
 struct ClaudeChatView: View {
-    @Environment(\.mcp) private var mcp
-    @State private var controller = ClaudeChatController()
+    /// App-level controller — the conversation persists across module switches.
+    @Environment(\.claudeChat) private var envController
+    @State private var fallback = ClaudeChatController()
+    private var controller: ClaudeChatController { envController ?? fallback }
     @State private var draft = ""
     @State private var showingSettings = false
 
@@ -25,7 +27,6 @@ struct ClaudeChatView: View {
             }
         }
         .onAppear {
-            if let mcp { controller.attach(mcp: mcp) }
             controller.refreshKeyState()
         }
         .sheet(isPresented: $showingSettings) {

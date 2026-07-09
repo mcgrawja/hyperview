@@ -177,6 +177,37 @@ actor IMAPClient {
         try await setFlag(path: path, uid: uid, flag: "\\Seen", on: true)
     }
 
+    /// APPEND a raw RFC 5322 message to a mailbox (used to save sent mail on
+    /// providers like iCloud that don't store SMTP sends server-side).
+    func append(path: String, message: Data) async throws {
+        guard let socket else { throw MailError.notConnected }
+        let tag = nextTag()
+        MailLog.log("[IMAP] > \(tag) APPEND \(path) {\(message.count)}")
+        try await socket.send("\(tag) APPEND \(quoted(path)) (\\Seen) {\(message.count)}\r\n")
+
+        // Server must answer with a "+" continuation before the literal.
+        let continuation = try await socket.readLine()
+        let contStr = String(decoding: continuation, as: UTF8.self)
+        guard contStr.hasPrefix("+") else {
+            throw MailError.commandFailed("APPEND refused: \(contStr.prefix(120))")
+        }
+        try await socket.send(message)
+        try await socket.send("\r\n")
+
+        while true {
+            let part = try await readResponsePart()
+            let str = String(decoding: part, as: UTF8.self)
+            if str.hasPrefix("\(tag) ") {
+                let rest = str.dropFirst(tag.count + 1).trimmingCharacters(in: .whitespacesAndNewlines)
+                MailLog.log("[IMAP] < \(tag) \(rest.prefix(80))")
+                guard rest.uppercased().hasPrefix("OK") else {
+                    throw MailError.commandFailed("APPEND failed")
+                }
+                return
+            }
+        }
+    }
+
     /// Set or clear a standard IMAP flag (\Seen, \Flagged, \Deleted, …).
     func setFlag(path: String, uid: Int, flag: String, on: Bool) async throws {
         try await ensureSelected(path)

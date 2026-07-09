@@ -18894,11 +18894,13 @@ img.ProseMirror-separator {
       if (event.key === "ArrowDown") {
         this.selected = (this.selected + 1) % this.items.length;
         this.renderItems();
+        this.scrollSelectedIntoView();
         return true;
       }
       if (event.key === "ArrowUp") {
         this.selected = (this.selected - 1 + this.items.length) % this.items.length;
         this.renderItems();
+        this.scrollSelectedIntoView();
         return true;
       }
       if (event.key === "Enter") {
@@ -18911,6 +18913,10 @@ img.ProseMirror-separator {
         return true;
       }
       return false;
+    }
+    scrollSelectedIntoView() {
+      const row = this.element.children[this.selected];
+      if (row) row.scrollIntoView({ block: "nearest" });
     }
     hide() {
       this.element.style.display = "none";

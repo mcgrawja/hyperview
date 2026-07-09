@@ -81,10 +81,15 @@ html, body {
   gap: 0.5em;
 }
 .ProseMirror ul[data-type="taskList"] li > label {
-  margin-top: 0.15em;
+  /* Center the checkbox against the first line of text */
+  margin-top: calc((1.6em - 15px) / 2);
   user-select: none;
+  display: flex;
 }
 .ProseMirror ul[data-type="taskList"] li > div { flex: 1; }
+/* The task text lives in li > div > p — kill its paragraph margin so the
+   text sits on the same line as the checkbox. */
+.ProseMirror ul[data-type="taskList"] li > div > p { margin: 0; }
 .ProseMirror ul[data-type="taskList"] input[type="checkbox"] {
   accent-color: var(--hv-accent);
   width: 15px;

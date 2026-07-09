@@ -19,10 +19,11 @@ struct DashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 header
+                // Photos card removed by owner preference (2026-07-09) — the
+                // Photos module in the sidebar remains the access point.
                 LazyVGrid(columns: columns, alignment: .leading, spacing: Theme.Spacing.lg) {
                     CalendarCard()
                     RemindersCard()
-                    PhotosCard()
                 }
             }
             .padding(Theme.Spacing.xl)

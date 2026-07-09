@@ -17,7 +17,11 @@ actor SMTPClient {
         self.config = config
     }
 
-    func send(_ message: OutgoingMessage, password: String) async throws {
+    /// Sends the message; returns the rendered RFC 5322 source so the caller
+    /// can APPEND it to the account's Sent mailbox (iCloud and most providers
+    /// do NOT save SMTP sends server-side; Gmail does).
+    @discardableResult
+    func send(_ message: OutgoingMessage, password: String) async throws -> String {
         // Everything the wire thread needs, precomputed as Sendable values so the
         // thread closure never touches the actor.
         let host = config.host
@@ -28,9 +32,11 @@ actor SMTPClient {
         let authPass = base64(password)
         let from = message.fromAddress
         let recipients = message.to + message.cc
-        let payload = render(message) + "\r\n.\r\n"
+        let rendered = render(message)
+        let payload = dotStuff(rendered) + "\r\n.\r\n"
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            // (thread body below sends `payload`; the un-stuffed `rendered` is returned)
             let thread = Thread {
                 let session = SMTPStreamSession(host: host, port: port)
                 do {
@@ -63,6 +69,7 @@ actor SMTPClient {
             thread.stackSize = 512 * 1024
             thread.start()
         }
+        return rendered
     }
 
     // MARK: - Message rendering (RFC 5322)
@@ -84,7 +91,7 @@ actor SMTPClient {
         }
         headers.append("MIME-Version: 1.0")
 
-        let body = dotStuff(normalizeNewlines(message.body))
+        let body = normalizeNewlines(message.body)
 
         if message.attachments.isEmpty {
             headers.append("Content-Type: text/plain; charset=utf-8")

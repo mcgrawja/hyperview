@@ -265,7 +265,22 @@ final class MailService {
         guard let password = MailKeychain.password(for: account.id) else { throw MailError.missingPassword }
         let config = MailServerConfig(host: account.smtpHost, port: account.smtpPort, username: account.emailAddress)
         let smtp = SMTPClient(config: config)
-        try await smtp.send(outgoing, password: password)
+        let rendered = try await smtp.send(outgoing, password: password)
+
+        // Save a copy to the Sent mailbox. Gmail already does this server-side
+        // on SMTP send (an APPEND would duplicate); iCloud and most others
+        // don't. Best-effort — a failed save never fails the send.
+        if !account.smtpHost.lowercased().contains("gmail") {
+            if let imap = await ensureConnected(account) {
+                let sent = sentPath(for: account)
+                do {
+                    try await imap.append(path: sent, message: Data(rendered.utf8))
+                    MailLog.log("[Mail] saved sent message to \(sent)")
+                } catch {
+                    MailLog.log("[Mail] couldn't save to Sent (\(sent)): \(error)")
+                }
+            }
+        }
     }
 
     // MARK: - Cache upserts

@@ -46,4 +46,8 @@ extension EnvironmentValues {
 
     /// Local store holding the MCP audit log.
     @Entry var automationContainer: ModelContainer? = nil
+
+    /// App-wide chat state (Phase 5) — lives at app level so the conversation
+    /// survives switching between modules.
+    @Entry var claudeChat: ClaudeChatController? = nil
 }
