@@ -14,17 +14,22 @@ struct BriefingCard: View {
     @State private var service = BriefingService()
 
     var body: some View {
-        Group {
-            switch service.state {
-            case .hidden:
-                EmptyView()
-            default:
-                card
+        stateContent
+            .task {
+                if let mcp { service.attach(mcp: mcp) }
+                await service.refreshIfStale()
             }
-        }
-        .task {
-            if let mcp { service.attach(mcp: mcp) }
-            await service.refreshIfStale()
+    }
+
+    @ViewBuilder
+    private var stateContent: some View {
+        switch service.state {
+        case .hidden:
+            // NOT EmptyView — SwiftUI never runs .task on a view with no
+            // rendered output, which would leave the key check unreached.
+            Color.clear.frame(height: 0)
+        default:
+            card
         }
     }
 
