@@ -400,6 +400,7 @@
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Hyperview shows your calendar on the dashboard and lets Claude create events on your behalf.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Hyperview sends iMessages on your behalf by automating the Messages app.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Hyperview looks up people so it can link contacts to your mail, events, and notes.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Hyperview shows your recent photos on the dashboard.";
 				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "Hyperview surfaces due reminders and lets you and Claude create and complete them.";
@@ -449,6 +450,7 @@
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Hyperview shows your calendar on the dashboard and lets Claude create events on your behalf.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Hyperview sends iMessages on your behalf by automating the Messages app.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Hyperview looks up people so it can link contacts to your mail, events, and notes.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Hyperview shows your recent photos on the dashboard.";
 				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "Hyperview surfaces due reminders and lets you and Claude create and complete them.";

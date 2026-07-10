@@ -29,6 +29,17 @@
 	<key>com.apple.security.files.bookmarks.app-scope</key>
 	<true/>
 
+	<!-- Messages module (experimental wrapper): reading ~/Library/Messages/chat.db
+	     needs BOTH this sandbox exception (fine for Developer ID direct install;
+	     not App Store) AND user-granted Full Disk Access (TCC). Read-only. -->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+	<array>
+		<string>/Library/Messages/</string>
+	</array>
+	<!-- Sending: automate Messages.app via Apple events (TCC prompt on first send). -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+
 	<!-- iCloud/CloudKit private database (D2). SwiftData binds to this container
 	     via cloudKitDatabase: .automatic. The production schema is promoted
 	     exactly once at the end of Phase 2 (§9 phase-gate); development runs

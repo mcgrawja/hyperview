@@ -46,6 +46,8 @@ struct ContentView: View {
                 ContactsView()
             case .mail:
                 MailView()
+            case .messages:
+                MessagesView()
             case .photos:
                 PhotosView()
             case .claude:
@@ -63,6 +65,7 @@ enum SidebarItem: String, Identifiable, CaseIterable {
     case notes
     case contacts
     case mail
+    case messages
     case photos
     case claude
 
@@ -76,6 +79,7 @@ enum SidebarItem: String, Identifiable, CaseIterable {
         case .notes: return "Notes"
         case .contacts: return "Contacts"
         case .mail: return "Mail"
+        case .messages: return "Messages"
         case .photos: return "Photos"
         case .claude: return "Claude"
         }
@@ -89,12 +93,13 @@ enum SidebarItem: String, Identifiable, CaseIterable {
         case .notes: return "note.text"
         case .contacts: return "person.2"
         case .mail: return "envelope"
+        case .messages: return "message"
         case .photos: return "photo.on.rectangle"
         case .claude: return "sparkles"
         }
     }
 
-    static var available: [SidebarItem] { [.dashboard, .mail, .reminders, .calendar, .notes, .photos, .contacts, .claude] }
+    static var available: [SidebarItem] { [.dashboard, .mail, .messages, .reminders, .calendar, .notes, .photos, .contacts, .claude] }
     static var upcoming: [SidebarItem] { [] }
 }
 

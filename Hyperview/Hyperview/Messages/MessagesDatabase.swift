@@ -1,0 +1,320 @@
+//
+//  MessagesDatabase.swift
+//  Hyperview
+//
+//  Read-only access to the Messages history at ~/Library/Messages/chat.db
+//  (SQLite). Requires BOTH the sandbox read exception in the entitlements AND
+//  user-granted Full Disk Access (TCC) — `hasAccess` distinguishes the states
+//  so the UI can walk the user through the grant.
+//
+//  This is an UNSUPPORTED Apple surface: the schema is stable in practice but
+//  can change in any macOS update, so every query degrades to empty results
+//  rather than crashing. Message text lives in `text` when present, otherwise
+//  in `attributedBody` — a typedstream-archived NSAttributedString that
+//  TypedStreamText decodes heuristically.
+//
+
+import Foundation
+import SQLite3
+
+actor MessagesDatabase {
+    private var db: OpaquePointer?
+
+    /// Real (non-container) home — the sandbox exception path is rooted there.
+    nonisolated static var chatDBPath: String {
+        let home: String
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            home = String(cString: dir)
+        } else {
+            home = NSHomeDirectory()
+        }
+        return home + "/Library/Messages/chat.db"
+    }
+
+    /// True once the database opens and answers a query. False means Full
+    /// Disk Access hasn't been granted (or the grant needs an app relaunch).
+    func hasAccess() -> Bool {
+        if db != nil { return true }
+        guard FileManager.default.isReadableFile(atPath: Self.chatDBPath) else { return false }
+
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(Self.chatDBPath, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let opened = handle else {
+            sqlite3_close(handle)
+            return false
+        }
+        sqlite3_busy_timeout(opened, 1500)
+        if probe(opened) {
+            db = opened
+            return true
+        }
+        sqlite3_close(opened)
+
+        // WAL edge case: a read-only connection can't attach if no -shm file
+        // exists (Messages not running since boot). immutable=1 reads a
+        // point-in-time snapshot instead — fine for a viewer.
+        let uri = "file:\(Self.chatDBPath)?immutable=1"
+        var immutable: OpaquePointer?
+        guard sqlite3_open_v2(uri, &immutable, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK,
+              let snapshot = immutable else {
+            sqlite3_close(immutable)
+            return false
+        }
+        if probe(snapshot) {
+            db = snapshot
+            return true
+        }
+        sqlite3_close(snapshot)
+        return false
+    }
+
+    private func probe(_ handle: OpaquePointer) -> Bool {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(handle, "SELECT COUNT(*) FROM chat", -1, &statement, nil) == SQLITE_OK else {
+            return false
+        }
+        return sqlite3_step(statement) == SQLITE_ROW
+    }
+
+    // MARK: Chats
+
+    /// Recent conversations, newest first.
+    func chats(limit: Int = 80) -> [ChatSnapshot] {
+        guard let db, hasAccess() else { return [] }
+        let sql = """
+        SELECT c.ROWID, c.guid, IFNULL(c.display_name, ''), IFNULL(c.chat_identifier, ''),
+               IFNULL(c.service_name, ''), c.style, MAX(m.date)
+        FROM chat c
+        JOIN chat_message_join j ON j.chat_id = c.ROWID
+        JOIN message m ON m.ROWID = j.message_id
+        WHERE m.item_type = 0
+        GROUP BY c.ROWID
+        ORDER BY MAX(m.date) DESC
+        LIMIT \(limit)
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(statement) }
+
+        var result: [ChatSnapshot] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let chatID = sqlite3_column_int64(statement, 0)
+            let style = sqlite3_column_int(statement, 5)
+            let (preview, fromMe) = lastMessagePreview(chatID: chatID)
+            result.append(ChatSnapshot(
+                id: chatID,
+                guid: columnString(statement, 1),
+                displayName: columnString(statement, 2),
+                identifier: columnString(statement, 3),
+                serviceName: columnString(statement, 4),
+                isGroup: style == 43, // 43 = group, 45 = 1:1
+                participants: participants(chatID: chatID),
+                lastDate: Self.appleDate(sqlite3_column_int64(statement, 6)),
+                lastPreview: preview,
+                lastFromMe: fromMe
+            ))
+        }
+        return result
+    }
+
+    private func participants(chatID: Int64) -> [String] {
+        guard let db else { return [] }
+        let sql = """
+        SELECT h.id FROM handle h
+        JOIN chat_handle_join j ON j.handle_id = h.ROWID
+        WHERE j.chat_id = ?
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, chatID)
+        var handles: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            handles.append(columnString(statement, 0))
+        }
+        return handles
+    }
+
+    private func lastMessagePreview(chatID: Int64) -> (String, Bool) {
+        guard let db else { return ("", false) }
+        let sql = """
+        SELECT m.text, m.attributedBody, m.is_from_me, m.cache_has_attachments
+        FROM message m
+        JOIN chat_message_join j ON j.message_id = m.ROWID
+        WHERE j.chat_id = ? AND m.item_type = 0 AND m.associated_message_type = 0
+        ORDER BY m.date DESC LIMIT 1
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return ("", false) }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, chatID)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return ("", false) }
+        let text = messageText(
+            plain: columnString(statement, 0),
+            body: columnData(statement, 1),
+            hasAttachment: sqlite3_column_int(statement, 3) != 0
+        )
+        return (text, sqlite3_column_int(statement, 2) != 0)
+    }
+
+    // MARK: Messages
+
+    /// The most recent messages of a chat, oldest → newest (transcript order).
+    /// Tapbacks/edits (associated messages) and group-event rows are skipped.
+    func messages(chatID: Int64, limit: Int = 300) -> [MessageSnapshot] {
+        guard let db, hasAccess() else { return [] }
+        let sql = """
+        SELECT m.ROWID, m.text, m.attributedBody, m.date, m.is_from_me,
+               h.id, m.cache_has_attachments
+        FROM message m
+        JOIN chat_message_join j ON j.message_id = m.ROWID
+        LEFT JOIN handle h ON h.ROWID = m.handle_id
+        WHERE j.chat_id = ? AND m.item_type = 0 AND m.associated_message_type = 0
+        ORDER BY m.date DESC
+        LIMIT \(limit)
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, chatID)
+
+        var result: [MessageSnapshot] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let hasAttachment = sqlite3_column_int(statement, 6) != 0
+            let text = messageText(
+                plain: columnString(statement, 1),
+                body: columnData(statement, 2),
+                hasAttachment: hasAttachment
+            )
+            if text.isEmpty { continue }
+            let sender = columnString(statement, 5)
+            result.append(MessageSnapshot(
+                id: sqlite3_column_int64(statement, 0),
+                text: text,
+                date: Self.appleDate(sqlite3_column_int64(statement, 3)),
+                isFromMe: sqlite3_column_int(statement, 4) != 0,
+                senderHandle: sender.isEmpty ? nil : sender,
+                hasAttachment: hasAttachment
+            ))
+        }
+        return result.reversed()
+    }
+
+    /// ROWID of the newest message in a chat — cheap "anything new?" poll.
+    func latestMessageID(chatID: Int64) -> Int64 {
+        guard let db, hasAccess() else { return 0 }
+        let sql = """
+        SELECT MAX(m.ROWID) FROM message m
+        JOIN chat_message_join j ON j.message_id = m.ROWID
+        WHERE j.chat_id = ?
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, chatID)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+        return sqlite3_column_int64(statement, 0)
+    }
+
+    // MARK: - Helpers
+
+    private func messageText(plain: String, body: Data?, hasAttachment: Bool) -> String {
+        if !plain.isEmpty {
+            return Self.stripObjectPlaceholders(plain, hasAttachment: hasAttachment)
+        }
+        if let body, let decoded = TypedStreamText.decode(body), !decoded.isEmpty {
+            return Self.stripObjectPlaceholders(decoded, hasAttachment: hasAttachment)
+        }
+        return hasAttachment ? "📎 Attachment" : ""
+    }
+
+    /// U+FFFC marks an inline attachment in message text; make it readable.
+    private static func stripObjectPlaceholders(_ text: String, hasAttachment: Bool) -> String {
+        let cleaned = text
+            .replacingOccurrences(of: "\u{FFFC}", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty { return hasAttachment ? "📎 Attachment" : "" }
+        return hasAttachment ? "📎 " + cleaned : cleaned
+    }
+
+    /// `message.date` is nanoseconds since 2001-01-01 on modern macOS
+    /// (seconds on ancient exports).
+    private static func appleDate(_ raw: Int64) -> Date {
+        let interval = raw > 10_000_000_000 ? TimeInterval(raw) / 1_000_000_000 : TimeInterval(raw)
+        return Date(timeIntervalSinceReferenceDate: interval)
+    }
+
+    private func columnString(_ statement: OpaquePointer?, _ index: Int32) -> String {
+        guard let cString = sqlite3_column_text(statement, index) else { return "" }
+        return String(cString: cString)
+    }
+
+    private func columnData(_ statement: OpaquePointer?, _ index: Int32) -> Data? {
+        guard let bytes = sqlite3_column_blob(statement, index) else { return nil }
+        let count = Int(sqlite3_column_bytes(statement, index))
+        guard count > 0 else { return nil }
+        return Data(bytes: bytes, count: count)
+    }
+}
+
+// MARK: - typedstream text extraction
+
+/// Extracts the plain string from `message.attributedBody` — an
+/// NSAttributedString archived in Apple's legacy "typedstream" format. Full
+/// parsing isn't needed: the first string payload after the "NSString" class
+/// marker IS the message text (length-prefixed: 1 byte, or 0x81 + UInt16 LE,
+/// or 0x82 + UInt32 LE). Heuristic on purpose — returns nil rather than
+/// guessing wrong.
+nonisolated enum TypedStreamText {
+    static func decode(_ data: Data) -> String? {
+        let bytes = [UInt8](data)
+        let needle = [UInt8]("NSString".utf8)
+        guard let start = firstIndex(of: needle, in: bytes) else { return nil }
+
+        // After the class name: version/marker bytes ending in '+' (0x2B),
+        // then the length. Scan a small window instead of hardcoding offsets.
+        var i = start + needle.count
+        let windowEnd = min(i + 8, bytes.count)
+        var foundMarker = false
+        while i < windowEnd {
+            if bytes[i] == 0x2B { foundMarker = true; i += 1; break }
+            i += 1
+        }
+        guard foundMarker, i < bytes.count else { return nil }
+
+        let first = bytes[i]
+        var length: Int
+        var payload: Int
+        switch first {
+        case 0x81:
+            guard i + 2 < bytes.count else { return nil }
+            length = Int(bytes[i + 1]) | (Int(bytes[i + 2]) << 8)
+            payload = i + 3
+        case 0x82:
+            guard i + 4 < bytes.count else { return nil }
+            length = Int(bytes[i + 1]) | (Int(bytes[i + 2]) << 8)
+                | (Int(bytes[i + 3]) << 16) | (Int(bytes[i + 4]) << 24)
+            payload = i + 5
+        default:
+            length = Int(first)
+            payload = i + 1
+        }
+        guard length > 0, payload + length <= bytes.count else { return nil }
+        return String(bytes: bytes[payload..<(payload + length)], encoding: .utf8)
+    }
+
+    private static func firstIndex(of needle: [UInt8], in haystack: [UInt8]) -> Int? {
+        guard !needle.isEmpty, haystack.count >= needle.count else { return nil }
+        let limit = haystack.count - needle.count
+        for i in 0...limit where haystack[i] == needle[0] {
+            var match = true
+            for j in 1..<needle.count where haystack[i + j] != needle[j] {
+                match = false
+                break
+            }
+            if match { return i }
+        }
+        return nil
+    }
+}
