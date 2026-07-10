@@ -2,23 +2,55 @@
 //  CalendarView.swift
 //  Hyperview
 //
-//  Full calendar module: month grid (event dots colored by calendar) plus the
-//  selected day's agenda, with create/delete via EventKitBroker. Fills the gap
-//  where only the dashboard card existed.
+//  Apple-Calendar-style calendar module: a sidebar of calendars with
+//  visibility toggles, a Day / Week / Month view switcher, hour-grid day and
+//  week views (positioned event blocks, overlap columns, live now-line,
+//  double-click a slot to create), an Apple-style month grid (event chips,
+//  adjacent-month days dimmed, double-click a day to open it), and a full
+//  event editor (click any event). All via EventKitBroker.
 //
 
 import SwiftUI
+
+// MARK: - View mode
+
+private enum CalendarViewMode: String, CaseIterable, Identifiable {
+    case day, week, month
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+}
+
+/// Sheet target for creating an event at a specific moment (double-clicked
+/// grid slot) or a day's default time.
+private struct ComposerTarget: Identifiable {
+    let id = UUID()
+    let start: Date
+    let precise: Bool
+}
 
 struct CalendarView: View {
     @Environment(\.brokers) private var brokers
 
     @State private var access: ModuleAccess = .needsPermission
-    @State private var monthAnchor = Date()
-    @State private var selectedDate = Calendar.current.startOfDay(for: Date())
+    @AppStorage("calendar.viewMode") private var modeRaw = CalendarViewMode.month.rawValue
+    @State private var anchor = Date()
     @State private var events: [EventSnapshot] = []
-    @State private var composing = false
+    @State private var calendars: [CalendarSnapshot] = []
+    @State private var hiddenCalendarIDs: Set<String> = Set(
+        UserDefaults.standard.stringArray(forKey: "calendar.hiddenCalendarIDs") ?? []
+    )
+    @State private var composer: ComposerTarget?
+    @State private var editingEvent: EventSnapshot?
 
     private let calendar = Calendar.current
+
+    private var mode: CalendarViewMode {
+        get { CalendarViewMode(rawValue: modeRaw) ?? .month }
+    }
+
+    private var visibleEvents: [EventSnapshot] {
+        events.filter { !hiddenCalendarIDs.contains($0.calendarID) }
+    }
 
     var body: some View {
         Group {
@@ -42,9 +74,17 @@ struct CalendarView: View {
         .background(Theme.Palette.background)
         .navigationTitle("Calendar")
         .task { await start() }
-        .sheet(isPresented: $composing) {
-            EventComposerView(defaultDate: selectedDate) {
-                Task { await loadMonth() }
+        .sheet(item: $composer) { target in
+            EventComposerView(
+                defaultDate: target.start,
+                preciseStart: target.precise ? target.start : nil
+            ) {
+                Task { await load() }
+            }
+        }
+        .sheet(item: $editingEvent) { event in
+            EventEditorView(event: event) {
+                Task { await load() }
             }
         }
     }
@@ -52,99 +92,146 @@ struct CalendarView: View {
     // MARK: Layout
 
     private var content: some View {
-        VStack(spacing: 0) {
-            header
-            weekdayRow
-            monthGrid
+        HStack(spacing: 0) {
+            sidebar
+                .frame(width: 190)
             Divider().overlay(Theme.Palette.separator)
-            dayAgenda
+            VStack(spacing: 0) {
+                header
+                Divider().overlay(Theme.Palette.separator)
+                switch mode {
+                case .month:
+                    MonthGridView(
+                        anchor: anchor,
+                        events: visibleEvents,
+                        onOpenDay: { day in
+                            anchor = day
+                            modeRaw = CalendarViewMode.day.rawValue
+                            Task { await load() }
+                        },
+                        onEditEvent: { editingEvent = $0 }
+                    )
+                case .week:
+                    TimeGridView(
+                        days: weekDays,
+                        events: visibleEvents,
+                        onCreate: { start in composer = ComposerTarget(start: start, precise: true) },
+                        onEditEvent: { editingEvent = $0 }
+                    )
+                case .day:
+                    TimeGridView(
+                        days: [calendar.startOfDay(for: anchor)],
+                        events: visibleEvents,
+                        onCreate: { start in composer = ComposerTarget(start: start, precise: true) },
+                        onEditEvent: { editingEvent = $0 }
+                    )
+                }
+            }
         }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("CALENDARS")
+                .font(Theme.Font.cardCaption.weight(.semibold))
+                .foregroundStyle(Theme.Palette.textSecondary)
+                .padding(Theme.Spacing.md)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(calendars) { cal in
+                        calendarToggle(cal)
+                    }
+                }
+                .padding(.horizontal, Theme.Spacing.sm)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Theme.Palette.surface)
+    }
+
+    private func calendarToggle(_ cal: CalendarSnapshot) -> some View {
+        let color = cal.colorHex.flatMap { Color(hexString: $0) } ?? Theme.Palette.primary
+        let isVisible = !hiddenCalendarIDs.contains(cal.id)
+        return Button {
+            if isVisible {
+                hiddenCalendarIDs.insert(cal.id)
+            } else {
+                hiddenCalendarIDs.remove(cal.id)
+            }
+            UserDefaults.standard.set(Array(hiddenCalendarIDs), forKey: "calendar.hiddenCalendarIDs")
+        } label: {
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: isVisible ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(color)
+                Text(cal.title)
+                    .font(Theme.Font.cardBody)
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 3)
+            .padding(.horizontal, Theme.Spacing.xs)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var header: some View {
         HStack(spacing: Theme.Spacing.md) {
-            Text(monthAnchor.formatted(.dateTime.month(.wide).year()))
+            Text(headerTitle)
                 .font(Theme.Font.dashboardTitle)
+                .lineLimit(1)
             Spacer()
-            Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }
-            Button("Today") {
-                monthAnchor = Date()
-                selectedDate = calendar.startOfDay(for: Date())
-                Task { await loadMonth() }
+            Picker("", selection: $modeRaw) {
+                ForEach(CalendarViewMode.allCases) { mode in
+                    Text(mode.title).tag(mode.rawValue)
+                }
             }
-            Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 220)
+            .onChange(of: modeRaw) { _, _ in Task { await load() } }
+            Button { shift(-1) } label: { Image(systemName: "chevron.left") }
+            Button("Today") {
+                anchor = Date()
+                Task { await load() }
+            }
+            Button { shift(1) } label: { Image(systemName: "chevron.right") }
             Button {
-                composing = true
+                composer = ComposerTarget(start: calendar.startOfDay(for: anchor), precise: false)
             } label: {
                 Label("New Event", systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
             .tint(Theme.Palette.primary)
         }
-        .padding(Theme.Spacing.lg)
+        .padding(Theme.Spacing.md)
     }
 
-    private var weekdayRow: some View {
-        HStack(spacing: 0) {
-            ForEach(calendar.veryShortWeekdaySymbols, id: \.self) { symbol in
-                Text(symbol)
-                    .font(Theme.Font.cardCaption.weight(.semibold))
-                    .foregroundStyle(Theme.Palette.textSecondary)
-                    .frame(maxWidth: .infinity)
+    private var headerTitle: String {
+        switch mode {
+        case .month:
+            return anchor.formatted(.dateTime.month(.wide).year())
+        case .week:
+            guard let interval = calendar.dateInterval(of: .weekOfYear, for: anchor) else {
+                return anchor.formatted(.dateTime.month(.wide).year())
             }
+            let end = interval.end.addingTimeInterval(-1)
+            let sameMonth = calendar.isDate(interval.start, equalTo: end, toGranularity: .month)
+            let left = interval.start.formatted(.dateTime.month(.abbreviated).day())
+            let right = sameMonth
+                ? end.formatted(.dateTime.day())
+                : end.formatted(.dateTime.month(.abbreviated).day())
+            return "\(left) – \(right), \(end.formatted(.dateTime.year()))"
+        case .day:
+            return anchor.formatted(.dateTime.weekday(.wide).month(.wide).day().year())
         }
-        .padding(.horizontal, Theme.Spacing.lg)
-        .padding(.bottom, Theme.Spacing.xs)
     }
 
-    private var monthGrid: some View {
-        let cells = monthCells()
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 4) {
-            ForEach(Array(cells.enumerated()), id: \.offset) { _, day in
-                if let day {
-                    DayCell(
-                        date: day,
-                        isSelected: calendar.isDate(day, inSameDayAs: selectedDate),
-                        isToday: calendar.isDateInToday(day),
-                        eventColors: eventColors(on: day)
-                    ) {
-                        selectedDate = day
-                    }
-                } else {
-                    Color.clear.frame(height: 44)
-                }
-            }
-        }
-        .padding(.horizontal, Theme.Spacing.lg)
-        .padding(.bottom, Theme.Spacing.md)
-    }
-
-    private var dayAgenda: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                Text(selectedDate.formatted(date: .complete, time: .omitted))
-                    .font(Theme.Font.cardTitle)
-                let dayEvents = events(on: selectedDate)
-                if dayEvents.isEmpty {
-                    EmptyStateLine(text: "Nothing scheduled.")
-                } else {
-                    ForEach(dayEvents) { event in
-                        AgendaRow(event: event)
-                            .contextMenu {
-                                Button("Delete Event", role: .destructive) {
-                                    Task {
-                                        try? await brokers.eventKit.deleteEvent(id: event.id)
-                                        await loadMonth()
-                                    }
-                                }
-                            }
-                    }
-                }
-            }
-            .padding(Theme.Spacing.lg)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(minHeight: 140)
+    private var weekDays: [Date] {
+        guard let interval = calendar.dateInterval(of: .weekOfYear, for: anchor) else { return [] }
+        return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: interval.start) }
     }
 
     // MARK: Data
@@ -152,9 +239,9 @@ struct CalendarView: View {
     private func start() async {
         access = ModuleAccess(brokers.eventKit.calendarAuthorization)
         guard access == .ready else { return }
-        await loadMonth()
+        await load()
         for await _ in brokers.eventKit.changes() {
-            await loadMonth()
+            await load()
         }
     }
 
@@ -162,109 +249,630 @@ struct CalendarView: View {
         do {
             try await brokers.eventKit.requestAccess()
             access = .ready
-            await loadMonth()
+            await load()
         } catch {
             access = ModuleAccess(brokers.eventKit.calendarAuthorization)
         }
     }
 
-    private func loadMonth() async {
-        guard let interval = calendar.dateInterval(of: .month, for: monthAnchor) else { return }
-        // Pad a week each side so edge days render dots correctly.
+    private func load() async {
+        calendars = (try? await brokers.eventKit.eventCalendars(writableOnly: false)) ?? []
+        // Month around the anchor padded a week each side covers every mode
+        // (a week or day view straddling a month edge included).
+        guard let interval = calendar.dateInterval(of: .month, for: anchor) else { return }
         let start = interval.start.addingTimeInterval(-7 * 86_400)
         let end = interval.end.addingTimeInterval(7 * 86_400)
         events = (try? await brokers.eventKit.fetch(BrokerQuery(dateRange: start...end))) ?? []
     }
 
-    private func shiftMonth(_ delta: Int) {
-        monthAnchor = calendar.date(byAdding: .month, value: delta, to: monthAnchor) ?? monthAnchor
-        Task { await loadMonth() }
-    }
-
-    private func monthCells() -> [Date?] {
-        guard let interval = calendar.dateInterval(of: .month, for: monthAnchor) else { return [] }
-        let firstWeekday = calendar.component(.weekday, from: interval.start)
-        let leading = (firstWeekday - calendar.firstWeekday + 7) % 7
-        let dayCount = calendar.range(of: .day, in: .month, for: monthAnchor)?.count ?? 30
-        var cells: [Date?] = Array(repeating: nil, count: leading)
-        for day in 0..<dayCount {
-            cells.append(calendar.date(byAdding: .day, value: day, to: interval.start))
+    private func shift(_ delta: Int) {
+        let component: Calendar.Component
+        switch mode {
+        case .day: component = .day
+        case .week: component = .weekOfYear
+        case .month: component = .month
         }
-        while cells.count % 7 != 0 { cells.append(nil) }
-        return cells
-    }
-
-    private func events(on day: Date) -> [EventSnapshot] {
-        events
-            .filter { calendar.isDate($0.start, inSameDayAs: day) || ($0.isAllDay && calendar.isDate(day, equalTo: $0.start, toGranularity: .day)) }
-            .sorted { $0.start < $1.start }
-    }
-
-    private func eventColors(on day: Date) -> [Color] {
-        let colors = events(on: day).compactMap { $0.calendarColorHex.flatMap { Color(hexString: $0) } }
-        return Array(colors.prefix(3))
+        anchor = calendar.date(byAdding: component, value: delta, to: anchor) ?? anchor
+        Task { await load() }
     }
 }
 
-// MARK: - Cells & rows
+// MARK: - Month grid (Apple style)
 
-private struct DayCell: View {
-    let date: Date
-    let isSelected: Bool
-    let isToday: Bool
-    let eventColors: [Color]
-    let onTap: () -> Void
+private struct MonthGridView: View {
+    let anchor: Date
+    let events: [EventSnapshot]
+    let onOpenDay: (Date) -> Void
+    let onEditEvent: (EventSnapshot) -> Void
+
+    private let calendar = Calendar.current
+
+    /// 6 weeks × 7 days covering the anchor's month, aligned to week starts —
+    /// adjacent-month days included (rendered dimmed), like Apple Calendar.
+    private var gridDays: [Date] {
+        guard let monthInterval = calendar.dateInterval(of: .month, for: anchor),
+              let firstWeek = calendar.dateInterval(of: .weekOfYear, for: monthInterval.start) else {
+            return []
+        }
+        return (0..<42).compactMap { calendar.date(byAdding: .day, value: $0, to: firstWeek.start) }
+    }
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(spacing: 3) {
-                Text("\(Calendar.current.component(.day, from: date))")
-                    .font(Theme.Font.cardBody.weight(isToday ? .bold : .regular))
-                    .foregroundStyle(isSelected ? Theme.Palette.textOnAccent : (isToday ? Theme.Palette.primary : Theme.Palette.textPrimary))
-                HStack(spacing: 3) {
-                    ForEach(Array(eventColors.enumerated()), id: \.offset) { _, color in
-                        Circle().fill(isSelected ? Theme.Palette.textOnAccent : color).frame(width: 5, height: 5)
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                ForEach(Array(calendar.shortWeekdaySymbols.enumerated()), id: \.offset) { _, symbol in
+                    Text(symbol)
+                        .font(Theme.Font.cardCaption.weight(.semibold))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Theme.Spacing.xs)
+                }
+            }
+            Divider().overlay(Theme.Palette.separator)
+            GeometryReader { geometry in
+                let days = gridDays
+                let weeks = stride(from: 0, to: days.count, by: 7).map { Array(days[$0..<min($0 + 7, days.count)]) }
+                let rowHeight = geometry.size.height / CGFloat(max(weeks.count, 1))
+                VStack(spacing: 0) {
+                    ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                        HStack(spacing: 0) {
+                            ForEach(week, id: \.self) { day in
+                                MonthDayCell(
+                                    date: day,
+                                    inMonth: calendar.isDate(day, equalTo: anchor, toGranularity: .month),
+                                    isToday: calendar.isDateInToday(day),
+                                    events: dayEvents(day),
+                                    onOpen: { onOpenDay(day) },
+                                    onEditEvent: onEditEvent
+                                )
+                                .frame(maxWidth: .infinity)
+                                .frame(height: rowHeight)
+                                .overlay(alignment: .trailing) {
+                                    Rectangle().fill(Theme.Palette.separator).frame(width: 0.5)
+                                }
+                            }
+                        }
+                        .overlay(alignment: .bottom) {
+                            Rectangle().fill(Theme.Palette.separator).frame(height: 0.5)
+                        }
                     }
                 }
-                .frame(height: 6)
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.control)
-                    .fill(isSelected ? Theme.Palette.primary : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.control)
-                    .strokeBorder(isToday && !isSelected ? Theme.Palette.primary : Color.clear, lineWidth: 1.5)
-            )
         }
-        .buttonStyle(.plain)
+    }
+
+    private func dayEvents(_ day: Date) -> [EventSnapshot] {
+        events
+            .filter { calendar.isDate($0.start, inSameDayAs: day) }
+            .sorted { a, b in
+                if a.isAllDay != b.isAllDay { return a.isAllDay }
+                return a.start < b.start
+            }
     }
 }
 
-private struct AgendaRow: View {
+private struct MonthDayCell: View {
+    let date: Date
+    let inMonth: Bool
+    let isToday: Bool
+    let events: [EventSnapshot]
+    let onOpen: () -> Void
+    let onEditEvent: (EventSnapshot) -> Void
+
+    private var dayNumber: String { "\(Calendar.current.component(.day, from: date))" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Spacer()
+                Text(dayNumber)
+                    .font(Theme.Font.cardCaption.weight(isToday ? .bold : .medium))
+                    .foregroundStyle(
+                        isToday
+                            ? Theme.Palette.textOnAccent
+                            : (inMonth ? Theme.Palette.textPrimary : Theme.Palette.textSecondary.opacity(0.55))
+                    )
+                    .frame(minWidth: 20, minHeight: 20)
+                    .background(isToday ? Theme.Palette.danger : Color.clear, in: Circle())
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 3)
+
+            ForEach(events.prefix(3)) { event in
+                MonthEventChip(event: event, dimmed: !inMonth)
+                    .onTapGesture { onEditEvent(event) }
+            }
+            if events.count > 3 {
+                Text("+\(events.count - 3) more")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .padding(.horizontal, 5)
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { onOpen() }
+    }
+}
+
+private struct MonthEventChip: View {
+    let event: EventSnapshot
+    let dimmed: Bool
+
+    private var color: Color {
+        event.calendarColorHex.flatMap { Color(hexString: $0) } ?? Theme.Palette.primary
+    }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            if event.isAllDay {
+                Text(event.title)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(Theme.Palette.textOnAccent)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            } else {
+                Circle().fill(color).frame(width: 5, height: 5)
+                Text(event.title)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text(event.start.formatted(.dateTime.hour(.defaultDigits(amPM: .narrow)).minute()))
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background(event.isAllDay ? color.opacity(0.85) : Color.clear, in: RoundedRectangle(cornerRadius: 3))
+        .padding(.horizontal, 3)
+        .opacity(dimmed ? 0.45 : 1)
+    }
+}
+
+// MARK: - Day/Week hour grid
+
+private struct TimeGridView: View {
+    let days: [Date]
+    let events: [EventSnapshot]
+    let onCreate: (Date) -> Void
+    let onEditEvent: (EventSnapshot) -> Void
+
+    private let calendar = Calendar.current
+    private let hourHeight: CGFloat = 46
+    private let gutterWidth: CGFloat = 54
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if days.count > 1 { dayHeaderRow }
+            allDayRow
+            Divider().overlay(Theme.Palette.separator)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    TimelineView(.everyMinute) { context in
+                        grid(now: context.date)
+                    }
+                }
+                .onAppear {
+                    // Land at 7 AM like Apple Calendar, not midnight.
+                    proxy.scrollTo("hour-7", anchor: .top)
+                }
+            }
+        }
+    }
+
+    private var dayHeaderRow: some View {
+        HStack(spacing: 0) {
+            Color.clear.frame(width: gutterWidth, height: 1)
+            ForEach(days, id: \.self) { day in
+                VStack(spacing: 1) {
+                    Text(day.formatted(.dateTime.weekday(.abbreviated)))
+                        .font(Theme.Font.cardCaption)
+                        .foregroundStyle(calendar.isDateInToday(day) ? Theme.Palette.danger : Theme.Palette.textSecondary)
+                    Text(day.formatted(.dateTime.day()))
+                        .font(Theme.Font.cardBody.weight(calendar.isDateInToday(day) ? .bold : .regular))
+                        .foregroundStyle(calendar.isDateInToday(day) ? Theme.Palette.danger : Theme.Palette.textPrimary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Theme.Spacing.xs)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var allDayRow: some View {
+        let anyAllDay = days.contains { !allDayEvents(on: $0).isEmpty }
+        if anyAllDay {
+            HStack(alignment: .top, spacing: 0) {
+                Text("all-day")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .frame(width: gutterWidth)
+                ForEach(days, id: \.self) { day in
+                    VStack(spacing: 2) {
+                        ForEach(allDayEvents(on: day)) { event in
+                            AllDayChip(event: event)
+                                .onTapGesture { onEditEvent(event) }
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 2)
+                }
+            }
+            .padding(.vertical, 3)
+        }
+    }
+
+    private func grid(now: Date) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            // Hour gutter
+            VStack(spacing: 0) {
+                ForEach(0..<24, id: \.self) { hour in
+                    Text(hourLabel(hour))
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .frame(width: gutterWidth - 8, height: hourHeight, alignment: .topTrailing)
+                        .offset(y: -6)
+                        .id("hour-\(hour)")
+                }
+            }
+            .frame(width: gutterWidth)
+
+            ForEach(days, id: \.self) { day in
+                dayColumn(day, now: now)
+                    .frame(maxWidth: .infinity)
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(Theme.Palette.separator).frame(width: 0.5)
+                    }
+            }
+        }
+        .frame(height: hourHeight * 24)
+    }
+
+    private func dayColumn(_ day: Date, now: Date) -> some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                // Hour lines + double-click-to-create layer
+                VStack(spacing: 0) {
+                    ForEach(0..<24, id: \.self) { _ in
+                        Rectangle()
+                            .fill(Color.clear)
+                            .frame(height: hourHeight)
+                            .overlay(alignment: .top) {
+                                Rectangle().fill(Theme.Palette.separator.opacity(0.6)).frame(height: 0.5)
+                            }
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2, coordinateSpace: .local) { location in
+                    let hour = min(max(Int(location.y / hourHeight), 0), 23)
+                    if let start = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: day) {
+                        onCreate(start)
+                    }
+                }
+
+                // Events
+                ForEach(layout(timedEvents(on: day), day: day)) { laid in
+                    let width = geometry.size.width / CGFloat(laid.cols)
+                    EventBlock(event: laid.event)
+                        .frame(width: max(width - 3, 20), height: max(laid.height, 22))
+                        .offset(x: CGFloat(laid.col) * width + 1.5, y: laid.y)
+                        .onTapGesture { onEditEvent(laid.event) }
+                }
+
+                // Now line
+                if calendar.isDate(now, inSameDayAs: day) {
+                    let y = yOffset(of: now, in: day)
+                    Rectangle()
+                        .fill(Theme.Palette.danger)
+                        .frame(height: 1.5)
+                        .offset(y: y)
+                    Circle()
+                        .fill(Theme.Palette.danger)
+                        .frame(width: 7, height: 7)
+                        .offset(x: -3, y: y - 2.75)
+                }
+            }
+        }
+        .frame(height: hourHeight * 24)
+        .clipped()
+    }
+
+    // MARK: Events & geometry
+
+    private func allDayEvents(on day: Date) -> [EventSnapshot] {
+        events.filter { $0.isAllDay && calendar.isDate($0.start, inSameDayAs: day) }
+    }
+
+    private func timedEvents(on day: Date) -> [EventSnapshot] {
+        events.filter { !$0.isAllDay && calendar.isDate($0.start, inSameDayAs: day) }
+    }
+
+    private func yOffset(of date: Date, in day: Date) -> CGFloat {
+        let dayStart = calendar.startOfDay(for: day)
+        let seconds = date.timeIntervalSince(dayStart)
+        return CGFloat(seconds / 3600) * hourHeight
+    }
+
+    private struct LaidEvent: Identifiable {
+        let event: EventSnapshot
+        let y: CGFloat
+        let height: CGFloat
+        let col: Int
+        let cols: Int
+        var id: String { event.id }
+    }
+
+    /// Overlapping events split the column like Apple Calendar: transitive
+    /// overlap clusters share the width; each event takes the first free
+    /// sub-column.
+    private func layout(_ dayEvents: [EventSnapshot], day: Date) -> [LaidEvent] {
+        let dayStart = calendar.startOfDay(for: day)
+        let dayEnd = dayStart.addingTimeInterval(86_400)
+        let sorted = dayEvents.sorted {
+            $0.start == $1.start ? $0.end > $1.end : $0.start < $1.start
+        }
+
+        var result: [LaidEvent] = []
+        var cluster: [(event: EventSnapshot, col: Int)] = []
+        var columnEnds: [Date] = []
+        var clusterEnd = Date.distantPast
+
+        func flush() {
+            let cols = max(columnEnds.count, 1)
+            for entry in cluster {
+                let start = max(entry.event.start, dayStart)
+                let end = min(entry.event.end, dayEnd)
+                result.append(LaidEvent(
+                    event: entry.event,
+                    y: yOffset(of: start, in: day),
+                    height: CGFloat(end.timeIntervalSince(start) / 3600) * hourHeight - 2,
+                    col: entry.col,
+                    cols: cols
+                ))
+            }
+            cluster = []
+            columnEnds = []
+        }
+
+        for event in sorted {
+            if !cluster.isEmpty && event.start >= clusterEnd {
+                flush()
+                clusterEnd = .distantPast
+            }
+            let col: Int
+            if let free = columnEnds.firstIndex(where: { $0 <= event.start }) {
+                columnEnds[free] = event.end
+                col = free
+            } else {
+                columnEnds.append(event.end)
+                col = columnEnds.count - 1
+            }
+            cluster.append((event, col))
+            clusterEnd = max(clusterEnd, event.end)
+        }
+        flush()
+        return result
+    }
+
+    private func hourLabel(_ hour: Int) -> String {
+        guard hour > 0 else { return "" }
+        let date = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: Date()) ?? Date()
+        return date.formatted(.dateTime.hour(.defaultDigits(amPM: .abbreviated)))
+    }
+}
+
+private struct EventBlock: View {
     let event: EventSnapshot
 
+    private var color: Color {
+        event.calendarColorHex.flatMap { Color(hexString: $0) } ?? Theme.Palette.primary
+    }
+
     var body: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(event.calendarColorHex.flatMap { Color(hexString: $0) } ?? Theme.Palette.primary)
-                .frame(width: 4, height: 34)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(event.title).font(Theme.Font.cardBody.weight(.medium))
-                HStack(spacing: Theme.Spacing.xs) {
-                    Text(event.isAllDay
-                         ? "All day"
-                         : "\(event.start.formatted(date: .omitted, time: .shortened)) – \(event.end.formatted(date: .omitted, time: .shortened))")
-                    if let location = event.location, !location.isEmpty {
-                        Text("· \(location)").lineLimit(1)
+        HStack(spacing: 0) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(color)
+                .frame(width: 3)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(event.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                    .lineLimit(2)
+                Text(event.start.formatted(date: .omitted, time: .shortened))
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            Spacer(minLength: 0)
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(color.opacity(0.22), in: RoundedRectangle(cornerRadius: 4))
+        .contentShape(Rectangle())
+    }
+}
+
+private struct AllDayChip: View {
+    let event: EventSnapshot
+
+    private var color: Color {
+        event.calendarColorHex.flatMap { Color(hexString: $0) } ?? Theme.Palette.primary
+    }
+
+    var body: some View {
+        Text(event.title)
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(Theme.Palette.textOnAccent)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.85), in: RoundedRectangle(cornerRadius: 3))
+    }
+}
+
+// MARK: - Event editor
+
+/// Full editor for an existing event: title, all-day, start/end, location,
+/// notes, calendar (move), delete.
+struct EventEditorView: View {
+    let event: EventSnapshot
+    var onSaved: () -> Void = {}
+
+    @Environment(\.brokers) private var brokers
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var title: String
+    @State private var isAllDay: Bool
+    @State private var start: Date
+    @State private var end: Date
+    @State private var location: String
+    @State private var notes: String
+    @State private var calendarID: String
+    @State private var calendars: [CalendarSnapshot] = []
+    @State private var saving = false
+    @State private var confirmingDelete = false
+    @State private var errorText: String?
+
+    init(event: EventSnapshot, onSaved: @escaping () -> Void = {}) {
+        self.event = event
+        self.onSaved = onSaved
+        _title = State(initialValue: event.title)
+        _isAllDay = State(initialValue: event.isAllDay)
+        _start = State(initialValue: event.start)
+        _end = State(initialValue: event.end)
+        _location = State(initialValue: event.location ?? "")
+        _notes = State(initialValue: event.notes ?? "")
+        _calendarID = State(initialValue: event.calendarID)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+            HStack {
+                Text("Edit Event").font(Theme.Font.cardTitle)
+                Spacer()
+                Text(event.calendarTitle)
+                    .font(Theme.Font.cardCaption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+            }
+
+            TextField("Title", text: $title).textFieldStyle(.roundedBorder)
+            TextField("Location", text: $location).textFieldStyle(.roundedBorder)
+
+            Toggle("All-day", isOn: $isAllDay).toggleStyle(.checkbox)
+            DatePicker(
+                "Starts",
+                selection: $start,
+                displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
+            )
+            DatePicker(
+                "Ends",
+                selection: $end,
+                in: start...,
+                displayedComponents: isAllDay ? [.date] : [.date, .hourAndMinute]
+            )
+
+            if !calendars.isEmpty {
+                Picker("Calendar", selection: $calendarID) {
+                    ForEach(calendars) { cal in
+                        Text(cal.title).tag(cal.id)
                     }
                 }
-                .font(Theme.Font.cardCaption)
-                .foregroundStyle(Theme.Palette.textSecondary)
             }
-            Spacer()
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("NOTES")
+                    .font(Theme.Font.cardCaption.weight(.semibold))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                TextEditor(text: $notes)
+                    .font(Theme.Font.cardBody)
+                    .frame(minHeight: 60)
+                    .scrollContentBackground(.hidden)
+                    .padding(4)
+                    .background(Theme.Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
+            }
+
+            if let errorText {
+                Text(errorText)
+                    .font(Theme.Font.cardCaption)
+                    .foregroundStyle(Theme.Palette.danger)
+            }
+
+            HStack {
+                Button("Delete Event…", role: .destructive) { confirmingDelete = true }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.Palette.danger)
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                Button {
+                    Task { await save() }
+                } label: {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        if saving { ProgressView().controlSize(.small) }
+                        Text("Save")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.Palette.primary)
+                .keyboardShortcut(.defaultAction)
+                .disabled(title.isEmpty || saving)
+            }
+        }
+        .padding(Theme.Spacing.lg)
+        .frame(width: 420)
+        .background(Theme.Palette.background)
+        .task {
+            calendars = (try? await brokers.eventKit.eventCalendars()) ?? []
+            // A read-only calendar won't be in the writable list; keep the
+            // event where it is rather than showing a wrong selection.
+            if !calendars.contains(where: { $0.id == calendarID }) {
+                calendars.insert(
+                    CalendarSnapshot(id: event.calendarID, title: event.calendarTitle, colorHex: event.calendarColorHex),
+                    at: 0
+                )
+            }
+        }
+        .confirmationDialog("Delete “\(event.title)”?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { Task { await delete() } }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func save() async {
+        saving = true
+        do {
+            _ = try await brokers.eventKit.updateEvent(
+                id: event.id,
+                title: title,
+                start: start,
+                end: max(end, start),
+                isAllDay: isAllDay,
+                location: location,
+                notes: notes,
+                calendarID: calendarID == event.calendarID ? nil : calendarID
+            )
+            saving = false
+            onSaved()
+            dismiss()
+        } catch {
+            saving = false
+            errorText = "Couldn't save the event."
+        }
+    }
+
+    private func delete() async {
+        do {
+            try await brokers.eventKit.deleteEvent(id: event.id)
+            onSaved()
+            dismiss()
+        } catch {
+            errorText = "Couldn't delete the event."
         }
     }
 }
@@ -273,6 +881,7 @@ private struct AgendaRow: View {
 
 struct EventComposerView: View {
     let defaultDate: Date
+    var preciseStart: Date?
     var onSaved: () -> Void = {}
 
     @Environment(\.brokers) private var brokers
@@ -285,11 +894,14 @@ struct EventComposerView: View {
     @State private var selectedCalendarID = ""
     @State private var saving = false
 
-    init(defaultDate: Date, onSaved: @escaping () -> Void = {}) {
+    init(defaultDate: Date, preciseStart: Date? = nil, onSaved: @escaping () -> Void = {}) {
         self.defaultDate = defaultDate
+        self.preciseStart = preciseStart
         self.onSaved = onSaved
+        // A double-clicked grid slot arrives as a precise start; a plain "New
+        // Event" defaults to 9 AM on the given day.
         let nineAM = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: defaultDate) ?? defaultDate
-        _start = State(initialValue: nineAM)
+        _start = State(initialValue: preciseStart ?? nineAM)
     }
 
     var body: some View {

@@ -85,13 +85,15 @@ actor EventKitBroker: DataBroker {
         try await fetch(BrokerQuery(dateRange: Self.todayRange()))
     }
 
-    /// Calendars the user can write events to.
-    func eventCalendars() async throws -> [CalendarSnapshot] {
+    /// Event calendars. `writableOnly` (the default) keeps the create/move
+    /// pickers honest; pass false for visibility toggles, which also cover
+    /// read-only calendars (Birthdays, holidays, subscriptions).
+    func eventCalendars(writableOnly: Bool = true) async throws -> [CalendarSnapshot] {
         guard calendarAuthorization == .authorized || calendarAuthorization == .limited else {
             throw BrokerError.accessDenied
         }
         return store.calendars(for: .event)
-            .filter(\.allowsContentModifications)
+            .filter { !writableOnly || $0.allowsContentModifications }
             .map { calendar in
                 CalendarSnapshot(
                     id: calendar.calendarIdentifier,
@@ -141,16 +143,22 @@ actor EventKitBroker: DataBroker {
         title: String? = nil,
         start: Date? = nil,
         end: Date? = nil,
+        isAllDay: Bool? = nil,
         location: String? = nil,
-        notes: String? = nil
+        notes: String? = nil,
+        calendarID: String? = nil
     ) async throws -> EventSnapshot {
         guard calendarAuthorization == .authorized else { throw BrokerError.accessDenied }
         guard let event = store.event(withIdentifier: id) else { throw BrokerError.notFound }
         if let title { event.title = title }
         if let start { event.startDate = start }
         if let end { event.endDate = end }
+        if let isAllDay { event.isAllDay = isAllDay }
         if let location { event.location = location }
         if let notes { event.notes = notes }
+        if let calendarID, let calendar = store.calendar(withIdentifier: calendarID) {
+            event.calendar = calendar
+        }
         guard event.endDate >= event.startDate else {
             throw BrokerError.invalidInput("end must not precede start")
         }
@@ -392,7 +400,8 @@ actor EventKitBroker: DataBroker {
             location: event.location,
             notes: event.notes,
             calendarTitle: event.calendar?.title ?? "",
-            calendarColorHex: event.calendar?.cgColor.flatMap(hexString(from:))
+            calendarColorHex: event.calendar?.cgColor.flatMap(hexString(from:)),
+            calendarID: event.calendar?.calendarIdentifier ?? ""
         )
     }
 

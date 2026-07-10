@@ -32,6 +32,8 @@ nonisolated struct EventSnapshot: Identifiable, Sendable, Hashable, Codable {
     /// Calendar color as a hex string (e.g. "#4A90D9") for theming; the Theme
     /// layer decides how/whether to use it.
     var calendarColorHex: String?
+    /// EventKit `calendarIdentifier` of the containing calendar.
+    var calendarID: String = ""
 }
 
 /// A reminder (from `EventKitBroker`).
