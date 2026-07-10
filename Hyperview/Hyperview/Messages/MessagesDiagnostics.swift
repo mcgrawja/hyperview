@@ -40,6 +40,24 @@ nonisolated enum MessagesDiagnostics {
                 return
             }
             line += "OK — \(sqlite3_column_int64(statement, 0)) chats visible"
+
+            // Automation probe: a harmless `get name` proves the sandbox
+            // exception + TCC grant end-to-end (triggers the consent prompt
+            // on first run). NSAppleScript is main-thread-only.
+            let automation = await MainActor.run { () -> String in
+                guard let script = NSAppleScript(source: "tell application \"Messages\" to get name") else {
+                    return "script compile failed"
+                }
+                var errorInfo: NSDictionary?
+                script.executeAndReturnError(&errorInfo)
+                if let errorInfo {
+                    let number = errorInfo[NSAppleScript.errorNumber] as? Int ?? 0
+                    let message = errorInfo[NSAppleScript.errorMessage] as? String ?? "unknown"
+                    return "FAILED (\(number): \(message))"
+                }
+                return "OK"
+            }
+            line += " | automation: \(automation)"
         }
     }
 }

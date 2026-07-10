@@ -36,9 +36,17 @@
 	<array>
 		<string>/Library/Messages/</string>
 	</array>
-	<!-- Sending: automate Messages.app via Apple events (TCC prompt on first send). -->
+	<!-- Sending: automate Messages.app via Apple events (TCC prompt on first
+	     send). BOTH keys are required: automation.apple-events satisfies the
+	     hardened runtime, but the App Sandbox separately blocks events to any
+	     app not listed in a temporary exception — without it the send fails
+	     with a misleading -600 "Application isn't running". -->
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
+	<key>com.apple.security.temporary-exception.apple-events</key>
+	<array>
+		<string>com.apple.MobileSMS</string>
+	</array>
 
 	<!-- iCloud/CloudKit private database (D2). SwiftData binds to this container
 	     via cloudKitDatabase: .automatic. The production schema is promoted

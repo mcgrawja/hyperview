@@ -65,7 +65,11 @@
       "Bash(codesign -dv /Applications/Hyperview.app)",
       "Bash(codesign -dr- /Applications/Hyperview.app)",
       "Bash(open *)",
-      "Bash(git -c 'user.name=Jason McGraw' -c user.email=jamcgraw01@gmail.com commit -m ' *)"
+      "Bash(git -c 'user.name=Jason McGraw' -c user.email=jamcgraw01@gmail.com commit -m ' *)",
+      "Bash(codesign -d --entitlements - /Applications/Hyperview.app)",
+      "Bash(plutil -p /Applications/Hyperview.app/Contents/Info.plist)",
+      "Bash(osascript -e 'tell application \"Messages\" to get name')",
+      "Bash(osascript *)"
     ]
   }
 }
