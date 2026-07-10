@@ -16,6 +16,7 @@ struct ContactsView: View {
     @State private var access: ModuleAccess = .needsPermission
     @State private var searchText = ""
     @State private var errorText: String?
+    @State private var editing: ContactSnapshot?
 
     var body: some View {
         Group {
@@ -35,6 +36,11 @@ struct ContactsView: View {
         .background(Theme.Palette.background)
         .navigationTitle("Contacts")
         .task { await start() }
+        .sheet(item: $editing) { contact in
+            ContactEditorView(contact: contact) {
+                Task { await load() }
+            }
+        }
     }
 
     private var list: some View {
@@ -48,7 +54,13 @@ struct ContactsView: View {
                         .padding(Theme.Spacing.lg)
                 } else {
                     ForEach(contacts) { contact in
-                        ContactRow(contact: contact)
+                        Button {
+                            editing = contact
+                        } label: {
+                            ContactRow(contact: contact)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                         Divider().overlay(Theme.Palette.separator)
                     }
                 }

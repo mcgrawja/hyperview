@@ -241,6 +241,18 @@ nonisolated enum MCPToolRegistry {
             description: "Get one contact by identifier.",
             schema: MCPTool.object(["id": MCPTool.prop("string", "Contact identifier")], required: ["id"])
         ),
+        MCPTool(
+            name: "contacts_update",
+            description: "Update a contact by id. Only provided fields change; emails/phones replace the existing sets (comma-separated).",
+            schema: MCPTool.object([
+                "id": MCPTool.prop("string", "Contact identifier"),
+                "given_name": MCPTool.prop("string", "First name"),
+                "family_name": MCPTool.prop("string", "Last name"),
+                "organization": MCPTool.prop("string", "Organization"),
+                "emails": MCPTool.prop("string", "Comma-separated emails (replaces all)"),
+                "phones": MCPTool.prop("string", "Comma-separated phone numbers (replaces all)"),
+            ], required: ["id"])
+        ),
 
         // MARK: Photos (PhotoBroker)
         MCPTool(

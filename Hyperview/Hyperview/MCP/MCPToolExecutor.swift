@@ -143,6 +143,19 @@ final class MCPToolExecutor {
             return try encode(try await brokers.contacts.fetch(BrokerQuery(searchText: try require(args, "query"), limit: 25)))
         case "contacts_get":
             return try encode(try await brokers.contacts.get(id: try require(args, "id")))
+        case "contacts_update":
+            let split: (String?) -> [String]? = { raw in
+                raw.map { $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
+            }
+            let updated = try await brokers.contacts.updateContact(
+                id: try require(args, "id"),
+                givenName: str(args, "given_name"),
+                familyName: str(args, "family_name"),
+                organization: str(args, "organization"),
+                emails: split(str(args, "emails")),
+                phones: split(str(args, "phones"))
+            )
+            return try encode(updated)
 
         case "photos_recent_metadata":
             let days = (args["days"] as? Double).map(Int.init) ?? 7

@@ -104,6 +104,61 @@ actor ContactsBroker: DataBroker {
         return Self.snapshot(from: contact)
     }
 
+    /// Update an existing contact; nil fields are left unchanged. Email/phone
+    /// arrays REPLACE the existing sets when provided.
+    @discardableResult
+    func updateContact(
+        id: String,
+        givenName: String? = nil,
+        familyName: String? = nil,
+        organization: String? = nil,
+        emails: [String]? = nil,
+        phones: [String]? = nil
+    ) async throws -> ContactSnapshot {
+        try ensureAuthorized()
+        guard let existing = try? store.unifiedContact(withIdentifier: id, keysToFetch: Self.keys),
+              let contact = existing.mutableCopy() as? CNMutableContact else {
+            throw BrokerError.notFound
+        }
+        if let givenName { contact.givenName = givenName }
+        if let familyName { contact.familyName = familyName }
+        if let organization { contact.organizationName = organization }
+        if let emails {
+            contact.emailAddresses = emails
+                .filter { !$0.isEmpty }
+                .map { CNLabeledValue(label: CNLabelHome, value: $0 as NSString) }
+        }
+        if let phones {
+            contact.phoneNumbers = phones
+                .filter { !$0.isEmpty }
+                .map { CNLabeledValue(label: CNLabelPhoneNumberMain, value: CNPhoneNumber(stringValue: $0)) }
+        }
+        let request = CNSaveRequest()
+        request.update(contact)
+        do {
+            try store.execute(request)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+        return Self.snapshot(from: contact)
+    }
+
+    /// Delete a contact permanently.
+    func deleteContact(id: String) async throws {
+        try ensureAuthorized()
+        guard let existing = try? store.unifiedContact(withIdentifier: id, keysToFetch: Self.keys),
+              let contact = existing.mutableCopy() as? CNMutableContact else {
+            throw BrokerError.notFound
+        }
+        let request = CNSaveRequest()
+        request.delete(contact)
+        do {
+            try store.execute(request)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+    }
+
     /// Fetch one contact by identifier (`contacts_get`).
     func get(id: String) async throws -> ContactSnapshot {
         try ensureAuthorized()
