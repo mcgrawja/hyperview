@@ -30,7 +30,7 @@ final class BriefingService {
     var weather: DayWeather?
 
     /// Bump when the briefing prompt/format changes so cached text regenerates.
-    private static let formatVersion = "2"
+    private static let formatVersion = "3"
 
     var weatherLocation: String {
         get { UserDefaults.standard.string(forKey: "briefing.location") ?? "Kingsland, GA" }
@@ -142,10 +142,10 @@ final class BriefingService {
         Agenda:
           <start>–<end> | <title> | <location if any>
         Brief:
-          <1–3 lines: schedule conflicts first, then anything else relevant \
-        (include a weather warning only if the concerns above are non-trivial \
-        for the day's plans). If nothing, write "Nothing else needs your \
-        attention.">
+          ☐ <one checkbox line per relevant item — schedule conflicts first, \
+        then a weather caution only if the concerns are non-trivial for the \
+        day's plans, then anything else worth knowing. Short lines, never a \
+        paragraph. If nothing: "☐ Nothing else needs your attention.">
 
         Emails judgment: only list messages that plausibly need ACTION \
         (replies owed, expirations, deadlines, warnings, real people). \

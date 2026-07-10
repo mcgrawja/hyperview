@@ -31,6 +31,7 @@ struct HyperviewApp: App {
 
         let service = MailService()
         service.context = mailContainer.mainContext
+        service.startAutoRefresh()
         mailService = service
 
         mcp = MCPController(

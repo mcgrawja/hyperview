@@ -102,9 +102,9 @@ final class MailService {
         }
     }
 
-    func syncMessages(_ account: MailAccount, mailboxPath: String, limit: Int = 50) async {
+    func syncMessages(_ account: MailAccount, mailboxPath: String, limit: Int = 50, quiet: Bool = false) async {
         guard let context, let imap = await ensureConnected(account) else { return }
-        status = .syncing
+        if !quiet { status = .syncing }
         do {
             let summaries = try await imap.fetchSummaries(path: mailboxPath, limit: limit)
             MailLog.log("[Mail] fetchSummaries \(mailboxPath) -> \(summaries.count) messages")
@@ -116,12 +116,43 @@ final class MailService {
             let counts = await imap.status(mailboxPath)
             updateCounts(mailboxPath: mailboxPath, accountID: account.id, counts: counts, in: context)
             try? context.save()
-            status = .connected
+            if !quiet { status = .connected }
         } catch {
             MailLog.log("[Mail] syncMessages error: \(error)")
-            failed(account, error)
+            if quiet {
+                // Background tick: drop the connection to reconnect next tick,
+                // but don't surface a scary banner for a transient blip.
+                clients[account.id] = nil
+            } else {
+                failed(account, error)
+            }
         }
     }
+
+    // MARK: Auto-refresh
+
+    /// Background inbox sync for every account (also triggers rules on new
+    /// arrivals). Timer-based v1; IMAP IDLE is a future upgrade.
+    func startAutoRefresh(every interval: TimeInterval = 300) {
+        guard autoRefreshTask == nil else { return }
+        MailLog.log("[Mail] auto-refresh every \(Int(interval))s")
+        autoRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(interval))
+                await self?.syncAllInboxes()
+            }
+        }
+    }
+
+    func syncAllInboxes() async {
+        guard let context else { return }
+        let accounts = (try? context.fetch(FetchDescriptor<MailAccount>())) ?? []
+        for account in accounts {
+            await syncMessages(account, mailboxPath: "INBOX", quiet: true)
+        }
+    }
+
+    @ObservationIgnored private var autoRefreshTask: Task<Void, Never>?
 
     private func updateCounts(mailboxPath: String, accountID: UUID, counts: (total: Int, unread: Int), in context: ModelContext) {
         let boxes = (try? context.fetch(FetchDescriptor<Mailbox>())) ?? []
