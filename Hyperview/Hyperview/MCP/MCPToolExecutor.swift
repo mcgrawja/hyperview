@@ -373,7 +373,18 @@ final class MCPToolExecutor {
     private func briefing() async throws -> String {
         var out: [String: Any] = [:]
         if let events = try? await brokers.eventKit.fetchTodayEvents() {
-            out["today_events"] = events.map { ["title": $0.title, "start": iso.string(from: $0.start), "all_day": $0.isAllDay] }
+            out["today_events"] = events.map { event -> [String: Any] in
+                var item: [String: Any] = [
+                    "title": event.title,
+                    "start": iso.string(from: event.start),
+                    "end": iso.string(from: event.end),
+                    "all_day": event.isAllDay,
+                    "calendar": event.calendarTitle,
+                ]
+                if let location = event.location, !location.isEmpty { item["location"] = location }
+                if let notes = event.notes, !notes.isEmpty { item["notes"] = String(notes.prefix(300)) }
+                return item
+            }
         }
         if let reminders = try? await brokers.eventKit.fetchDueReminders() {
             out["due_reminders"] = reminders.prefix(15).map { reminder -> [String: Any] in

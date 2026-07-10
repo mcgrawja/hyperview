@@ -241,6 +241,7 @@ struct ClaudeSettingsView: View {
 
     @State private var keyDraft = ""
     @State private var selectedModel = ""
+    @State private var weatherLocation = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
@@ -280,6 +281,15 @@ struct ClaudeSettingsView: View {
                 .pickerStyle(.radioGroup)
             }
 
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                Text("BRIEFING WEATHER LOCATION")
+                    .font(Theme.Font.cardCaption.weight(.semibold))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                TextField("City, State", text: $weatherLocation)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 240)
+            }
+
             HStack {
                 Spacer()
                 Button("Done") {
@@ -288,6 +298,10 @@ struct ClaudeSettingsView: View {
                         ClaudeAuth.setAPIKey(trimmed)
                     }
                     controller.model = selectedModel
+                    let location = weatherLocation.trimmingCharacters(in: .whitespaces)
+                    if !location.isEmpty {
+                        UserDefaults.standard.set(location, forKey: "briefing.location")
+                    }
                     controller.refreshKeyState()
                     dismiss()
                 }
@@ -298,6 +312,9 @@ struct ClaudeSettingsView: View {
         .padding(Theme.Spacing.lg)
         .frame(width: 420)
         .background(Theme.Palette.background)
-        .onAppear { selectedModel = controller.model }
+        .onAppear {
+            selectedModel = controller.model
+            weatherLocation = UserDefaults.standard.string(forKey: "briefing.location") ?? "Kingsland, GA"
+        }
     }
 }

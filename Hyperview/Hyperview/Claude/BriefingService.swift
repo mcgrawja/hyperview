@@ -25,6 +25,17 @@ final class BriefingService {
     }
 
     var state: State = .hidden
+    /// Live day weather for the native strip (refreshed every dashboard
+    /// visit; free API, no tokens).
+    var weather: DayWeather?
+
+    /// Bump when the briefing prompt/format changes so cached text regenerates.
+    private static let formatVersion = "2"
+
+    var weatherLocation: String {
+        get { UserDefaults.standard.string(forKey: "briefing.location") ?? "Kingsland, GA" }
+        set { UserDefaults.standard.set(newValue, forKey: "briefing.location") }
+    }
 
     @ObservationIgnored private weak var mcp: MCPController?
 
@@ -39,15 +50,26 @@ final class BriefingService {
             state = .hidden
             return
         }
+        // Weather refreshes on every visit (free, keyless) — kicked off
+        // concurrently so it never delays the text.
+        Task { await refreshWeather() }
+
         let today = Self.dayStamp()
         let cachedDay = UserDefaults.standard.string(forKey: "briefing.date")
         let cachedText = UserDefaults.standard.string(forKey: "briefing.text")
+        let cachedFormat = UserDefaults.standard.string(forKey: "briefing.format")
 
-        if cachedDay == today, let cachedText, !cachedText.isEmpty {
+        if cachedDay == today, cachedFormat == Self.formatVersion, let cachedText, !cachedText.isEmpty {
             state = .ready(cachedText)
             return
         }
         await generate()
+    }
+
+    private func refreshWeather() async {
+        if let fetched = await WeatherService.fetch(location: weatherLocation) {
+            weather = fetched
+        }
     }
 
     /// Manual refresh — always regenerates.
@@ -79,6 +101,7 @@ final class BriefingService {
             )
             UserDefaults.standard.set(text, forKey: "briefing.text")
             UserDefaults.standard.set(Self.dayStamp(), forKey: "briefing.date")
+            UserDefaults.standard.set(Self.formatVersion, forKey: "briefing.format")
             state = .ready(text)
         } catch {
             state = .failed("Briefing failed — try again later.")
@@ -94,20 +117,39 @@ final class BriefingService {
         request.timeoutInterval = 120
 
         let model = UserDefaults.standard.string(forKey: "claude.model") ?? "claude-opus-4-8"
+        let weatherLine = weather?.promptSummary ?? "Weather data unavailable."
         let prompt = """
-        Write Jason's morning briefing from this Hyperview data. Today is \
+        Write Jason's daily briefing from this Hyperview data. Today is \
         \(Date().formatted(date: .complete, time: .omitted)).
 
-        Calendar/reminders/mail counts:
+        Calendar/reminders/mail data:
         \(briefingJSON)
 
         Unread messages detail:
         \(unreadJSON)
 
-        Rules: 4-8 short lines, priority order, plain text with "•" bullets. \
-        Flag schedule conflicts or urgent-looking mail first. Group unread \
-        mail into what needs action vs. what can be ignored (don't list every \
-        message). No greeting, no sign-off, no headers.
+        \(weatherLine)
+
+        Output EXACTLY this plain-text structure (skip an empty subsection; \
+        no greeting, no sign-off, no markdown):
+
+        Action Items:
+          Reminders:
+            ☐ <title> — due <short date/time>, <notes if any>
+          Emails:
+            ☐ <sender/what> — <why it needs action: unanswered, expiring, \
+        deadline, warning>
+        Agenda:
+          <start>–<end> | <title> | <location if any>
+        Brief:
+          <1–3 lines: schedule conflicts first, then anything else relevant \
+        (include a weather warning only if the concerns above are non-trivial \
+        for the day's plans). If nothing, write "Nothing else needs your \
+        attention.">
+
+        Emails judgment: only list messages that plausibly need ACTION \
+        (replies owed, expirations, deadlines, warnings, real people). \
+        Newsletters, promos, and job alerts never appear.
         """
 
         let body: [String: Any] = [

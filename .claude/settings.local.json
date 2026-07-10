@@ -54,7 +54,9 @@
       "Bash(ssh -o BatchMode=yes -o ConnectTimeout=5 -T git@github.com)",
       "Bash(ssh-keyscan github.com)",
       "Bash(git remote *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(curl -s \"https://geocoding-api.open-meteo.com/v1/search?name=Kingsland%2C%20GA&count=1\")",
+      "Bash(curl -s \"https://api.open-meteo.com/v1/forecast?latitude=30.8&longitude=-81.69&hourly=temperature_2m,precipitation_probability,weather_code&daily=temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=auto&forecast_days=2\")"
     ]
   }
 }

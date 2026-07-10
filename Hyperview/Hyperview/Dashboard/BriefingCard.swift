@@ -51,24 +51,71 @@ struct BriefingCard: View {
 
     @ViewBuilder
     private var content: some View {
-        switch service.state {
-        case .generating:
-            HStack(spacing: Theme.Spacing.sm) {
-                ProgressView().controlSize(.small)
-                Text("Claude is reading your day…")
-                    .font(Theme.Font.cardBody)
-                    .foregroundStyle(Theme.Palette.textSecondary)
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            if let weather = service.weather {
+                WeatherStrip(weather: weather)
+                Divider().overlay(Theme.Palette.separator)
             }
-        case .ready(let text):
-            Text(text)
-                .font(Theme.Font.cardBody)
-                .foregroundStyle(Theme.Palette.textPrimary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        case .failed(let message):
-            EmptyStateLine(text: message)
-        case .idle, .hidden:
-            EmptyStateLine(text: "Your briefing will appear here.")
+            switch service.state {
+            case .generating:
+                HStack(spacing: Theme.Spacing.sm) {
+                    ProgressView().controlSize(.small)
+                    Text("Claude is reading your day…")
+                        .font(Theme.Font.cardBody)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                }
+            case .ready(let text):
+                Text(text)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            case .failed(let message):
+                EmptyStateLine(text: message)
+            case .idle, .hidden:
+                EmptyStateLine(text: "Your briefing will appear here.")
+            }
+        }
+    }
+}
+
+/// The native hourly weather strip: emoji, rain %, temperature per slot, with
+/// the day's hi/lo and any significant concerns.
+private struct WeatherStrip: View {
+    let weather: DayWeather
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(weather.slots) { slot in
+                    VStack(spacing: Theme.Spacing.xxs) {
+                        Text(slot.emoji).font(.title3)
+                        Text("\(slot.rainPercent)%")
+                            .font(Theme.Font.cardCaption)
+                            .foregroundStyle(slot.rainPercent >= 50 ? Theme.Palette.primary : Theme.Palette.textSecondary)
+                        Text("\(slot.tempF)°")
+                            .font(Theme.Font.cardCaption.weight(.medium))
+                        Text(slot.label)
+                            .font(Theme.Font.cardCaption)
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            HStack(spacing: Theme.Spacing.md) {
+                Text("\(weather.locationName) · H \(weather.hiF)° / L \(weather.loF)°")
+                    .font(Theme.Font.cardCaption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                if !weather.concerns.isEmpty {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(weather.concerns.joined(separator: " / "))
+                    }
+                    .font(Theme.Font.cardCaption.weight(.medium))
+                    .foregroundStyle(Theme.Palette.danger)
+                }
+                Spacer()
+            }
         }
     }
 }
