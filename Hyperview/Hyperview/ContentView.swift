@@ -94,7 +94,7 @@ enum SidebarItem: String, Identifiable, CaseIterable {
         }
     }
 
-    static var available: [SidebarItem] { [.dashboard, .calendar, .reminders, .notes, .mail, .photos, .contacts, .claude] }
+    static var available: [SidebarItem] { [.dashboard, .mail, .reminders, .calendar, .notes, .photos, .contacts, .claude] }
     static var upcoming: [SidebarItem] { [] }
 }
 

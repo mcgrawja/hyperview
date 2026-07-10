@@ -16,6 +16,11 @@ import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Placeholder from "@tiptap/extension-placeholder";
+import Link from "@tiptap/extension-link";
+import Table from "@tiptap/extension-table";
+import TableRow from "@tiptap/extension-table-row";
+import TableHeader from "@tiptap/extension-table-header";
+import TableCell from "@tiptap/extension-table-cell";
 import { SlashCommands } from "./slash-menu.js";
 
 function post(msg) {
@@ -41,6 +46,14 @@ const editor = new Editor({
     StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
     TaskList,
     TaskItem.configure({ nested: true }),
+    // Clicks are intercepted below and routed to Swift (note links, file
+    // links, web links) — the editor itself never navigates.
+    Link.configure({ openOnClick: false, autolink: true, linkOnPaste: true }),
+    // Cells hold block content, so task lists nest inside table cells.
+    Table.configure({ resizable: false }),
+    TableRow,
+    TableHeader,
+    TableCell,
     Placeholder.configure({ placeholder: "Type ‘/’ for commands…" }),
     SlashCommands,
   ],
@@ -49,6 +62,15 @@ const editor = new Editor({
   onUpdate: function ({ editor }) {
     scheduleChange(editor);
   },
+});
+
+// Any link click (note link, file link, web link) goes to Swift, which knows
+// how to route each scheme. preventDefault keeps the WKWebView in place.
+document.getElementById("editor").addEventListener("click", function (event) {
+  const anchor = event.target.closest("a[href]");
+  if (!anchor) return;
+  event.preventDefault();
+  post({ type: "openLink", href: anchor.getAttribute("href") });
 });
 
 window.hyperview = {
@@ -61,6 +83,20 @@ window.hyperview = {
   applyExternalChange: function (_patch) {
     // TODO (§5): apply a block-level patch when CloudKit updates an open note.
     // For now Swift re-issues loadDocument on external change.
+  },
+  // Swift → JS: insert a link at the cursor (note picker / file picker
+  // results). The trailing plain space stops the mark from bleeding into
+  // whatever the user types next.
+  insertLink: function (href, text) {
+    const label = text && text.length ? text : href;
+    editor
+      .chain()
+      .focus()
+      .insertContent([
+        { type: "text", text: label, marks: [{ type: "link", attrs: { href: href } }] },
+        { type: "text", text: " " },
+      ])
+      .run();
   },
 };
 

@@ -16,15 +16,31 @@ actor ContactsBroker: DataBroker {
 
     private let store = CNContactStore()
 
-    /// The minimal key set the dashboard + search need. Widen deliberately if a
-    /// view needs more; do not fetch everything.
+    /// The full card the Contacts module edits. (CNContactNoteKey is absent on
+    /// purpose: reading/writing notes requires the Apple-approved
+    /// com.apple.developer.contacts.notes entitlement.)
     // CNKeyDescriptor values are immutable string keys; safe to share.
     nonisolated(unsafe) private static let keys: [CNKeyDescriptor] = [
+        CNContactNamePrefixKey,
         CNContactGivenNameKey,
+        CNContactMiddleNameKey,
         CNContactFamilyNameKey,
+        CNContactNameSuffixKey,
+        CNContactNicknameKey,
+        CNContactPhoneticGivenNameKey,
+        CNContactPhoneticFamilyNameKey,
         CNContactOrganizationNameKey,
+        CNContactDepartmentNameKey,
+        CNContactJobTitleKey,
+        CNContactBirthdayKey,
+        CNContactDatesKey,
         CNContactEmailAddressesKey,
         CNContactPhoneNumbersKey,
+        CNContactUrlAddressesKey,
+        CNContactPostalAddressesKey,
+        CNContactRelationsKey,
+        CNContactSocialProfilesKey,
+        CNContactInstantMessageAddressesKey,
         CNContactThumbnailImageDataKey,
     ].map { $0 as CNKeyDescriptor }
 
@@ -143,6 +159,92 @@ actor ContactsBroker: DataBroker {
         return Self.snapshot(from: contact)
     }
 
+    /// Full-card save used by the Contacts editor: every Apple-Contacts field.
+    /// Replaces the whole card with `edit`'s contents (the editor loads the
+    /// full card first, so nothing is lost). `id == nil` creates a new contact.
+    @discardableResult
+    func saveContact(id: String?, edit: ContactEditData) async throws -> ContactSnapshot {
+        try ensureAuthorized()
+        let contact: CNMutableContact
+        let request = CNSaveRequest()
+        if let id {
+            guard let existing = try? store.unifiedContact(withIdentifier: id, keysToFetch: Self.keys),
+                  let mutable = existing.mutableCopy() as? CNMutableContact else {
+                throw BrokerError.notFound
+            }
+            contact = mutable
+            request.update(contact)
+        } else {
+            contact = CNMutableContact()
+            request.add(contact, toContainerWithIdentifier: nil)
+        }
+
+        contact.namePrefix = edit.namePrefix
+        contact.givenName = edit.givenName
+        contact.middleName = edit.middleName
+        contact.familyName = edit.familyName
+        contact.nameSuffix = edit.nameSuffix
+        contact.nickname = edit.nickname
+        contact.phoneticGivenName = edit.phoneticGivenName
+        contact.phoneticFamilyName = edit.phoneticFamilyName
+        contact.organizationName = edit.organizationName
+        contact.departmentName = edit.departmentName
+        contact.jobTitle = edit.jobTitle
+        contact.birthday = edit.birthday.map {
+            Calendar.current.dateComponents([.year, .month, .day], from: $0)
+        }
+        contact.emailAddresses = edit.emails
+            .filter { !$0.value.isEmpty }
+            .map { CNLabeledValue(label: Self.canonicalLabel($0.label), value: $0.value as NSString) }
+        contact.phoneNumbers = edit.phones
+            .filter { !$0.value.isEmpty }
+            .map { CNLabeledValue(label: Self.canonicalLabel($0.label), value: CNPhoneNumber(stringValue: $0.value)) }
+        contact.urlAddresses = edit.urls
+            .filter { !$0.value.isEmpty }
+            .map { CNLabeledValue(label: Self.canonicalLabel($0.label), value: $0.value as NSString) }
+        contact.postalAddresses = edit.postalAddresses
+            .filter { !($0.street.isEmpty && $0.city.isEmpty && $0.state.isEmpty && $0.postalCode.isEmpty) }
+            .map { address in
+                let postal = CNMutablePostalAddress()
+                postal.street = address.street
+                postal.city = address.city
+                postal.state = address.state
+                postal.postalCode = address.postalCode
+                postal.country = address.country
+                return CNLabeledValue(label: Self.canonicalLabel(address.label), value: postal as CNPostalAddress)
+            }
+        contact.contactRelations = edit.relations
+            .filter { !$0.value.isEmpty }
+            .map { CNLabeledValue(label: Self.canonicalLabel($0.label), value: CNContactRelation(name: $0.value)) }
+        contact.socialProfiles = edit.socialProfiles
+            .filter { !$0.value.isEmpty }
+            .map {
+                CNLabeledValue(
+                    label: $0.label,
+                    value: CNSocialProfile(urlString: nil, username: $0.value, userIdentifier: nil, service: $0.label)
+                )
+            }
+        contact.instantMessageAddresses = edit.instantMessages
+            .filter { !$0.value.isEmpty }
+            .map {
+                CNLabeledValue(
+                    label: $0.label,
+                    value: CNInstantMessageAddress(username: $0.value, service: $0.label)
+                )
+            }
+        contact.dates = edit.dates.map {
+            let components = Calendar.current.dateComponents([.year, .month, .day], from: $0.date)
+            return CNLabeledValue(label: Self.canonicalLabel($0.label), value: components as NSDateComponents)
+        }
+
+        do {
+            try store.execute(request)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+        return Self.snapshot(from: contact)
+    }
+
     /// Delete a contact permanently.
     func deleteContact(id: String) async throws {
         try ensureAuthorized()
@@ -206,7 +308,112 @@ actor ContactsBroker: DataBroker {
             organizationName: contact.organizationName.isEmpty ? nil : contact.organizationName,
             emailAddresses: contact.emailAddresses.map { $0.value as String },
             phoneNumbers: contact.phoneNumbers.map { $0.value.stringValue },
-            thumbnail: contact.thumbnailImageData
+            thumbnail: contact.thumbnailImageData,
+            namePrefix: contact.namePrefix,
+            middleName: contact.middleName,
+            nameSuffix: contact.nameSuffix,
+            nickname: contact.nickname,
+            phoneticGivenName: contact.phoneticGivenName,
+            phoneticFamilyName: contact.phoneticFamilyName,
+            jobTitle: contact.jobTitle,
+            departmentName: contact.departmentName,
+            birthday: contact.birthday.flatMap { Calendar.current.date(from: $0) },
+            emails: contact.emailAddresses.map {
+                LabeledValueSnapshot(label: displayLabel($0.label), value: $0.value as String)
+            },
+            phones: contact.phoneNumbers.map {
+                LabeledValueSnapshot(label: displayLabel($0.label), value: $0.value.stringValue)
+            },
+            urls: contact.urlAddresses.map {
+                LabeledValueSnapshot(label: displayLabel($0.label), value: $0.value as String)
+            },
+            postalAddresses: contact.postalAddresses.map { labeled in
+                PostalAddressSnapshot(
+                    label: displayLabel(labeled.label),
+                    street: labeled.value.street,
+                    city: labeled.value.city,
+                    state: labeled.value.state,
+                    postalCode: labeled.value.postalCode,
+                    country: labeled.value.country
+                )
+            },
+            relations: contact.contactRelations.map {
+                LabeledValueSnapshot(label: displayLabel($0.label), value: $0.value.name)
+            },
+            socialProfiles: contact.socialProfiles.map {
+                LabeledValueSnapshot(label: $0.value.service, value: $0.value.username)
+            },
+            instantMessages: contact.instantMessageAddresses.map {
+                LabeledValueSnapshot(label: $0.value.service, value: $0.value.username)
+            },
+            dates: contact.dates.compactMap { labeled in
+                Calendar.current.date(from: labeled.value as DateComponents).map {
+                    ContactDateSnapshot(label: displayLabel(labeled.label), date: $0)
+                }
+            }
         )
     }
+
+    /// "home" / "work" / "mobile" → Apple's canonical `_$!<Home>!$_`-style
+    /// constants so other apps localize them; anything else is kept verbatim
+    /// as a custom label.
+    nonisolated static func canonicalLabel(_ label: String) -> String {
+        switch label.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "home": return CNLabelHome
+        case "work": return CNLabelWork
+        case "school": return CNLabelSchool
+        case "other": return CNLabelOther
+        case "mobile": return CNLabelPhoneNumberMobile
+        case "iphone": return CNLabelPhoneNumberiPhone
+        case "main": return CNLabelPhoneNumberMain
+        case "home fax": return CNLabelPhoneNumberHomeFax
+        case "work fax": return CNLabelPhoneNumberWorkFax
+        case "pager": return CNLabelPhoneNumberPager
+        case "anniversary": return CNLabelDateAnniversary
+        case "mother": return CNLabelContactRelationMother
+        case "father": return CNLabelContactRelationFather
+        case "parent": return CNLabelContactRelationParent
+        case "brother": return CNLabelContactRelationBrother
+        case "sister": return CNLabelContactRelationSister
+        case "child": return CNLabelContactRelationChild
+        case "friend": return CNLabelContactRelationFriend
+        case "spouse": return CNLabelContactRelationSpouse
+        case "partner": return CNLabelContactRelationPartner
+        case "assistant": return CNLabelContactRelationAssistant
+        case "manager": return CNLabelContactRelationManager
+        case "": return CNLabelOther
+        default: return label
+        }
+    }
+
+    /// Canonical constants → human text for the editor fields.
+    nonisolated static func displayLabel(_ label: String?) -> String {
+        guard let label, !label.isEmpty else { return "" }
+        return CNLabeledValue<NSString>.localizedString(forLabel: label)
+    }
+}
+
+/// Everything the Contacts editor can set — the full Apple-Contacts card
+/// (minus notes, which need a restricted entitlement).
+nonisolated struct ContactEditData: Sendable {
+    var namePrefix = ""
+    var givenName = ""
+    var middleName = ""
+    var familyName = ""
+    var nameSuffix = ""
+    var nickname = ""
+    var phoneticGivenName = ""
+    var phoneticFamilyName = ""
+    var organizationName = ""
+    var departmentName = ""
+    var jobTitle = ""
+    var birthday: Date?
+    var emails: [LabeledValueSnapshot] = []
+    var phones: [LabeledValueSnapshot] = []
+    var urls: [LabeledValueSnapshot] = []
+    var postalAddresses: [PostalAddressSnapshot] = []
+    var relations: [LabeledValueSnapshot] = []
+    var socialProfiles: [LabeledValueSnapshot] = []
+    var instantMessages: [LabeledValueSnapshot] = []
+    var dates: [ContactDateSnapshot] = []
 }

@@ -10,6 +10,12 @@
 import { Extension } from "@tiptap/core";
 import Suggestion from "@tiptap/suggestion";
 
+function post(msg) {
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
+    window.webkit.messageHandlers.hyperview.postMessage(msg);
+  }
+}
+
 const ITEMS = [
   { title: "Text", hint: "Plain paragraph", keywords: "paragraph plain",
     run: (e, r) => e.chain().focus().deleteRange(r).setParagraph().run() },
@@ -31,6 +37,24 @@ const ITEMS = [
     run: (e, r) => e.chain().focus().deleteRange(r).toggleCodeBlock().run() },
   { title: "Divider", hint: "Horizontal rule", keywords: "hr rule line ---",
     run: (e, r) => e.chain().focus().deleteRange(r).setHorizontalRule().run() },
+  { title: "Table", hint: "3×3 table with header row", keywords: "table grid cells",
+    run: (e, r) => e.chain().focus().deleteRange(r).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() },
+  { title: "Link to note", hint: "Link to another Hyperview note", keywords: "link note wiki [[",
+    run: (e, r) => { e.chain().focus().deleteRange(r).run(); post({ type: "requestNoteLink" }); } },
+  { title: "Link to file", hint: "Link to a file on this Mac", keywords: "link file attach finder",
+    run: (e, r) => { e.chain().focus().deleteRange(r).run(); post({ type: "requestFileLink" }); } },
+  // Table editing — these only apply with the cursor inside a table; type
+  // "/table" in a cell to filter down to them.
+  { title: "Table: add row", hint: "Insert a row below", keywords: "table row insert below",
+    run: (e, r) => e.chain().focus().deleteRange(r).addRowAfter().run() },
+  { title: "Table: add column", hint: "Insert a column to the right", keywords: "table column insert right",
+    run: (e, r) => e.chain().focus().deleteRange(r).addColumnAfter().run() },
+  { title: "Table: delete row", hint: "Remove the current row", keywords: "table row delete remove",
+    run: (e, r) => e.chain().focus().deleteRange(r).deleteRow().run() },
+  { title: "Table: delete column", hint: "Remove the current column", keywords: "table column delete remove",
+    run: (e, r) => e.chain().focus().deleteRange(r).deleteColumn().run() },
+  { title: "Table: delete table", hint: "Remove the whole table", keywords: "table delete remove",
+    run: (e, r) => e.chain().focus().deleteRange(r).deleteTable().run() },
 ];
 
 class SlashMenu {
@@ -142,7 +166,7 @@ export const SlashCommands = Extension.create({
           return ITEMS.filter(
             (item) =>
               item.title.toLowerCase().includes(q) || item.keywords.includes(q)
-          ).slice(0, 10);
+          ).slice(0, 13);
         },
         command: ({ editor, range, props }) => props.run(editor, range),
         render: () => ({

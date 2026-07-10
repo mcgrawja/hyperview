@@ -33,6 +33,11 @@ struct MarkdownCheatsheet: View {
                 .init(code: "`text`", label: "Inline code"),
             ])
 
+            section("Slash Commands", rows: [
+                .init(code: "/table", label: "Insert a table · add/delete rows"),
+                .init(code: "/link", label: "Link to a note or a file"),
+            ])
+
             section("Keys", rows: [
                 .init(code: "⌘B", label: "Bold"),
                 .init(code: "⌘I", label: "Italic"),

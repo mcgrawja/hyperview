@@ -56,7 +56,11 @@
       "Bash(git remote *)",
       "Bash(git push *)",
       "Bash(curl -s \"https://geocoding-api.open-meteo.com/v1/search?name=Kingsland%2C%20GA&count=1\")",
-      "Bash(curl -s \"https://api.open-meteo.com/v1/forecast?latitude=30.8&longitude=-81.69&hourly=temperature_2m,precipitation_probability,weather_code&daily=temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=auto&forecast_days=2\")"
+      "Bash(curl -s \"https://api.open-meteo.com/v1/forecast?latitude=30.8&longitude=-81.69&hourly=temperature_2m,precipitation_probability,weather_code&daily=temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=auto&forecast_days=2\")",
+      "Bash(xcodebuild -project Hyperview.xcodeproj -scheme Hyperview -configuration Debug build)",
+      "Bash(PATH=/usr/local/bin:__TRACKED_VAR__ npm install @tiptap/extension-link@^2.10.0 @tiptap/extension-table@^2.10.0 @tiptap/extension-table-row@^2.10.0 @tiptap/extension-table-header@^2.10.0 @tiptap/extension-table-cell@^2.10.0)",
+      "Bash(PATH=/usr/local/bin:__TRACKED_VAR__ npm run build)",
+      "Bash(xcodebuild -project Hyperview.xcodeproj -scheme Hyperview -configuration Debug test)"
     ]
   }
 }

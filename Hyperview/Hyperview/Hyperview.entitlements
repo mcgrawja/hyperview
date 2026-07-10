@@ -24,6 +24,11 @@
 	<!-- User-selected file access is driven by the ENABLE_USER_SELECTED_FILES build
 	     setting (readonly today); Phase 4 mail attachments revisit it there. -->
 
+	<!-- Notes file links: persist security-scoped bookmarks so a linked file
+	     stays openable across app launches. -->
+	<key>com.apple.security.files.bookmarks.app-scope</key>
+	<true/>
+
 	<!-- iCloud/CloudKit private database (D2). SwiftData binds to this container
 	     via cloudKitDatabase: .automatic. The production schema is promoted
 	     exactly once at the end of Phase 2 (§9 phase-gate); development runs

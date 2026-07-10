@@ -212,15 +212,33 @@ actor EventKitBroker: DataBroker {
         )
     }
 
+    /// The user's reminders lists (all of them — read is useful even for
+    /// read-only lists; writes fail per-item if EventKit refuses).
+    func reminderLists() async throws -> [CalendarSnapshot] {
+        guard remindersAuthorization == .authorized || remindersAuthorization == .limited else {
+            throw BrokerError.accessDenied
+        }
+        return store.calendars(for: .reminder).map { list in
+            CalendarSnapshot(
+                id: list.calendarIdentifier,
+                title: list.title,
+                colorHex: list.cgColor.flatMap(Self.hexString(from:))
+            )
+        }
+        .sorted { $0.title < $1.title }
+    }
+
     @discardableResult
     func createReminder(
         title: String,
         dueDate: Date? = nil,
         priority: Int = 0,
-        notes: String? = nil
+        notes: String? = nil,
+        listID: String? = nil
     ) async throws -> ReminderSnapshot {
         guard remindersAuthorization == .authorized else { throw BrokerError.accessDenied }
-        guard let list = store.defaultCalendarForNewReminders() else {
+        guard let list = listID.flatMap({ store.calendar(withIdentifier: $0) })
+            ?? store.defaultCalendarForNewReminders() else {
             throw BrokerError.underlying("No default reminders list")
         }
         let reminder = EKReminder(eventStore: store)
@@ -265,24 +283,35 @@ actor EventKitBroker: DataBroker {
     }
 
     /// Update an existing reminder; nil fields are left unchanged.
+    /// `clearDueDate` removes an existing due date (nil `dueDate` alone means
+    /// "unchanged"); `listID` moves the reminder to another list.
     @discardableResult
     func updateReminder(
         id: String,
         title: String? = nil,
         dueDate: Date? = nil,
-        notes: String? = nil
+        clearDueDate: Bool = false,
+        notes: String? = nil,
+        priority: Int? = nil,
+        listID: String? = nil
     ) async throws -> ReminderSnapshot {
         guard remindersAuthorization == .authorized else { throw BrokerError.accessDenied }
         guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else {
             throw BrokerError.notFound
         }
         if let title { reminder.title = title }
-        if let dueDate {
+        if clearDueDate {
+            reminder.dueDateComponents = nil
+        } else if let dueDate {
             reminder.dueDateComponents = Calendar.current.dateComponents(
                 [.year, .month, .day, .hour, .minute], from: dueDate
             )
         }
         if let notes { reminder.notes = notes }
+        if let priority { reminder.priority = priority }
+        if let listID, let list = store.calendar(withIdentifier: listID) {
+            reminder.calendar = list
+        }
         do {
             try store.save(reminder, commit: true)
         } catch {
@@ -375,7 +404,8 @@ actor EventKitBroker: DataBroker {
             isCompleted: reminder.isCompleted,
             priority: reminder.priority,
             notes: reminder.notes,
-            listTitle: reminder.calendar?.title ?? ""
+            listTitle: reminder.calendar?.title ?? "",
+            listID: reminder.calendar?.calendarIdentifier ?? ""
         )
     }
 

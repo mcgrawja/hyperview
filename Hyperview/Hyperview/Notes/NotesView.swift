@@ -18,6 +18,7 @@ struct NotesView: View {
 
     @State private var selectedFolder: Folder?
     @State private var selectedNote: Note?
+    @State private var showingNoteLinkPicker = false
 
     private var store: NotesStore { NotesStore(context: context) }
 
@@ -36,6 +37,32 @@ struct NotesView: View {
         }
         .background(Theme.Palette.background)
         .navigationTitle("Notes")
+        // Editor slash command "Link to note" → show the picker; the choice
+        // goes back to the editor bridge as an insertNoteLink notification.
+        .onReceive(NotificationCenter.default.publisher(for: .hyperviewRequestNoteLink)) { _ in
+            showingNoteLinkPicker = true
+        }
+        // A hyperview://note/<uuid> link was clicked in the editor.
+        .onReceive(NotificationCenter.default.publisher(for: .hyperviewOpenNote)) { notification in
+            guard let id = notification.userInfo?["id"] as? UUID,
+                  let target = notes.first(where: { $0.id == id }) else { return }
+            if selectedFolder != nil, target.folder?.id != selectedFolder?.id {
+                selectedFolder = nil
+            }
+            selectedNote = target
+        }
+        .sheet(isPresented: $showingNoteLinkPicker) {
+            NoteLinkPicker(notes: notes.filter { !$0.isArchived && $0.id != selectedNote?.id }) { note in
+                NotificationCenter.default.post(
+                    name: .hyperviewInsertNoteLink,
+                    object: nil,
+                    userInfo: [
+                        "href": "hyperview://note/\(note.id.uuidString)",
+                        "text": note.title.isEmpty ? "Untitled" : note.title,
+                    ]
+                )
+            }
+        }
     }
 
     // MARK: List pane
@@ -145,6 +172,86 @@ struct NotesView: View {
         if selectedNote?.id == note.id { selectedNote = nil }
         store.delete(note)
         try? context.save()
+    }
+}
+
+/// "Link to note" picker: searchable list of notes; choosing one posts the
+/// link back to the editor bridge.
+private struct NoteLinkPicker: View {
+    let notes: [Note]
+    let onPick: (Note) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    private var filtered: [Note] {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return notes }
+        return notes.filter {
+            ($0.title.isEmpty ? "Untitled" : $0.title).localizedCaseInsensitiveContains(trimmed)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                TextField("Search notes…", text: $query)
+                    .textFieldStyle(.plain)
+                    .onSubmit {
+                        if let first = filtered.first { pick(first) }
+                    }
+            }
+            .padding(Theme.Spacing.md)
+
+            Divider().overlay(Theme.Palette.separator)
+
+            if filtered.isEmpty {
+                EmptyStateLine(text: "No matching notes.")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(filtered) { note in
+                    Button {
+                        pick(note)
+                    } label: {
+                        HStack(spacing: Theme.Spacing.sm) {
+                            Text(note.emoji ?? "📝")
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(note.title.isEmpty ? "Untitled" : note.title)
+                                    .font(Theme.Font.cardBody)
+                                    .lineLimit(1)
+                                if let folder = note.folder {
+                                    Text(folder.name)
+                                        .font(Theme.Font.cardCaption)
+                                        .foregroundStyle(Theme.Palette.textSecondary)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .listStyle(.plain)
+            }
+
+            Divider().overlay(Theme.Palette.separator)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(Theme.Spacing.md)
+        }
+        .frame(width: 380, height: 420)
+        .background(Theme.Palette.background)
+    }
+
+    private func pick(_ note: Note) {
+        onPick(note)
+        dismiss()
     }
 }
 

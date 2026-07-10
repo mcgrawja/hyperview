@@ -71,7 +71,38 @@ html, body {
   margin: 1em 0;
 }
 
-.ProseMirror a { color: var(--hv-accent); }
+.ProseMirror a { color: var(--hv-accent); cursor: pointer; }
+
+/* Tables */
+.ProseMirror table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 0.5em 0;
+  overflow: hidden;
+}
+.ProseMirror th, .ProseMirror td {
+  border: 1px solid var(--hv-rule);
+  padding: 5px 8px;
+  vertical-align: top;
+  position: relative;
+  min-width: 3em;
+}
+.ProseMirror th {
+  background: var(--hv-code-bg);
+  font-weight: 600;
+  text-align: left;
+}
+.ProseMirror td > p, .ProseMirror th > p { margin: 0; }
+/* Cells hold block content — task lists nest inside them. */
+.ProseMirror td ul[data-type="taskList"] { margin: 0; }
+.ProseMirror .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(74, 144, 217, 0.12);
+  pointer-events: none;
+}
 
 /* Task lists */
 .ProseMirror ul[data-type="taskList"] { list-style: none; padding-left: 0.2em; }

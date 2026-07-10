@@ -104,6 +104,27 @@ struct BlockSerializerTests {
 
     // MARK: List-grouping boundaries (the tricky part)
 
+    @Test func tableWithTaskListInCell() {
+        // Tables round-trip as a single .table block whose content is the raw
+        // row/cell tree — including block content (a task list) inside a cell.
+        let cellTask = PMNode(type: "taskList", content: [
+            PMNode(type: "taskItem", attrs: ["checked": .bool(true)], content: [
+                PMNode(type: "paragraph", content: text("done thing")),
+            ]),
+        ])
+        let table = BlockContent(kind: .table, content: [
+            PMNode(type: "tableRow", content: [
+                PMNode(type: "tableHeader", content: [PMNode(type: "paragraph", content: text("Task"))]),
+                PMNode(type: "tableHeader", content: [PMNode(type: "paragraph", content: text("Status"))]),
+            ]),
+            PMNode(type: "tableRow", content: [
+                PMNode(type: "tableCell", content: [cellTask]),
+                PMNode(type: "tableCell", content: [PMNode(type: "paragraph", content: text("ok"))]),
+            ]),
+        ])
+        expectRoundTrip([table], "table (with nested task list) round-trips")
+    }
+
     @Test func adjacentListsOfDifferentKindsStaySeparate() {
         expectRoundTrip([
             BlockContent(kind: .bullet, content: text("b1")),

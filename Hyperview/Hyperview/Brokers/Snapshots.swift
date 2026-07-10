@@ -45,6 +45,8 @@ nonisolated struct ReminderSnapshot: Identifiable, Sendable, Hashable, Codable {
     var priority: Int
     var notes: String?
     var listTitle: String
+    /// EventKit `calendarIdentifier` of the containing reminders list.
+    var listID: String = ""
 }
 
 /// A photo library asset (from `PhotoBroker`). Pixels are fetched separately
@@ -58,6 +60,32 @@ nonisolated struct PhotoSnapshot: Identifiable, Sendable, Hashable, Codable {
     var pixelHeight: Int
 }
 
+/// A labeled value (email, phone, URL, relation, social profile, IM…). For
+/// relations `label` is the relationship; for social/IM it is the service.
+nonisolated struct LabeledValueSnapshot: Identifiable, Sendable, Hashable, Codable {
+    var id = UUID()
+    var label: String
+    var value: String
+}
+
+/// A labeled postal address.
+nonisolated struct PostalAddressSnapshot: Identifiable, Sendable, Hashable, Codable {
+    var id = UUID()
+    var label: String = "home"
+    var street: String = ""
+    var city: String = ""
+    var state: String = ""
+    var postalCode: String = ""
+    var country: String = ""
+}
+
+/// A labeled date (anniversary, custom…). Birthday is its own field.
+nonisolated struct ContactDateSnapshot: Identifiable, Sendable, Hashable, Codable {
+    var id = UUID()
+    var label: String = "anniversary"
+    var date: Date = Date()
+}
+
 /// A contact (from `ContactsBroker`).
 nonisolated struct ContactSnapshot: Identifiable, Sendable, Hashable, Codable {
     /// `CNContact.identifier`.
@@ -69,6 +97,29 @@ nonisolated struct ContactSnapshot: Identifiable, Sendable, Hashable, Codable {
     var phoneNumbers: [String]
     /// Small thumbnail image data if the contact has one.
     var thumbnail: Data?
+
+    // Full Apple-Contacts field set (additive; the arrays above stay for the
+    // dashboard/MCP paths that only need bare strings).
+    var namePrefix: String = ""
+    var middleName: String = ""
+    var nameSuffix: String = ""
+    var nickname: String = ""
+    var phoneticGivenName: String = ""
+    var phoneticFamilyName: String = ""
+    var jobTitle: String = ""
+    var departmentName: String = ""
+    var birthday: Date?
+    var emails: [LabeledValueSnapshot] = []
+    var phones: [LabeledValueSnapshot] = []
+    var urls: [LabeledValueSnapshot] = []
+    var postalAddresses: [PostalAddressSnapshot] = []
+    /// label = relationship name (mother, spouse…), value = person's name.
+    var relations: [LabeledValueSnapshot] = []
+    /// label = service (Twitter/X, LinkedIn…), value = username.
+    var socialProfiles: [LabeledValueSnapshot] = []
+    /// label = service (Jabber, custom…), value = handle.
+    var instantMessages: [LabeledValueSnapshot] = []
+    var dates: [ContactDateSnapshot] = []
 
     /// Display name, falling back to organization, then a placeholder.
     var displayName: String {

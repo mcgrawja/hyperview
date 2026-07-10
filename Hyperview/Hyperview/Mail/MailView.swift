@@ -89,6 +89,9 @@ private struct MailModuleContent: View {
     /// Master disclosure for the per-account sections. Collapsed by default so
     /// the sidebar leads with just the unified boxes.
     @AppStorage("mail.accountsSectionExpanded") private var accountsExpanded = false
+    @AppStorage("mail.unifiedSectionExpanded") private var unifiedExpanded = true
+    @AppStorage("mail.smartSectionExpanded") private var smartExpanded = true
+    @AppStorage("mail.tagsSectionExpanded") private var tagsExpanded = true
 
     var body: some View {
         if accounts.isEmpty {
@@ -146,6 +149,19 @@ private struct MailModuleContent: View {
             }
         }
         .background(Theme.Palette.background)
+        // Search lives in the window toolbar (like Apple Mail) so no pane
+        // spends a row on it — the message list starts at the top.
+        .searchable(text: $searchText, placement: .toolbar, prompt: "Search mail")
+        .onSubmit(of: .search) {
+            Task {
+                for (account, path) in selectedFolders() {
+                    await service.search(account, mailboxPath: path, query: searchText)
+                }
+            }
+        }
+        .onChange(of: searchText) { _, newValue in
+            if newValue.isEmpty { Task { await syncSelection() } }
+        }
         .task(id: accounts.map(\.id)) {
             service.context = context
             if selection == nil, let first = accounts.first {
@@ -222,7 +238,7 @@ private struct MailModuleContent: View {
             statusBanner
             List(selection: $selection) {
                 if accounts.count > 1 {
-                    Section("All Accounts") {
+                    Section(isExpanded: $unifiedExpanded) {
                         ForEach(UnifiedBox.allCases, id: \.self) { box in
                             HStack {
                                 Image(systemName: box.icon)
@@ -240,10 +256,12 @@ private struct MailModuleContent: View {
                             }
                             .tag(MailSidebarSelection.unified(box))
                         }
+                    } header: {
+                        Text("All Accounts")
                     }
                 }
                 if !smartMailboxes.isEmpty {
-                    Section("Smart Mailboxes") {
+                    Section(isExpanded: $smartExpanded) {
                         ForEach(smartMailboxes) { box in
                             HStack {
                                 Image(systemName: "gearshape.2")
@@ -257,10 +275,12 @@ private struct MailModuleContent: View {
                                 Button("Delete Smart Mailbox", role: .destructive) { deleteSmartMailbox(box) }
                             }
                         }
+                    } header: {
+                        Text("Smart Mailboxes")
                     }
                 }
                 if !tags.isEmpty {
-                    Section("Tags") {
+                    Section(isExpanded: $tagsExpanded) {
                         ForEach(tags) { tag in
                             HStack {
                                 Circle()
@@ -280,6 +300,8 @@ private struct MailModuleContent: View {
                                 Button("Delete Tag", role: .destructive) { deleteTag(tag) }
                             }
                         }
+                    } header: {
+                        Text("Tags")
                     }
                 }
                 Section(isExpanded: $accountsExpanded) {
@@ -331,17 +353,6 @@ private struct MailModuleContent: View {
 
     private var messageListPane: some View {
         VStack(spacing: 0) {
-            SearchBar(text: $searchText) {
-                Task {
-                    if searchText.isEmpty {
-                        await syncSelection()
-                    } else {
-                        for (account, path) in selectedFolders() {
-                            await service.search(account, mailboxPath: path, query: searchText)
-                        }
-                    }
-                }
-            }
             List(selection: $selectedMessage) {
                 ForEach(visibleMessages) { message in
                     let badge = originBadge(for: message)
@@ -550,6 +561,19 @@ private struct MailModuleContent: View {
     }
 
     private var visibleMessages: [MailMessage] {
+        let base = unsearchedMessages
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return base }
+        // Live local narrowing while typing; ⏎ still runs the server search
+        // (which pulls matches into the cache and so into `base`).
+        return base.filter {
+            $0.subject.localizedCaseInsensitiveContains(query)
+                || $0.fromAddress.localizedCaseInsensitiveContains(query)
+                || $0.fromName.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private var unsearchedMessages: [MailMessage] {
         if case .smart(let boxID) = selection {
             guard let box = smartMailboxes.first(where: { $0.id == boxID }) else { return [] }
             let condition = box.condition
@@ -900,22 +924,6 @@ private struct AttachmentChip: View {
 }
 
 // MARK: - Small helpers
-
-private struct SearchBar: View {
-    @Binding var text: String
-    let onSubmit: () -> Void
-
-    var body: some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            Image(systemName: "magnifyingglass").foregroundStyle(Theme.Palette.textSecondary)
-            TextField("Search mail", text: $text)
-                .textFieldStyle(.plain)
-                .onSubmit(onSubmit)
-        }
-        .padding(Theme.Spacing.sm)
-        .background(Theme.Palette.surfaceRaised)
-    }
-}
 
 /// Very small HTML-to-text fallback for messages that are HTML-only.
 enum MailText {
