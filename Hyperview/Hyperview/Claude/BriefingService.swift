@@ -91,13 +91,19 @@ final class BriefingService {
             return
         }
         let unreadDetail = await executor.execute(name: "mail_unread", arguments: ["limit": 12.0])
+        // Real drive time to the first located event (MapKit; best-effort).
+        let commute = await CommuteService.estimate(
+            homeLocation: weatherLocation,
+            briefingJSON: briefingData.content
+        )
 
         // 2. One compact API call to write it up.
         do {
             let text = try await writeBriefing(
                 apiKey: apiKey,
                 briefingJSON: briefingData.content,
-                unreadJSON: unreadDetail.ok ? unreadDetail.content : "[]"
+                unreadJSON: unreadDetail.ok ? unreadDetail.content : "[]",
+                commute: commute
             )
             UserDefaults.standard.set(text, forKey: "briefing.text")
             UserDefaults.standard.set(Self.dayStamp(), forKey: "briefing.date")
@@ -108,7 +114,7 @@ final class BriefingService {
         }
     }
 
-    private func writeBriefing(apiKey: String, briefingJSON: String, unreadJSON: String) async throws -> String {
+    private func writeBriefing(apiKey: String, briefingJSON: String, unreadJSON: String, commute: String?) async throws -> String {
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -129,6 +135,7 @@ final class BriefingService {
         \(unreadJSON)
 
         \(weatherLine)
+        \(commute.map { "Commute (real MapKit estimate): \($0)" } ?? "")
 
         Output EXACTLY this plain-text structure (skip an empty subsection; \
         no greeting, no sign-off, no markdown):
@@ -141,6 +148,8 @@ final class BriefingService {
         deadline, warning>
         Agenda:
           <start>–<end> | <title> | <location if any>
+            Commute: <the MapKit commute line, indented under its event, only \
+        if one was provided above — never invent one>
         Brief:
           ☐ <one checkbox line per relevant item — schedule conflicts first, \
         then a weather caution only if the concerns are non-trivial for the \

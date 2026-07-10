@@ -36,6 +36,10 @@ struct ContentView: View {
             switch selection {
             case .dashboard:
                 DashboardView()
+            case .calendar:
+                CalendarView()
+            case .reminders:
+                RemindersView()
             case .notes:
                 NotesView()
             case .contacts:
@@ -46,8 +50,6 @@ struct ContentView: View {
                 PhotosView()
             case .claude:
                 ClaudeView()
-            default:
-                ComingSoonView(item: selection)
             }
         }
     }
@@ -56,6 +58,8 @@ struct ContentView: View {
 /// Sidebar entries. `phase` documents where each lands in the build order (§9).
 enum SidebarItem: String, Identifiable, CaseIterable {
     case dashboard
+    case calendar
+    case reminders
     case notes
     case contacts
     case mail
@@ -67,6 +71,8 @@ enum SidebarItem: String, Identifiable, CaseIterable {
     var title: String {
         switch self {
         case .dashboard: return "Dashboard"
+        case .calendar: return "Calendar"
+        case .reminders: return "Reminders"
         case .notes: return "Notes"
         case .contacts: return "Contacts"
         case .mail: return "Mail"
@@ -78,6 +84,8 @@ enum SidebarItem: String, Identifiable, CaseIterable {
     var systemImage: String {
         switch self {
         case .dashboard: return "square.grid.2x2"
+        case .calendar: return "calendar"
+        case .reminders: return "checklist"
         case .notes: return "note.text"
         case .contacts: return "person.2"
         case .mail: return "envelope"
@@ -86,7 +94,7 @@ enum SidebarItem: String, Identifiable, CaseIterable {
         }
     }
 
-    static var available: [SidebarItem] { [.dashboard, .notes, .mail, .photos, .contacts, .claude] }
+    static var available: [SidebarItem] { [.dashboard, .calendar, .reminders, .notes, .mail, .photos, .contacts, .claude] }
     static var upcoming: [SidebarItem] { [] }
 }
 

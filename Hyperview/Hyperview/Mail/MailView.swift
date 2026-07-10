@@ -124,9 +124,11 @@ private struct MailModuleContent: View {
         }
     }
 
-    private func syncSelection() async {
+    /// Navigation-triggered syncs are quiet (no banner); only the explicit
+    /// Refresh button shows progress.
+    private func syncSelection(quiet: Bool = true) async {
         for (account, path) in selectedFolders() {
-            await service.syncMessages(account, mailboxPath: path)
+            await service.syncMessages(account, mailboxPath: path, quiet: quiet)
         }
     }
 
@@ -168,7 +170,7 @@ private struct MailModuleContent: View {
             }
             ToolbarItem {
                 Button {
-                    Task { await syncSelection() }
+                    Task { await syncSelection(quiet: false) }
                 } label: { Image(systemName: "arrow.clockwise") }
                 .help("Refresh")
             }

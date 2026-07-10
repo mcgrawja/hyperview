@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hyperview — Design Mockup Shell</title>
+<style>
+/* ============================================================
+   HYPERVIEW DESIGN TOKENS — edit these; everything below reacts.
+   Each variable maps 1:1 to Theme.swift in the app.
+   ============================================================ */
+:root {
+  /* Accents */
+  --primary: #4A90D9;        /* Theme.Palette.primary — ordinary interactive */
+  --claude:  #F58B3C;        /* Theme.Palette.claude — AI surfaces ONLY */
+  /* Surfaces */
+  --bg:             #ECECEC; /* windowBackground */
+  --surface:        #FFFFFF; /* contentBackground (cards, panes) */
+  --surface-raised: #F4F4F4; /* raisedBackground (fields, chips) */
+  /* Text */
+  --text-primary:   #1C1C1E;
+  --text-secondary: #8A8A8E;
+  --text-on-accent: #FFFFFF;
+  /* Semantic */
+  --separator: rgba(0,0,0,0.08);
+  --success: #3CB371;
+  --warning: #F5A623;
+  --danger:  #E0533D;
+  /* Shape & type */
+  --radius-card: 16px;
+  --radius-control: 10px;
+  --font-ui: -apple-system, "SF Pro Text", system-ui, sans-serif;
+  --font-display: -apple-system, "SF Pro Rounded", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, monospace;
+}
+.dark {
+  --bg:             #232323;
+  --surface:        #2C2C2E;
+  --surface-raised: #3A3A3C;
+  --text-primary:   #F2F2F7;
+  --text-secondary: #98989E;
+  --separator: rgba(255,255,255,0.10);
+}
+/* ============================================================ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font: 13px/1.5 var(--font-ui); background: var(--bg); color: var(--text-primary); padding: 24px; }
+h2.section { margin: 40px 0 12px; font-family: var(--font-display); font-size: 15px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .06em; }
+.toggle { position: fixed; top: 16px; right: 16px; z-index: 9; font-size: 18px; background: var(--surface); border: 1px solid var(--separator); border-radius: 999px; width: 40px; height: 40px; cursor: pointer; }
+
+.window { display: flex; height: 560px; background: var(--bg); border: 1px solid var(--separator); border-radius: 12px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,.15); }
+.sidebar { width: 190px; background: color-mix(in srgb, var(--surface) 60%, var(--bg)); border-right: 1px solid var(--separator); padding: 40px 8px 8px; }
+.sb { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 8px; color: var(--text-primary); }
+.sb.active { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); font-weight: 600; }
+.main { flex: 1; padding: 20px 24px; overflow: auto; }
+.greeting { font-family: var(--font-display); font-size: 26px; font-weight: 700; }
+.date { color: var(--text-secondary); margin-bottom: 16px; }
+
+.card { background: var(--surface); border: 1px solid var(--separator); border-radius: var(--radius-card); padding: 16px; margin-bottom: 14px; }
+.card h3 { font-size: 13px; display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.card h3 .ico { color: var(--primary); }
+.card.ai h3 .ico { color: var(--claude); }
+.badge { margin-left: auto; background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+.wx { display: flex; text-align: center; margin-bottom: 8px; }
+.wx div { flex: 1; font-size: 11px; color: var(--text-secondary); }
+.wx .e { font-size: 17px; } .wx .t { color: var(--text-primary); font-weight: 500; }
+.concern { color: var(--danger); font-weight: 600; font-size: 11px; }
+.mono { font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; }
+
+.row { display: flex; gap: 10px; padding: 4px 0; align-items: baseline; }
+.row .time { width: 56px; color: var(--text-secondary); font-variant-numeric: tabular-nums; font-size: 12px; }
+.chk { width: 13px; height: 13px; border: 1.5px solid var(--text-secondary); border-radius: 4px; display: inline-block; flex: none; transform: translateY(2px); }
+.chk.done { background: var(--success); border-color: var(--success); }
+
+.threepane { display: flex; height: 300px; border: 1px solid var(--separator); border-radius: 12px; overflow: hidden; }
+.pane { border-right: 1px solid var(--separator); background: var(--surface); overflow: hidden; }
+.pane:last-child { border-right: 0; }
+.mrow { padding: 8px 12px; border-bottom: 1px solid var(--separator); }
+.mrow.sel { background: color-mix(in srgb, var(--primary) 14%, transparent); }
+.mrow .from { font-weight: 600; font-size: 12px; display: flex; }
+.mrow .from .dot { width: 7px; height: 7px; border-radius: 99px; background: var(--primary); margin: 5px 6px 0 0; }
+.mrow .sub { color: var(--text-secondary); font-size: 11px; }
+.tagpill { font-size: 10px; padding: 0 6px; border-radius: 99px; margin-left: 4px; }
+.paper { background: #fff; color: #1c1c1e; padding: 14px; font-size: 12px; height: 100%; }
+
+.editor { background: var(--surface); border: 1px solid var(--separator); border-radius: 12px; padding: 18px 22px; }
+.editor h1 { font-family: var(--font-display); font-size: 22px; margin-bottom: 8px; }
+.slashmenu { display: inline-block; background: var(--surface); border: 1px solid var(--separator); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.16); padding: 4px; margin-top: 6px; }
+.slashmenu .it { padding: 5px 10px; border-radius: 7px; font-size: 12px; }
+.slashmenu .it.sel { background: color-mix(in srgb, var(--primary) 18%, transparent); }
+.slashmenu .hint { color: var(--text-secondary); font-size: 10px; }
+
+.chat { display: flex; flex-direction: column; gap: 10px; background: var(--bg); border: 1px solid var(--separator); border-radius: 12px; padding: 16px; }
+.bub { max-width: 70%; padding: 10px 12px; border-radius: var(--radius-card); font-size: 12.5px; }
+.bub.user { align-self: flex-end; background: var(--claude); color: var(--text-on-accent); }
+.bub.ai { align-self: flex-start; background: var(--surface); }
+.toolchip { align-self: flex-start; font-size: 11px; color: var(--claude); background: color-mix(in srgb, var(--claude) 10%, transparent); border-radius: 99px; padding: 2px 10px; }
+.inputbar { display: flex; gap: 8px; margin-top: 4px; }
+.inputbar input { flex: 1; background: var(--surface-raised); border: none; border-radius: var(--radius-control); padding: 8px 12px; color: var(--text-primary); font: inherit; }
+.send { background: var(--claude); color: var(--text-on-accent); border: none; border-radius: 99px; width: 30px; height: 30px; font-size: 15px; }
+.btn { background: var(--primary); color: var(--text-on-accent); border: none; border-radius: var(--radius-control); padding: 6px 14px; font: inherit; font-weight: 500; }
+.btn.ai { background: var(--claude); }
+.swatches { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.sw { width: 120px; border-radius: 10px; border: 1px solid var(--separator); overflow: hidden; font-size: 10px; }
+.sw div:first-child { height: 42px; } .sw div:last-child { padding: 4px 8px; background: var(--surface); }
+</style>
+</head>
+<body>
+<button class="toggle" onclick="document.body.classList.toggle('dark')">☀︎/☾</button>
+
+<h2 class="section">Token swatches</h2>
+<div class="swatches">
+  <div class="sw"><div style="background:var(--primary)"></div><div>--primary</div></div>
+  <div class="sw"><div style="background:var(--claude)"></div><div>--claude (AI only)</div></div>
+  <div class="sw"><div style="background:var(--bg)"></div><div>--bg</div></div>
+  <div class="sw"><div style="background:var(--surface)"></div><div>--surface</div></div>
+  <div class="sw"><div style="background:var(--surface-raised)"></div><div>--surface-raised</div></div>
+  <div class="sw"><div style="background:var(--success)"></div><div>--success</div></div>
+  <div class="sw"><div style="background:var(--warning)"></div><div>--warning</div></div>
+  <div class="sw"><div style="background:var(--danger)"></div><div>--danger</div></div>
+</div>
+
+<h2 class="section">Dashboard (with AI briefing)</h2>
+<div class="window">
+  <div class="sidebar">
+    <div class="sb active">▦ Dashboard</div><div class="sb">🗓 Calendar</div><div class="sb">☑︎ Reminders</div>
+    <div class="sb">▤ Notes</div><div class="sb">✉︎ Mail</div><div class="sb">▧ Photos</div>
+    <div class="sb">◎ Contacts</div><div class="sb" style="color:var(--claude)">✦ Claude</div>
+  </div>
+  <div class="main">
+    <div class="greeting">Good morning</div>
+    <div class="date">Friday, July 10, 2026</div>
+    <div class="card ai">
+      <h3><span class="ico">✦</span> Today's Briefing <span class="badge" style="background:color-mix(in srgb,var(--claude) 12%,transparent);color:var(--claude)">↻</span></h3>
+      <div class="wx">
+        <div><div class="e">☀️</div>0%<br><span class="t">79°</span><br>6AM</div>
+        <div><div class="e">☀️</div>0%<br><span class="t">85°</span><br>9AM</div>
+        <div><div class="e">🌤️</div>10%<br><span class="t">93°</span><br>12PM</div>
+        <div><div class="e">⛈️</div>65%<br><span class="t">96°</span><br>3PM</div>
+        <div><div class="e">🌧️</div>70%<br><span class="t">88°</span><br>6PM</div>
+        <div><div class="e">☁️</div>30%<br><span class="t">82°</span><br>9PM</div>
+        <div><div class="e">🌙</div>10%<br><span class="t">79°</span><br>12AM</div>
+      </div>
+      <div class="concern">⚠︎ Thunderstorms / Extreme Heat</div>
+      <div class="mono">
+Action Items:
+  Reminders:
+    ☐ Take new business cards — due Jul 10, 6AM
+  Emails:
+    ☐ Janet Faulk — unanswered for 3 days
+    ☐ Bartender App trial — expires Aug 1
+Agenda:
+  8:00AM–4:30PM | O2O Class | Wounded Warrior Project
+  5:00PM–6:00PM | Open House | Camden County HS
+Brief:
+  ☐ Storms expected during the 3PM drive window
+  ☐ O2O ends 4:30, Open House starts 5:00 — tight turnaround</div>
+    </div>
+    <div class="grid2">
+      <div class="card"><h3><span class="ico">🗓</span> Today <span class="badge">3</span></h3>
+        <div class="row"><span class="time">8:00 AM</span> O2O Class</div>
+        <div class="row"><span class="time">10:00 AM</span> Special steps</div>
+        <div class="row"><span class="time">5:00 PM</span> Open House</div>
+      </div>
+      <div class="card"><h3><span class="ico">☑︎</span> Due Soon <span class="badge">2</span></h3>
+        <div class="row"><span class="chk"></span> Take new business cards</div>
+        <div class="row"><span class="chk done"></span> Renew registration</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2 class="section">Mail (three-pane; note the white “paper” reading pane)</h2>
+<div class="threepane">
+  <div class="pane" style="width:150px; padding:8px; font-size:12px">
+    <div style="color:var(--text-secondary);font-size:10px;margin:4px 8px">ALL ACCOUNTS</div>
+    <div class="sb active">▤ All Inboxes <span class="badge">15</span></div>
+    <div class="sb">↗ All Sent</div><div class="sb">🗑 All Trash</div>
+    <div style="color:var(--text-secondary);font-size:10px;margin:10px 8px 4px">TAGS</div>
+    <div class="sb"><span style="color:var(--warning)">●</span> Follow up</div>
+  </div>
+  <div class="pane" style="width:230px">
+    <div class="mrow sel"><div class="from"><span class="dot"></span>Janet Faulk <span class="tagpill" style="background:color-mix(in srgb,var(--warning) 15%,transparent);color:var(--warning)">follow up</span></div><div class="sub">Re: October visit</div></div>
+    <div class="mrow"><div class="from"><span class="dot" style="opacity:0"></span>Lowe's</div><div class="sub">Measurement appointment</div></div>
+    <div class="mrow"><div class="from"><span class="dot"></span>PMI</div><div class="sub">The new PMP is here</div></div>
+  </div>
+  <div class="pane" style="flex:1">
+    <div style="padding:12px 14px;border-bottom:1px solid var(--separator)">
+      <b>Re: October visit</b><br><span style="color:var(--text-secondary);font-size:11px">Janet Faulk · Jul 7 · ↰ ↰↰ ↱ ⚑ 🗑 ✦</span>
+    </div>
+    <div class="paper">Hi Jason,<br><br>Just checking whether October still works for the visit — let me know either way!<br><br>— Janet</div>
+  </div>
+</div>
+
+<h2 class="section">Notes editor (with “/” menu)</h2>
+<div class="editor">
+  <h1>Trip Planning</h1>
+  <div class="row"><span class="chk done"></span> Book hotel</div>
+  <div class="row"><span class="chk"></span> Reserve rental car</div>
+  <p style="color:var(--text-secondary)">/</p>
+  <div class="slashmenu">
+    <div class="it sel"><b>Heading 1</b><div class="hint">Large section heading</div></div>
+    <div class="it"><b>Bulleted list</b><div class="hint">Simple bullet points</div></div>
+    <div class="it"><b>To-do list</b><div class="hint">Checklist with checkboxes</div></div>
+  </div>
+</div>
+
+<h2 class="section">Claude chat (AI accent channel)</h2>
+<div class="chat">
+  <div class="bub user">What needs my attention today?</div>
+  <div class="toolchip">🔧 dashboard_briefing</div>
+  <div class="toolchip">🔧 mail_unread</div>
+  <div class="bub ai">You have a tight turnaround this evening — O2O ends at 4:30 and the Open House starts at 5:00 across town. Janet's email from Tuesday is still unanswered…</div>
+  <div class="inputbar"><input placeholder="Message Claude…"><button class="send">↑</button></div>
+</div>
+
+<div style="margin:30px 0"><button class="btn">Primary action</button> <button class="btn ai">✦ AI action</button></div>
+</body>
+</html>
