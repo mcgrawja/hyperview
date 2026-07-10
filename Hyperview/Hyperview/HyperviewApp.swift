@@ -31,7 +31,7 @@ struct HyperviewApp: App {
 
         // Phase-2 gate: make sure every record type (dormant entities
         // included) exists in the CloudKit development schema (§9 / D7).
-        CloudKitSchemaSeeder.seedIfNeeded(container: modelContainer)
+        CloudKitSchemaSeeder.initializeIfNeeded()
 
         let service = MailService()
         service.context = mailContainer.mainContext

@@ -2,56 +2,60 @@
 //  CloudKitSchemaSeeder.swift
 //  Hyperview
 //
-//  Phase-2 gate prerequisite (§9 / D7): CloudKit only registers a record type
-//  the first time an instance is SAVED. Notes/Blocks/Folders exist through
-//  daily use, but the dormant database entities (DBProperty/DBRow/DBValue)
-//  and Asset have never been instantiated — so they are absent from the
-//  CloudKit development schema, and a promotion to production would silently
-//  ship an incomplete schema, breaking D7's no-migration guarantee for 1.5.
+//  Phase-2 gate prerequisite (§9 / D7): the CloudKit development schema must
+//  contain EVERY record type — dormant entities included — before the one-time
+//  production promotion.
 //
-//  This one-shot seeder saves a throwaway instance of every such entity
-//  (registering the record type and all its fields with CloudKit), then
-//  deletes them. Record types persist after their records are gone.
+//  The proper mechanism is NSPersistentCloudKitContainer's
+//  initializeCloudKitSchema(), which uploads the full model's record types
+//  without needing real records. (A create-then-delete of throwaway records
+//  does NOT work: the async mirroring export coalesces history, so
+//  insert+delete nets to nothing exported.) SwiftData doesn't expose the API,
+//  so this bridges the SwiftData model into a throwaway Core Data container
+//  solely for schema initialization.
 //
 
 import Foundation
+import CoreData
 import SwiftData
 
-@MainActor
-enum CloudKitSchemaSeeder {
-    private static let flag = "cloudkit.schemaSeeded.v1"
+nonisolated enum CloudKitSchemaSeeder {
+    private static let flag = "cloudkit.schemaInitialized.v2"
 
-    static func seedIfNeeded(container: ModelContainer) {
+    /// One-shot, off the main thread (the upload can take a little while).
+    static func initializeIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: flag) else { return }
-        let context = container.mainContext
-
-        // One of each never-instantiated entity. Values are throwaway; the
-        // point is that every persisted FIELD gets exercised so CloudKit
-        // learns the complete record shape.
-        let asset = Asset(noteID: nil, filename: "schema-seed", mimeType: "application/octet-stream", data: Data([0x0]))
-        let property = DBProperty(databaseNoteID: nil, name: "schema-seed", kind: .text, configJSON: Data("{}".utf8), sortKey: "0")
-        let row = DBRow(databaseNoteID: nil, sortKey: "0")
-        let value = DBValue(rowID: row.id, propertyID: property.id, valueJSON: Data("{}".utf8))
-
-        context.insert(asset)
-        context.insert(property)
-        context.insert(row)
-        context.insert(value)
-
-        do {
-            try context.save()
-            // Deleting afterwards keeps the store clean; the record types and
-            // their fields remain registered in the CloudKit dev schema once
-            // the mirroring export runs.
-            context.delete(asset)
-            context.delete(property)
-            context.delete(row)
-            context.delete(value)
-            try context.save()
-            UserDefaults.standard.set(true, forKey: flag)
-            MailLog.log("[CloudKit] schema seed complete — all record types registered")
-        } catch {
-            MailLog.log("[CloudKit] schema seed failed: \(error)")
+        Task.detached(priority: .utility) {
+            do {
+                try initializeSchema()
+                UserDefaults.standard.set(true, forKey: flag)
+                MailLog.log("[CloudKit] full schema initialized in development environment — all record types registered")
+            } catch {
+                MailLog.log("[CloudKit] schema initialization failed: \(error.localizedDescription)")
+            }
         }
+    }
+
+    private static func initializeSchema() throws {
+        guard let model = NSManagedObjectModel.makeManagedObjectModel(for: HyperviewSchema.models) else {
+            throw NSError(domain: "Hyperview", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "SwiftData → Core Data model conversion failed"])
+        }
+        // Throwaway store — schema init only; never read again.
+        let storeURL = URL.applicationSupportDirectory.appending(path: "CloudKitSchemaInit.sqlite")
+        let description = NSPersistentStoreDescription(url: storeURL)
+        description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(
+            containerIdentifier: "iCloud.com.mcgraw.Hyperview"
+        )
+
+        let container = NSPersistentCloudKitContainer(name: "SchemaInit", managedObjectModel: model)
+        container.persistentStoreDescriptions = [description]
+        var loadError: Error?
+        container.loadPersistentStores { _, error in loadError = error }
+        if let loadError { throw loadError }
+
+        // Synchronously creates every record type + field in the CloudKit
+        // DEVELOPMENT environment. Requires network + iCloud signed in.
+        try container.initializeCloudKitSchema(options: [])
     }
 }

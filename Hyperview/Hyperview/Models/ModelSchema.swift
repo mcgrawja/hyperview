@@ -11,7 +11,7 @@
 import Foundation
 import SwiftData
 
-enum HyperviewSchema {
+nonisolated enum HyperviewSchema {
     /// The complete entity set. Order is not significant; completeness is.
     static let models: [any PersistentModel.Type] = [
         // Active (v1)
