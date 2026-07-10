@@ -33,6 +33,9 @@ struct HyperviewApp: App {
         // included) exists in the CloudKit development schema (§9 / D7).
         CloudKitSchemaSeeder.initializeIfNeeded()
 
+        // TEMPORARY: Messages module bring-up probe (see MessagesDiagnostics).
+        MessagesDiagnostics.run()
+
         let service = MailService()
         service.context = mailContainer.mainContext
         service.startAutoRefresh()

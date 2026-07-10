@@ -61,7 +61,11 @@
       "Bash(PATH=/usr/local/bin:__TRACKED_VAR__ npm install @tiptap/extension-link@^2.10.0 @tiptap/extension-table@^2.10.0 @tiptap/extension-table-row@^2.10.0 @tiptap/extension-table-header@^2.10.0 @tiptap/extension-table-cell@^2.10.0)",
       "Bash(PATH=/usr/local/bin:__TRACKED_VAR__ npm run build)",
       "Bash(xcodebuild -project Hyperview.xcodeproj -scheme Hyperview -configuration Debug test)",
-      "Bash(xcodebuild -project /Users/mcgrawja/Projects/hyperview/Hyperview/Hyperview.xcodeproj -scheme Hyperview -configuration Debug build)"
+      "Bash(xcodebuild -project /Users/mcgrawja/Projects/hyperview/Hyperview/Hyperview.xcodeproj -scheme Hyperview -configuration Debug build)",
+      "Bash(codesign -dv /Applications/Hyperview.app)",
+      "Bash(codesign -dr- /Applications/Hyperview.app)",
+      "Bash(open *)",
+      "Bash(git -c 'user.name=Jason McGraw' -c user.email=jamcgraw01@gmail.com commit -m ' *)"
     ]
   }
 }
