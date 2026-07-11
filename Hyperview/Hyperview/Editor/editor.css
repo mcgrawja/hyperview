@@ -3,16 +3,22 @@
   final look arrives with the Claude Design pass (D11). No color here is
   canonical.
 */
+/* Serene tokens (design/final) — keep in sync with Theme.swift. */
 :root {
   color-scheme: light dark;
-  --hv-text: #1c1c1e;
-  --hv-secondary: #8a8a8e;
-  --hv-rule: rgba(128, 128, 128, 0.25);
-  --hv-code-bg: rgba(128, 128, 128, 0.12);
-  --hv-accent: #4a90d9;
+  --hv-text: #1a1c20;
+  --hv-secondary: #7f838c;
+  --hv-rule: rgba(0, 0, 0, 0.08);
+  --hv-code-bg: #f1f3f7;
+  --hv-accent: #3e8ef7;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --hv-text: #f2f2f7; }
+  :root {
+    --hv-text: #f1f3f6;
+    --hv-secondary: #969aa3;
+    --hv-rule: rgba(255, 255, 255, 0.09);
+    --hv-code-bg: #31343a;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -148,13 +154,13 @@ html, body {
   padding: 4px;
   border-radius: 10px;
   background: #ffffff;
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(0, 0, 0, 0.08);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
 }
 @media (prefers-color-scheme: dark) {
   .slash-menu {
-    background: #2a2a2d;
-    border-color: rgba(255, 255, 255, 0.14);
+    background: #24262b;
+    border-color: rgba(255, 255, 255, 0.09);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   }
 }
@@ -163,6 +169,6 @@ html, body {
   border-radius: 7px;
   cursor: pointer;
 }
-.slash-item.selected { background: rgba(74, 144, 217, 0.18); }
+.slash-item.selected { background: rgba(62, 142, 247, 0.18); }
 .slash-title { font-size: 13px; font-weight: 500; }
 .slash-hint { font-size: 11px; color: var(--hv-secondary); }

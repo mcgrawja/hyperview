@@ -17,6 +17,7 @@ struct ClaudeView: View {
     private enum Pane: String, CaseIterable {
         case chat = "Chat"
         case automation = "Automation"
+        case usage = "Usage"
     }
 
     @State private var pane: Pane = .chat
@@ -39,6 +40,8 @@ struct ClaudeView: View {
                     case .automation:
                         ClaudeContent(mcp: mcp)
                             .modelContainer(automationContainer)
+                    case .usage:
+                        UsageView()
                     }
                 }
                 .background(Theme.Palette.background)

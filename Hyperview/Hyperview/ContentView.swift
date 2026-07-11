@@ -52,6 +52,13 @@ struct ContentView: View {
                 Section {
                     ForEach(SidebarItem.available) { item in
                         Label(item.title, systemImage: item.systemImage)
+                            // Serene: the Claude nav item wears the AI accent
+                            // (amber) — the one warm element in the sidebar.
+                            .foregroundStyle(
+                                item == .claude && selection != .claude
+                                    ? Theme.Palette.claude
+                                    : Color.primary
+                            )
                             .badge(badgeCount(for: item))
                             .tag(item)
                     }

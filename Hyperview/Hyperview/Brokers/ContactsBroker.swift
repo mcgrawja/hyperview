@@ -261,6 +261,75 @@ actor ContactsBroker: DataBroker {
         }
     }
 
+    // MARK: Groups
+
+    /// The user's contact groups (Contacts-app groups; they sync via iCloud).
+    func groups() async throws -> [ContactGroupSnapshot] {
+        try ensureAuthorized()
+        let groups = (try? store.groups(matching: nil)) ?? []
+        return groups
+            .map { ContactGroupSnapshot(id: $0.identifier, name: $0.name) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Contacts belonging to a group.
+    func fetch(inGroup groupID: String, limit: Int = 500) async throws -> [ContactSnapshot] {
+        try ensureAuthorized()
+        let predicate = CNContact.predicateForContactsInGroup(withIdentifier: groupID)
+        let contacts = try store.unifiedContacts(matching: predicate, keysToFetch: Self.keys)
+        return Array(contacts.prefix(limit)).map(Self.snapshot(from:))
+    }
+
+    @discardableResult
+    func createGroup(name: String) async throws -> ContactGroupSnapshot {
+        try ensureAuthorized()
+        let group = CNMutableGroup()
+        group.name = name
+        let request = CNSaveRequest()
+        request.add(group, toContainerWithIdentifier: nil)
+        do {
+            try store.execute(request)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+        return ContactGroupSnapshot(id: group.identifier, name: group.name)
+    }
+
+    /// Delete a group (members stay in the address book).
+    func deleteGroup(id: String) async throws {
+        try ensureAuthorized()
+        guard let group = try? store.groups(matching: CNGroup.predicateForGroups(withIdentifiers: [id])).first,
+              let mutable = group.mutableCopy() as? CNMutableGroup else {
+            throw BrokerError.notFound
+        }
+        let request = CNSaveRequest()
+        request.delete(mutable)
+        do {
+            try store.execute(request)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+    }
+
+    func setMembership(contactID: String, groupID: String, isMember: Bool) async throws {
+        try ensureAuthorized()
+        guard let group = try? store.groups(matching: CNGroup.predicateForGroups(withIdentifiers: [groupID])).first,
+              let contact = try? store.unifiedContact(withIdentifier: contactID, keysToFetch: []) else {
+            throw BrokerError.notFound
+        }
+        let request = CNSaveRequest()
+        if isMember {
+            request.addMember(contact, to: group)
+        } else {
+            request.removeMember(contact, from: group)
+        }
+        do {
+            try store.execute(request)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+    }
+
     /// Fetch one contact by identifier (`contacts_get`).
     func get(id: String) async throws -> ContactSnapshot {
         try ensureAuthorized()

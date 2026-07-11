@@ -12,6 +12,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import QuickLookThumbnailing
 
 struct DriveView: View {
     @State private var locations = DriveLocations()
@@ -23,6 +24,7 @@ struct DriveView: View {
     @State private var creatingFolder = false
     @State private var newFolderName = ""
     @State private var errorText: String?
+    @AppStorage("drive.showPreview") private var showPreview = true
 
     var body: some View {
         HSplitView {
@@ -30,6 +32,11 @@ struct DriveView: View {
                 .frame(minWidth: 180, idealWidth: 210, maxWidth: 280)
             browser
                 .frame(minWidth: 420)
+            if showPreview, let selection, let item = items.first(where: { $0.url == selection }) {
+                DrivePreviewPane(item: item, onOpen: { open(item) })
+                    .frame(minWidth: 240, idealWidth: 300, maxWidth: 420)
+                    .id(item.url)
+            }
         }
         .background(Theme.Palette.background)
         .navigationTitle("Drive")
@@ -60,6 +67,12 @@ struct DriveView: View {
                 }
                 .help("New Folder here")
                 .disabled(currentFolder == nil)
+            }
+            ToolbarItem {
+                Toggle(isOn: $showPreview) {
+                    Image(systemName: "sidebar.right")
+                }
+                .help(showPreview ? "Hide Preview" : "Show Preview")
             }
         }
         .alert("Rename", isPresented: .init(
@@ -365,6 +378,112 @@ struct DriveItem: Identifiable {
         self.size = values?.fileSize
         self.modified = values?.contentModificationDate
         self.finderTags = values?.tagNames ?? []
+    }
+}
+
+/// Right-side preview: Quick Look rendering (works for images, PDFs, video
+/// frames, documents…), inline text for plain-text files, plus metadata.
+private struct DrivePreviewPane: View {
+    let item: DriveItem
+    let onOpen: () -> Void
+
+    @State private var thumbnail: NSImage?
+    @State private var textPreview: String?
+
+    var body: some View {
+        VStack(spacing: Theme.Spacing.md) {
+            ScrollView {
+                VStack(spacing: Theme.Spacing.md) {
+                    previewContent
+                    VStack(spacing: 3) {
+                        Text(item.name)
+                            .font(Theme.Font.cardBody.weight(.semibold))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(3)
+                        Text(kindDescription)
+                            .font(Theme.Font.cardCaption)
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                        if !item.isDirectory, let size = item.size {
+                            Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                        }
+                        if let modified = item.modified {
+                            Text("Modified \(modified.formatted(date: .abbreviated, time: .shortened))")
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                        }
+                        if !item.finderTags.isEmpty {
+                            Text(item.finderTags.joined(separator: " · "))
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                        }
+                    }
+                }
+                .padding(Theme.Spacing.md)
+                .frame(maxWidth: .infinity)
+            }
+            HStack {
+                Button("Open", action: onOpen)
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([item.url])
+                }
+            }
+            .padding(.bottom, Theme.Spacing.md)
+        }
+        .frame(maxHeight: .infinity)
+        .background(Theme.Palette.surface)
+        .task { await loadPreview() }
+    }
+
+    @ViewBuilder
+    private var previewContent: some View {
+        if let textPreview {
+            Text(textPreview)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Theme.Palette.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Theme.Spacing.sm)
+                .background(Theme.Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
+        } else if let thumbnail {
+            Image(nsImage: thumbnail)
+                .resizable()
+                .scaledToFit()
+                .frame(maxHeight: 280)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
+        } else {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
+                .resizable()
+                .frame(width: 96, height: 96)
+        }
+    }
+
+    private var kindDescription: String {
+        if item.isDirectory { return "Folder" }
+        let type = UTType(filenameExtension: item.url.pathExtension)
+        return type?.localizedDescription ?? (item.url.pathExtension.isEmpty ? "File" : item.url.pathExtension.uppercased())
+    }
+
+    private func loadPreview() async {
+        guard !item.isDirectory else { return }
+        // Small plain-text files render as text; everything else via Quick Look.
+        if let type = UTType(filenameExtension: item.url.pathExtension),
+           type.conforms(to: .text) || type.conforms(to: .sourceCode),
+           let size = item.size, size < 200_000,
+           let data = try? Data(contentsOf: item.url),
+           let string = String(data: data, encoding: .utf8) {
+            textPreview = String(string.prefix(4000))
+            return
+        }
+        let request = QLThumbnailGenerator.Request(
+            fileAt: item.url,
+            size: CGSize(width: 512, height: 512),
+            scale: 2,
+            representationTypes: .thumbnail
+        )
+        if let representation = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) {
+            thumbnail = representation.nsImage
+        }
     }
 }
 

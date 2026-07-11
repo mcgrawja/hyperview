@@ -180,6 +180,16 @@ final class BriefingService {
               let content = parsed["content"] as? [[String: Any]] else {
             throw ClaudeChatError.transport
         }
+        if let usage = parsed["usage"] as? [String: Any] {
+            await UsageLedger.record(
+                model: model,
+                input: (usage["input_tokens"] as? Int) ?? 0,
+                output: (usage["output_tokens"] as? Int) ?? 0,
+                cacheRead: (usage["cache_read_input_tokens"] as? Int) ?? 0,
+                cacheWrite: (usage["cache_creation_input_tokens"] as? Int) ?? 0,
+                source: "briefing"
+            )
+        }
         if (parsed["stop_reason"] as? String) == "refusal" {
             throw ClaudeChatError.api(status: 200, body: "refused")
         }

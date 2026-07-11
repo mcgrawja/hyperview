@@ -53,15 +53,26 @@ final class ClaudeChatController {
     var outputTokens = 0
 
     var model: String {
-        get { UserDefaults.standard.string(forKey: "claude.model") ?? "claude-opus-4-8" }
+        get { UserDefaults.standard.string(forKey: "claude.model") ?? "claude-sonnet-5" }
         set { UserDefaults.standard.set(newValue, forKey: "claude.model") }
     }
 
     static let models: [(id: String, label: String)] = [
-        ("claude-opus-4-8", "Opus 4.8 — most capable (default)"),
-        ("claude-sonnet-5", "Sonnet 5 — fast, near-Opus quality"),
+        ("claude-sonnet-5", "Sonnet 5 — fast, near-Opus quality (default)"),
+        ("claude-opus-4-8", "Opus 4.8 — most capable, 5× Sonnet's price"),
         ("claude-haiku-4-5", "Haiku 4.5 — fastest, cheapest"),
     ]
+
+    init() {
+        // 2026-07-11: the app previously defaulted to Opus 4.8 (which is why
+        // Opus dominated the first cost reports). Jason wants Sonnet as the
+        // Hyperview default — switch the stored value once; the Settings
+        // picker still allows Opus per-conversation.
+        if !UserDefaults.standard.bool(forKey: "claude.model.sonnetDefaultMigrated") {
+            UserDefaults.standard.set("claude-sonnet-5", forKey: "claude.model")
+            UserDefaults.standard.set(true, forKey: "claude.model.sonnetDefaultMigrated")
+        }
+    }
 
     /// Raw API message history: [{role, content}] echoed verbatim.
     @ObservationIgnored private var apiMessages: [[String: Any]] = []
@@ -143,6 +154,14 @@ final class ClaudeChatController {
             if entries[entryIndex].text.isEmpty { entries.remove(at: entryIndex) }
             inputTokens += turn.inputTokens
             outputTokens += turn.outputTokens
+            UsageLedger.record(
+                model: model,
+                input: turn.inputTokens,
+                output: turn.outputTokens,
+                cacheRead: turn.cacheReadTokens,
+                cacheWrite: turn.cacheWriteTokens,
+                source: "chat"
+            )
 
             // Echo assistant content back verbatim (thinking blocks included).
             apiMessages.append(["role": "assistant", "content": turn.contentBlocks])
@@ -202,6 +221,8 @@ final class ClaudeChatController {
         var stopReason: String
         var inputTokens: Int
         var outputTokens: Int
+        var cacheReadTokens: Int
+        var cacheWriteTokens: Int
     }
 
     private func streamOnce(
@@ -245,6 +266,8 @@ final class ClaudeChatController {
         var stopReason = "end_turn"
         var inTokens = 0
         var outTokens = 0
+        var cacheReadTokens = 0
+        var cacheWriteTokens = 0
 
         for try await line in bytes.lines {
             try Task.checkCancellation()
@@ -257,6 +280,8 @@ final class ClaudeChatController {
             case "message_start":
                 if let usage = (event["message"] as? [String: Any])?["usage"] as? [String: Any] {
                     inTokens = (usage["input_tokens"] as? Int) ?? 0
+                    cacheReadTokens = (usage["cache_read_input_tokens"] as? Int) ?? 0
+                    cacheWriteTokens = (usage["cache_creation_input_tokens"] as? Int) ?? 0
                 }
 
             case "content_block_start":
@@ -317,7 +342,9 @@ final class ClaudeChatController {
             contentBlocks: blocks.filter { !$0.isEmpty },
             stopReason: stopReason,
             inputTokens: inTokens,
-            outputTokens: outTokens
+            outputTokens: outTokens,
+            cacheReadTokens: cacheReadTokens,
+            cacheWriteTokens: cacheWriteTokens
         )
     }
 

@@ -93,6 +93,13 @@ nonisolated struct ContactDateSnapshot: Identifiable, Sendable, Hashable, Codabl
     var date: Date = Date()
 }
 
+/// A Contacts-app group (from `ContactsBroker`).
+nonisolated struct ContactGroupSnapshot: Identifiable, Sendable, Hashable, Codable {
+    /// `CNGroup.identifier`.
+    let id: String
+    var name: String
+}
+
 /// A contact (from `ContactsBroker`).
 nonisolated struct ContactSnapshot: Identifiable, Sendable, Hashable, Codable {
     /// `CNContact.identifier`.

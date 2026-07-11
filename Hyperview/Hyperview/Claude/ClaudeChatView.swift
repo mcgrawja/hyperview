@@ -181,11 +181,15 @@ struct ClaudeChatView: View {
             }
             .padding(.horizontal, Theme.Spacing.lg)
 
-            if controller.inputTokens + controller.outputTokens > 0 {
-                Text("This conversation: \(controller.inputTokens.formatted()) in · \(controller.outputTokens.formatted()) out tokens")
-                    .font(Theme.Font.cardCaption)
-                    .foregroundStyle(Theme.Palette.textSecondary)
+            // Always show which model replies come from — cost transparency.
+            HStack(spacing: Theme.Spacing.xs) {
+                Text("Model: \(UsageLedger.displayName(for: controller.model))")
+                if controller.inputTokens + controller.outputTokens > 0 {
+                    Text("· \(controller.inputTokens.formatted()) in · \(controller.outputTokens.formatted()) out tokens")
+                }
             }
+            .font(Theme.Font.cardCaption)
+            .foregroundStyle(Theme.Palette.textSecondary)
         }
         .padding(.vertical, Theme.Spacing.md)
         .background(Theme.Palette.background)

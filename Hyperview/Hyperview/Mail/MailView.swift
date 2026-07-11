@@ -143,11 +143,11 @@ private struct MailModuleContent: View {
         GeometryReader { geometry in
             HSplitView {
                 mailboxPane
-                    .frame(minWidth: 170, idealWidth: geometry.size.width * 0.13, maxWidth: 380)
+                    .frame(minWidth: 140, idealWidth: geometry.size.width * 0.065, maxWidth: 300)
                 messageListPane
-                    .frame(minWidth: 250, idealWidth: geometry.size.width * 0.37, maxWidth: .infinity)
+                    .frame(minWidth: 220, idealWidth: geometry.size.width * 0.20, maxWidth: 520)
                 detailPane
-                    .frame(minWidth: 320, maxWidth: .infinity)
+                    .frame(minWidth: 360, idealWidth: geometry.size.width * 0.735, maxWidth: .infinity)
             }
         }
         .background(Theme.Palette.background)
@@ -388,8 +388,18 @@ private struct MailModuleContent: View {
         .background(Theme.Palette.surface)
     }
 
-    @ViewBuilder
     private var detailPane: some View {
+        // ZStack keeps the pane's view identity STABLE across the placeholder
+        // ↔ message swap — otherwise HSplitView re-applies the ideal widths
+        // and the reading pane visibly snaps back on every selection.
+        ZStack {
+            detailPaneContent
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var detailPaneContent: some View {
         // Account resolved from the MESSAGE (selection may be a unified box).
         if let selectedMessage,
            let account = accounts.first(where: { $0.id == selectedMessage.accountID }) {

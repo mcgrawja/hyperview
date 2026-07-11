@@ -169,7 +169,7 @@ actor MessagesDatabase {
         guard let db, hasAccess() else { return [] }
         let sql = """
         SELECT m.ROWID, m.text, m.attributedBody, m.date, m.is_from_me,
-               h.id, m.cache_has_attachments
+               h.id, m.cache_has_attachments, m.guid
         FROM message m
         JOIN chat_message_join j ON j.message_id = m.ROWID
         LEFT JOIN handle h ON h.ROWID = m.handle_id
@@ -183,6 +183,7 @@ actor MessagesDatabase {
         sqlite3_bind_int64(statement, 1, chatID)
 
         var result: [MessageSnapshot] = []
+        var guidToRowID: [String: Int64] = [:]
         while sqlite3_step(statement) == SQLITE_ROW {
             let hasAttachment = sqlite3_column_int(statement, 6) != 0
             let text = messageText(
@@ -191,9 +192,12 @@ actor MessagesDatabase {
                 hasAttachment: hasAttachment
             )
             if text.isEmpty && !hasAttachment { continue }
+            let rowID = sqlite3_column_int64(statement, 0)
+            let guid = columnString(statement, 7)
+            if !guid.isEmpty { guidToRowID[guid] = rowID }
             let sender = columnString(statement, 5)
             result.append(MessageSnapshot(
-                id: sqlite3_column_int64(statement, 0),
+                id: rowID,
                 text: text,
                 date: Self.appleDate(sqlite3_column_int64(statement, 3)),
                 isFromMe: sqlite3_column_int(statement, 4) != 0,
@@ -203,7 +207,86 @@ actor MessagesDatabase {
         }
         var ordered = Array(result.reversed())
         attachInFiles(&ordered)
+        attachReactions(&ordered, chatID: chatID, guidToRowID: guidToRowID)
         return ordered
+    }
+
+    /// Tapbacks live as separate rows: associated_message_type 2000–2005
+    /// (❤️👍👎😂‼️❓, +2006 custom emoji) adds one, 3000-range removes it.
+    /// Replayed in date order per (target, kind, sender) so removals cancel.
+    private func attachReactions(_ messages: inout [MessageSnapshot], chatID: Int64, guidToRowID: [String: Int64]) {
+        guard let db, !guidToRowID.isEmpty else { return }
+        // associated_message_emoji only exists on newer macOS — retry without.
+        let withEmoji = """
+        SELECT m.associated_message_guid, m.associated_message_type, m.is_from_me,
+               IFNULL(h.id, ''), IFNULL(m.associated_message_emoji, '')
+        FROM message m
+        JOIN chat_message_join j ON j.message_id = m.ROWID
+        LEFT JOIN handle h ON h.ROWID = m.handle_id
+        WHERE j.chat_id = ? AND m.associated_message_type >= 2000 AND m.associated_message_type < 4000
+        ORDER BY m.date ASC
+        LIMIT 1000
+        """
+        let withoutEmoji = withEmoji.replacingOccurrences(
+            of: "IFNULL(m.associated_message_emoji, '')", with: "''"
+        )
+        var statement: OpaquePointer?
+        if sqlite3_prepare_v2(db, withEmoji, -1, &statement, nil) != SQLITE_OK {
+            sqlite3_finalize(statement)
+            statement = nil
+            guard sqlite3_prepare_v2(db, withoutEmoji, -1, &statement, nil) == SQLITE_OK else { return }
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, chatID)
+
+        // (targetRowID, kind, sender) → emoji currently in effect.
+        var active: [String: String] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let rawTarget = columnString(statement, 0)
+            let type = Int(sqlite3_column_int(statement, 1))
+            let sender = sqlite3_column_int(statement, 2) != 0 ? "me" : columnString(statement, 3)
+            let customEmoji = columnString(statement, 4)
+            // "p:0/GUID" / "bp:GUID" → GUID.
+            var targetGUID = rawTarget
+            if let slash = targetGUID.lastIndex(of: "/") {
+                targetGUID = String(targetGUID[targetGUID.index(after: slash)...])
+            } else if let colon = targetGUID.lastIndex(of: ":") {
+                targetGUID = String(targetGUID[targetGUID.index(after: colon)...])
+            }
+            guard let rowID = guidToRowID[targetGUID] else { continue }
+            let kind = type % 1000
+            let key = "\(rowID)|\(kind)|\(sender)"
+            if type >= 3000 {
+                active[key] = nil
+            } else if let emoji = Self.tapbackEmoji(kind: kind, custom: customEmoji) {
+                active[key] = "\(rowID)|\(emoji)"
+            }
+        }
+        guard !active.isEmpty else { return }
+        var byMessage: [Int64: [String]] = [:]
+        for value in active.values {
+            let parts = value.split(separator: "|", maxSplits: 1)
+            guard parts.count == 2, let rowID = Int64(parts[0]) else { continue }
+            byMessage[rowID, default: []].append(String(parts[1]))
+        }
+        for index in messages.indices {
+            if let reactions = byMessage[messages[index].id] {
+                messages[index].reactions = reactions.sorted()
+            }
+        }
+    }
+
+    private static func tapbackEmoji(kind: Int, custom: String) -> String? {
+        switch kind {
+        case 2000: return "❤️"
+        case 2001: return "👍"
+        case 2002: return "👎"
+        case 2003: return "😂"
+        case 2004: return "‼️"
+        case 2005: return "❓"
+        case 2006, 2007: return custom.isEmpty ? nil : custom
+        default: return nil
+        }
     }
 
     /// Attach on-disk files to the messages that have them (one join query).

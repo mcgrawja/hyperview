@@ -631,6 +631,16 @@ private struct MessageBubble: View {
                         .font(Theme.Font.cardCaption)
                         .foregroundStyle(Theme.Palette.textSecondary)
                 }
+                if !message.reactions.isEmpty {
+                    // Tapbacks (display-only — no public API to send them).
+                    Text(message.reactions.joined(separator: " "))
+                        .font(.system(size: 11))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Theme.Palette.surfaceRaised, in: Capsule())
+                        .overlay(Capsule().strokeBorder(Theme.Palette.separator))
+                        .padding(.top, -6)
+                }
             }
             .help(message.date.formatted(date: .abbreviated, time: .shortened))
             if !message.isFromMe { Spacer(minLength: 60) }

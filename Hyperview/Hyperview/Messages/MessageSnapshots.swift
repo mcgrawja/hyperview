@@ -56,4 +56,7 @@ nonisolated struct MessageSnapshot: Identifiable, Sendable, Hashable, Codable {
     var senderHandle: String?
     var hasAttachment: Bool
     var attachments: [MessageAttachmentSnapshot] = []
+    /// Tapbacks on this message as emoji ("❤️", "👍", custom emoji…), one per
+    /// reaction. Display-only — sending reactions has no public surface.
+    var reactions: [String] = []
 }

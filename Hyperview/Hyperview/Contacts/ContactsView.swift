@@ -17,6 +17,11 @@ struct ContactsView: View {
     @State private var searchText = ""
     @State private var errorText: String?
     @State private var editing: ContactSnapshot?
+    @State private var groups: [ContactGroupSnapshot] = []
+    /// nil = All Contacts.
+    @State private var selectedGroupID: String?
+    @State private var creatingGroup = false
+    @State private var newGroupName = ""
 
     var body: some View {
         Group {
@@ -30,7 +35,12 @@ struct ContactsView: View {
             case .blocked:
                 CenteredMessage { BlockedPrompt(moduleName: "Contacts") }
             case .ready:
-                list
+                HSplitView {
+                    groupsPane
+                        .frame(minWidth: 160, idealWidth: 190, maxWidth: 260)
+                    list
+                        .frame(minWidth: 360)
+                }
             }
         }
         .background(Theme.Palette.background)
@@ -41,6 +51,79 @@ struct ContactsView: View {
                 Task { await load() }
             }
         }
+        .alert("New Group", isPresented: $creatingGroup) {
+            TextField("Group name", text: $newGroupName)
+            Button("Create") {
+                let name = newGroupName.trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty else { return }
+                Task {
+                    _ = try? await brokers.contacts.createGroup(name: name)
+                    await loadGroups()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    // MARK: Groups pane
+
+    private var groupsPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("GROUPS")
+                    .font(Theme.Font.cardCaption.weight(.semibold))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                Spacer()
+                Button {
+                    newGroupName = ""
+                    creatingGroup = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("New Group")
+            }
+            .padding(Theme.Spacing.md)
+            List {
+                groupRow(nil, label: "All Contacts", systemImage: "person.2")
+                ForEach(groups) { group in
+                    groupRow(group.id, label: group.name, systemImage: "folder")
+                        .contextMenu {
+                            Button("Delete Group", role: .destructive) {
+                                Task {
+                                    try? await brokers.contacts.deleteGroup(id: group.id)
+                                    if selectedGroupID == group.id { selectedGroupID = nil }
+                                    await loadGroups()
+                                    await load()
+                                }
+                            }
+                        }
+                }
+            }
+            .listStyle(.sidebar)
+        }
+        .background(Theme.Palette.surface)
+    }
+
+    private func groupRow(_ groupID: String?, label: String, systemImage: String) -> some View {
+        Button {
+            selectedGroupID = groupID
+            Task { await load() }
+        } label: {
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(Theme.Palette.primary)
+                Text(label).lineLimit(1)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(
+            selectedGroupID == groupID ? Theme.Palette.primary.opacity(0.12) : Color.clear
+        )
     }
 
     private var list: some View {
@@ -61,6 +144,33 @@ struct ContactsView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            if !groups.isEmpty {
+                                Menu("Add to Group") {
+                                    ForEach(groups) { group in
+                                        Button(group.name) {
+                                            Task {
+                                                try? await brokers.contacts.setMembership(
+                                                    contactID: contact.id, groupID: group.id, isMember: true
+                                                )
+                                                await load()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if let selectedGroupID,
+                               let group = groups.first(where: { $0.id == selectedGroupID }) {
+                                Button("Remove from “\(group.name)”") {
+                                    Task {
+                                        try? await brokers.contacts.setMembership(
+                                            contactID: contact.id, groupID: selectedGroupID, isMember: false
+                                        )
+                                        await load()
+                                    }
+                                }
+                            }
+                        }
                         Divider().overlay(Theme.Palette.separator)
                     }
                 }
@@ -74,6 +184,7 @@ struct ContactsView: View {
     private func start() async {
         access = ModuleAccess(brokers.contacts.authorization)
         guard access == .ready else { return }
+        await loadGroups()
         await load()
         await observe()
     }
@@ -82,6 +193,7 @@ struct ContactsView: View {
         do {
             try await brokers.contacts.requestAccess()
             access = .ready
+            await loadGroups()
             await load()
             await observe()
         } catch {
@@ -89,10 +201,23 @@ struct ContactsView: View {
         }
     }
 
+    private func loadGroups() async {
+        groups = (try? await brokers.contacts.groups()) ?? []
+    }
+
     private func load() async {
         do {
-            let query = BrokerQuery(searchText: searchText.isEmpty ? nil : searchText, limit: 200)
-            contacts = try await brokers.contacts.fetch(query)
+            if let selectedGroupID {
+                var members = try await brokers.contacts.fetch(inGroup: selectedGroupID)
+                let query = searchText.trimmingCharacters(in: .whitespaces)
+                if !query.isEmpty {
+                    members = members.filter { $0.displayName.localizedCaseInsensitiveContains(query) }
+                }
+                contacts = members
+            } else {
+                let query = BrokerQuery(searchText: searchText.isEmpty ? nil : searchText, limit: 200)
+                contacts = try await brokers.contacts.fetch(query)
+            }
             errorText = nil
         } catch {
             errorText = "Couldn't load your contacts."
@@ -101,6 +226,7 @@ struct ContactsView: View {
 
     private func observe() async {
         for await _ in brokers.contacts.changes() {
+            await loadGroups()
             await load()
         }
     }

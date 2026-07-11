@@ -111,7 +111,10 @@ struct RemindersView: View {
                     onClose: { selectedID = nil }
                 )
                 .frame(width: 300)
-                .id(selected.id)
+                // Re-init the panel when the reminder's stored fields change
+                // externally (e.g. a completed list move), not just on
+                // selection change — otherwise the draft goes stale.
+                .id("\(selected.id)|\(selected.listID)|\(selected.isCompleted)")
             }
         }
     }
@@ -192,7 +195,7 @@ struct RemindersView: View {
             clearLocation = true
         }
 
-        _ = try? await brokers.eventKit.updateReminder(
+        let updated = try? await brokers.eventKit.updateReminder(
             id: original.id,
             title: draft.title,
             dueDate: draft.hasDueDate ? draft.dueDate : nil,
@@ -205,6 +208,10 @@ struct RemindersView: View {
             location: location,
             clearLocation: clearLocation
         )
+        // A cross-list move can mint a new identifier (copy+delete fallback).
+        if let updated, updated.id != original.id {
+            selectedID = updated.id
+        }
         if draft.isCompleted != original.isCompleted {
             if draft.isCompleted {
                 try? await brokers.eventKit.completeReminder(id: original.id)
