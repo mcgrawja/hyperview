@@ -21,14 +21,15 @@ actor MessagesDatabase {
     private var db: OpaquePointer?
 
     /// Real (non-container) home — the sandbox exception path is rooted there.
-    nonisolated static var chatDBPath: String {
-        let home: String
+    nonisolated static var realHome: String {
         if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-            home = String(cString: dir)
-        } else {
-            home = NSHomeDirectory()
+            return String(cString: dir)
         }
-        return home + "/Library/Messages/chat.db"
+        return NSHomeDirectory()
+    }
+
+    nonisolated static var chatDBPath: String {
+        realHome + "/Library/Messages/chat.db"
     }
 
     /// True once the database opens and answers a query. False means Full
@@ -150,12 +151,14 @@ actor MessagesDatabase {
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int64(statement, 1, chatID)
         guard sqlite3_step(statement) == SQLITE_ROW else { return ("", false) }
+        let hasAttachment = sqlite3_column_int(statement, 3) != 0
         let text = messageText(
             plain: columnString(statement, 0),
             body: columnData(statement, 1),
-            hasAttachment: sqlite3_column_int(statement, 3) != 0
+            hasAttachment: hasAttachment
         )
-        return (text, sqlite3_column_int(statement, 2) != 0)
+        let preview = text.isEmpty && hasAttachment ? "📎 Attachment" : text
+        return (preview, sqlite3_column_int(statement, 2) != 0)
     }
 
     // MARK: Messages
@@ -187,7 +190,7 @@ actor MessagesDatabase {
                 body: columnData(statement, 2),
                 hasAttachment: hasAttachment
             )
-            if text.isEmpty { continue }
+            if text.isEmpty && !hasAttachment { continue }
             let sender = columnString(statement, 5)
             result.append(MessageSnapshot(
                 id: sqlite3_column_int64(statement, 0),
@@ -198,7 +201,61 @@ actor MessagesDatabase {
                 hasAttachment: hasAttachment
             ))
         }
-        return result.reversed()
+        var ordered = Array(result.reversed())
+        attachInFiles(&ordered)
+        return ordered
+    }
+
+    /// Attach on-disk files to the messages that have them (one join query).
+    private func attachInFiles(_ messages: inout [MessageSnapshot]) {
+        guard let db else { return }
+        let ids = messages.filter(\.hasAttachment).map { String($0.id) }
+        guard !ids.isEmpty else { return }
+        let sql = """
+        SELECT j.message_id, a.ROWID, IFNULL(a.filename, ''), IFNULL(a.mime_type, ''), IFNULL(a.transfer_name, '')
+        FROM message_attachment_join j
+        JOIN attachment a ON a.ROWID = j.attachment_id
+        WHERE j.message_id IN (\(ids.joined(separator: ",")))
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(statement) }
+
+        var byMessage: [Int64: [MessageAttachmentSnapshot]] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let messageID = sqlite3_column_int64(statement, 0)
+            var path = columnString(statement, 2)
+            guard !path.isEmpty else { continue }
+            if path.hasPrefix("~") {
+                path = Self.realHome + path.dropFirst()
+            }
+            let transferName = columnString(statement, 4)
+            byMessage[messageID, default: []].append(MessageAttachmentSnapshot(
+                id: sqlite3_column_int64(statement, 1),
+                path: path,
+                mimeType: columnString(statement, 3),
+                name: transferName.isEmpty ? (path as NSString).lastPathComponent : transferName
+            ))
+        }
+        for index in messages.indices {
+            if let files = byMessage[messages[index].id] {
+                messages[index].attachments = files
+            }
+        }
+    }
+
+    /// Unread incoming messages across all chats — the sidebar badge.
+    func unreadCount() -> Int {
+        guard hasAccess(), let db else { return 0 }
+        let sql = """
+        SELECT COUNT(*) FROM message
+        WHERE is_read = 0 AND is_from_me = 0 AND item_type = 0 AND associated_message_type = 0
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int64(statement, 0))
     }
 
     /// ROWID of the newest message in a chat — cheap "anything new?" poll.
@@ -219,23 +276,20 @@ actor MessagesDatabase {
 
     // MARK: - Helpers
 
+    /// Message text with U+FFFC inline-attachment placeholders removed;
+    /// empty for attachment-only messages (the UI renders the files).
     private func messageText(plain: String, body: Data?, hasAttachment: Bool) -> String {
+        let raw: String
         if !plain.isEmpty {
-            return Self.stripObjectPlaceholders(plain, hasAttachment: hasAttachment)
+            raw = plain
+        } else if let body, let decoded = TypedStreamText.decode(body) {
+            raw = decoded
+        } else {
+            raw = ""
         }
-        if let body, let decoded = TypedStreamText.decode(body), !decoded.isEmpty {
-            return Self.stripObjectPlaceholders(decoded, hasAttachment: hasAttachment)
-        }
-        return hasAttachment ? "📎 Attachment" : ""
-    }
-
-    /// U+FFFC marks an inline attachment in message text; make it readable.
-    private static func stripObjectPlaceholders(_ text: String, hasAttachment: Bool) -> String {
-        let cleaned = text
+        return raw
             .replacingOccurrences(of: "\u{FFFC}", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.isEmpty { return hasAttachment ? "📎 Attachment" : "" }
-        return hasAttachment ? "📎 " + cleaned : cleaned
     }
 
     /// `message.date` is nanoseconds since 2001-01-01 on modern macOS

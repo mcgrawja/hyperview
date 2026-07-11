@@ -160,7 +160,13 @@ final class MailService {
             box.totalCount = counts.total
             box.unreadCount = counts.unread
         }
+        totalUnread = boxes
+            .filter { $0.path.uppercased() == "INBOX" }
+            .reduce(0) { $0 + $1.unreadCount }
     }
+
+    /// Sum of all inbox unread counts — drives the app-sidebar Mail badge.
+    private(set) var totalUnread = 0
 
     /// On a network error, drop that account's connection so the next action
     /// reconnects.
@@ -373,12 +379,28 @@ final class MailService {
     /// terminal action (move/trash) wins; non-terminal actions all apply.
     private func applyRules(to newMessages: [MailMessage], account: MailAccount, in context: ModelContext) async {
         guard !newMessages.isEmpty else { return }
+
+        // Blocked senders first — straight to Trash, rules never see them.
+        let blocked = Set(((try? context.fetch(FetchDescriptor<BlockedSender>())) ?? []).map(\.address))
+        var remaining: [MailMessage] = []
+        for message in newMessages {
+            if blocked.contains(message.fromAddress.lowercased()) {
+                MailLog.log("[Blocked] trashing message from \(message.fromAddress)")
+                await delete(message, account: account)
+            } else {
+                remaining.append(message)
+            }
+        }
+
         let rules = ((try? context.fetch(FetchDescriptor<MailRule>())) ?? [])
             .filter(\.isEnabled)
             .sorted { $0.sortIndex < $1.sortIndex }
-        guard !rules.isEmpty else { return }
+        guard !rules.isEmpty else {
+            try? context.save()
+            return
+        }
 
-        for message in newMessages {
+        for message in remaining {
             for rule in rules {
                 guard rule.condition.matches(message) else { continue }
                 let action = rule.action

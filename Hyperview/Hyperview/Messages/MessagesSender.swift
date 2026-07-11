@@ -51,6 +51,46 @@ enum MessagesSender {
         }
     }
 
+    /// Send a file into a conversation (Messages reads the file itself, so
+    /// pick files the user chose via an open panel).
+    static func sendFile(_ path: String, chatGUID: String, fallbackHandle: String?, service: String) throws {
+        let fileExpression = "POSIX file \"\(escaped(path))\""
+        let byChat = """
+        tell application "Messages"
+            send \(fileExpression) to chat id "\(escaped(chatGUID))"
+        end tell
+        """
+        if run(byChat) == nil { return }
+        guard let fallbackHandle, !fallbackHandle.isEmpty else {
+            throw SendError.scriptFailure("Messages couldn't send the file to this conversation.")
+        }
+        let serviceType = service.caseInsensitiveCompare("SMS") == .orderedSame ? "SMS" : "iMessage"
+        let byParticipant = """
+        tell application "Messages"
+            set targetAccount to 1st account whose service type = \(serviceType)
+            send \(fileExpression) to participant "\(escaped(fallbackHandle))" of targetAccount
+        end tell
+        """
+        if let failure = run(byParticipant) {
+            throw SendError.scriptFailure(failure)
+        }
+    }
+
+    /// Start (or continue) a conversation with a raw handle — used by the
+    /// New Message flow, where no chat guid exists yet.
+    static func send(_ text: String, toHandle handle: String, service: String = "iMessage") throws {
+        let serviceType = service.caseInsensitiveCompare("SMS") == .orderedSame ? "SMS" : "iMessage"
+        let script = """
+        tell application "Messages"
+            set targetAccount to 1st account whose service type = \(serviceType)
+            send \(asStringExpression(text)) to participant "\(escaped(handle))" of targetAccount
+        end tell
+        """
+        if let failure = run(script) {
+            throw SendError.scriptFailure(failure)
+        }
+    }
+
     /// Runs a script; nil on success, error message on failure.
     private static func run(_ source: String) -> String? {
         guard let script = NSAppleScript(source: source) else {

@@ -21,6 +21,7 @@ enum MailStore {
         MailTagAssignment.self,
         SmartMailbox.self,
         MailRule.self,
+        BlockedSender.self,
     ])
 
     @MainActor

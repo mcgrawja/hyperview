@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import CoreLocation
 
 struct RemindersView: View {
     @Environment(\.brokers) private var brokers
@@ -18,6 +19,8 @@ struct RemindersView: View {
     @State private var reminders: [ReminderSnapshot] = []
     @State private var showCompleted = false
     @State private var selectedID: String?
+    @State private var creatingList = false
+    @State private var newListName = ""
 
     var body: some View {
         Group {
@@ -43,9 +46,30 @@ struct RemindersView: View {
         .task { await start() }
         .toolbar {
             ToolbarItem {
+                Button {
+                    newListName = ""
+                    creatingList = true
+                } label: {
+                    Label("New List", systemImage: "plus.rectangle.on.folder")
+                }
+                .help("New Reminders List")
+            }
+            ToolbarItem {
                 Toggle("Show Completed", isOn: $showCompleted)
                     .onChange(of: showCompleted) { _, _ in Task { await load() } }
             }
+        }
+        .alert("New Reminders List", isPresented: $creatingList) {
+            TextField("List name", text: $newListName)
+            Button("Create") {
+                let name = newListName.trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty else { return }
+                Task {
+                    _ = try? await brokers.eventKit.createReminderList(title: name)
+                    await load()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
         }
     }
 
@@ -141,6 +165,28 @@ struct RemindersView: View {
     }
 
     private func save(_ draft: ReminderDraft, original: ReminderSnapshot) async {
+        // Location: geocode only when the address actually changed.
+        var location: ReminderLocation?
+        var clearLocation = false
+        let locationText = draft.locationText.trimmingCharacters(in: .whitespaces)
+        if draft.hasLocation, !locationText.isEmpty {
+            let changed = locationText != (original.locationTitle ?? "")
+                || draft.locationProximity != (original.locationProximity ?? "enter")
+            if changed {
+                if let placemark = try? await CLGeocoder().geocodeAddressString(locationText).first,
+                   let coordinate = placemark.location?.coordinate {
+                    location = ReminderLocation(
+                        title: locationText,
+                        latitude: coordinate.latitude,
+                        longitude: coordinate.longitude,
+                        proximity: draft.locationProximity
+                    )
+                }
+            }
+        } else if original.locationTitle != nil {
+            clearLocation = true
+        }
+
         _ = try? await brokers.eventKit.updateReminder(
             id: original.id,
             title: draft.title,
@@ -148,7 +194,11 @@ struct RemindersView: View {
             clearDueDate: !draft.hasDueDate && original.dueDate != nil,
             notes: draft.notes,
             priority: draft.priority,
-            listID: draft.listID == original.listID ? nil : draft.listID
+            listID: draft.listID == original.listID ? nil : draft.listID,
+            url: draft.url.trimmingCharacters(in: .whitespaces),
+            clearURL: draft.url.trimmingCharacters(in: .whitespaces).isEmpty && original.url != nil,
+            location: location,
+            clearLocation: clearLocation
         )
         if draft.isCompleted != original.isCompleted {
             if draft.isCompleted {
@@ -172,15 +222,48 @@ private struct ReminderListColumn: View {
     let onAdd: (String) -> Void
 
     @State private var newTitle = ""
+    /// Per-list sort, persisted under "reminders.sort.<listID>".
+    @State private var sortMode: String
+
+    init(
+        list: CalendarSnapshot,
+        reminders: [ReminderSnapshot],
+        showCompleted: Bool,
+        selectedID: Binding<String?>,
+        onToggle: @escaping (ReminderSnapshot) -> Void,
+        onAdd: @escaping (String) -> Void
+    ) {
+        self.list = list
+        self.reminders = reminders
+        self.showCompleted = showCompleted
+        _selectedID = selectedID
+        self.onToggle = onToggle
+        self.onAdd = onAdd
+        _sortMode = State(initialValue: UserDefaults.standard.string(forKey: "reminders.sort.\(list.id)") ?? "due")
+    }
 
     private var listColor: Color {
         list.colorHex.flatMap { Color(hexString: $0) } ?? Theme.Palette.primary
     }
 
     private var sorted: [ReminderSnapshot] {
-        let active = reminders.filter { !$0.isCompleted }.sorted(by: byDue)
+        let comparator: (ReminderSnapshot, ReminderSnapshot) -> Bool
+        switch sortMode {
+        case "title":
+            comparator = { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case "priority":
+            // High (1) first, none (0) last.
+            comparator = { a, b in
+                let x = a.priority == 0 ? 10 : a.priority
+                let y = b.priority == 0 ? 10 : b.priority
+                return x == y ? byDue(a, b) : x < y
+            }
+        default:
+            comparator = byDue
+        }
+        let active = reminders.filter { !$0.isCompleted }.sorted(by: comparator)
         guard showCompleted else { return active }
-        return active + reminders.filter(\.isCompleted).sorted(by: byDue)
+        return active + reminders.filter(\.isCompleted).sorted(by: comparator)
     }
 
     private func byDue(_ a: ReminderSnapshot, _ b: ReminderSnapshot) -> Bool {
@@ -190,6 +273,11 @@ private struct ReminderListColumn: View {
         case (nil, _?): return false
         case (nil, nil): return a.title < b.title
         }
+    }
+
+    private func setSort(_ mode: String) {
+        sortMode = mode
+        UserDefaults.standard.set(mode, forKey: "reminders.sort.\(list.id)")
     }
 
     var body: some View {
@@ -204,6 +292,24 @@ private struct ReminderListColumn: View {
                 Text("\(reminders.filter { !$0.isCompleted }.count)")
                     .font(Theme.Font.cardCaption)
                     .foregroundStyle(Theme.Palette.textSecondary)
+                Menu {
+                    Button { setSort("due") } label: {
+                        sortLabel("Due Date", selected: sortMode == "due")
+                    }
+                    Button { setSort("title") } label: {
+                        sortLabel("Title", selected: sortMode == "title")
+                    }
+                    Button { setSort("priority") } label: {
+                        sortLabel("Priority", selected: sortMode == "priority")
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Sort list")
             }
 
             ScrollView {
@@ -244,6 +350,13 @@ private struct ReminderListColumn: View {
         .frame(width: 280)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
+    }
+
+    private func sortLabel(_ title: String, selected: Bool) -> some View {
+        HStack {
+            Text(title)
+            if selected { Image(systemName: "checkmark") }
+        }
     }
 }
 
@@ -318,6 +431,11 @@ struct ReminderDraft {
     var priority: Int
     var listID: String
     var isCompleted: Bool
+    var url: String
+    var hasLocation: Bool
+    var locationText: String
+    /// "enter" (arriving) or "leave" (leaving).
+    var locationProximity: String
 }
 
 private struct ReminderDetailPanel: View {
@@ -349,7 +467,11 @@ private struct ReminderDetailPanel: View {
             dueDate: reminder.dueDate ?? Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date(),
             priority: reminder.priority,
             listID: reminder.listID,
-            isCompleted: reminder.isCompleted
+            isCompleted: reminder.isCompleted,
+            url: reminder.url ?? "",
+            hasLocation: reminder.locationTitle != nil,
+            locationText: reminder.locationTitle ?? "",
+            locationProximity: reminder.locationProximity ?? "enter"
         ))
     }
 
@@ -421,6 +543,30 @@ private struct ReminderDetailPanel: View {
                             }
                         }
                         .labelsHidden()
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        fieldLabel("URL")
+                        TextField("https://…", text: $draft.url)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Location", isOn: $draft.hasLocation)
+                            .toggleStyle(.checkbox)
+                        if draft.hasLocation {
+                            TextField("Address or place", text: $draft.locationText)
+                                .textFieldStyle(.roundedBorder)
+                            Picker("", selection: $draft.locationProximity) {
+                                Text("When I Arrive").tag("enter")
+                                Text("When I Leave").tag("leave")
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
+                            Text("The address is looked up when you save.")
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                        }
                     }
                 }
                 .padding(Theme.Spacing.md)

@@ -16,6 +16,17 @@
 
 import Foundation
 import EventKit
+import CoreLocation
+
+/// A geofence for a location-based reminder alarm.
+nonisolated struct ReminderLocation: Sendable, Hashable, Codable {
+    var title: String
+    var latitude: Double
+    var longitude: Double
+    var radius: Double = 100
+    /// "enter" (arriving) or "leave" (leaving).
+    var proximity: String = "enter"
+}
 
 actor EventKitBroker: DataBroker {
     typealias Item = EventSnapshot
@@ -236,6 +247,31 @@ actor EventKitBroker: DataBroker {
         .sorted { $0.title < $1.title }
     }
 
+    /// Create a new reminders list in the default reminders source (iCloud
+    /// normally), so it syncs like any list made in Apple Reminders.
+    @discardableResult
+    func createReminderList(title: String) async throws -> CalendarSnapshot {
+        guard remindersAuthorization == .authorized else { throw BrokerError.accessDenied }
+        let list = EKCalendar(for: .reminder, eventStore: store)
+        list.title = title
+        guard let source = store.defaultCalendarForNewReminders()?.source
+            ?? store.sources.first(where: { $0.sourceType == .calDAV })
+            ?? store.sources.first(where: { $0.sourceType == .local }) else {
+            throw BrokerError.underlying("No reminders account available")
+        }
+        list.source = source
+        do {
+            try store.saveCalendar(list, commit: true)
+        } catch {
+            throw BrokerError.underlying(error.localizedDescription)
+        }
+        return CalendarSnapshot(
+            id: list.calendarIdentifier,
+            title: list.title,
+            colorHex: list.cgColor.flatMap(Self.hexString(from:))
+        )
+    }
+
     @discardableResult
     func createReminder(
         title: String,
@@ -301,7 +337,11 @@ actor EventKitBroker: DataBroker {
         clearDueDate: Bool = false,
         notes: String? = nil,
         priority: Int? = nil,
-        listID: String? = nil
+        listID: String? = nil,
+        url: String? = nil,
+        clearURL: Bool = false,
+        location: ReminderLocation? = nil,
+        clearLocation: Bool = false
     ) async throws -> ReminderSnapshot {
         guard remindersAuthorization == .authorized else { throw BrokerError.accessDenied }
         guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else {
@@ -319,6 +359,25 @@ actor EventKitBroker: DataBroker {
         if let priority { reminder.priority = priority }
         if let listID, let list = store.calendar(withIdentifier: listID) {
             reminder.calendar = list
+        }
+        if clearURL {
+            reminder.url = nil
+        } else if let url, !url.isEmpty {
+            reminder.url = URL(string: url)
+        }
+        if clearLocation || location != nil {
+            for alarm in reminder.alarms ?? [] where alarm.structuredLocation != nil {
+                reminder.removeAlarm(alarm)
+            }
+        }
+        if let location {
+            let structured = EKStructuredLocation(title: location.title)
+            structured.geoLocation = CLLocation(latitude: location.latitude, longitude: location.longitude)
+            structured.radius = location.radius
+            let alarm = EKAlarm()
+            alarm.structuredLocation = structured
+            alarm.proximity = location.proximity == "leave" ? .leave : .enter
+            reminder.addAlarm(alarm)
         }
         do {
             try store.save(reminder, commit: true)
@@ -406,7 +465,8 @@ actor EventKitBroker: DataBroker {
     }
 
     private static func snapshot(from reminder: EKReminder) -> ReminderSnapshot {
-        ReminderSnapshot(
+        let locationAlarm = reminder.alarms?.first { $0.structuredLocation != nil }
+        return ReminderSnapshot(
             id: reminder.calendarItemIdentifier,
             title: reminder.title ?? "(No Title)",
             dueDate: reminder.dueDateComponents?.date,
@@ -414,7 +474,10 @@ actor EventKitBroker: DataBroker {
             priority: reminder.priority,
             notes: reminder.notes,
             listTitle: reminder.calendar?.title ?? "",
-            listID: reminder.calendar?.calendarIdentifier ?? ""
+            listID: reminder.calendar?.calendarIdentifier ?? "",
+            url: reminder.url?.absoluteString,
+            locationTitle: locationAlarm?.structuredLocation?.title,
+            locationProximity: locationAlarm.map { $0.proximity == .leave ? "leave" : "enter" }
         )
     }
 

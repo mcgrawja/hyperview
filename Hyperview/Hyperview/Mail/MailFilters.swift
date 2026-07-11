@@ -143,6 +143,22 @@ final class MailRule {
     }
 }
 
+/// A blocked sender address: newly arrived messages from it are moved straight
+/// to Trash at sync time (checked before rules run).
+@Model
+final class BlockedSender {
+    var id: UUID = UUID()
+    /// Lowercased email address.
+    var address: String = ""
+    var createdAt: Date = Date()
+
+    init(address: String) {
+        self.id = UUID()
+        self.address = address.trimmingCharacters(in: .whitespaces).lowercased()
+        self.createdAt = Date()
+    }
+}
+
 // MARK: - Shared condition form
 
 /// The condition editor used by both the Smart Mailbox and Rule editors.

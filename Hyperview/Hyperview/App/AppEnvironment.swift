@@ -50,4 +50,8 @@ extension EnvironmentValues {
     /// App-wide chat state (Phase 5) — lives at app level so the conversation
     /// survives switching between modules.
     @Entry var claudeChat: ClaudeChatController? = nil
+
+    /// Shared read-only Messages database connection (Messages module + the
+    /// app-sidebar unread badge).
+    @Entry var messagesDB: MessagesDatabase? = nil
 }

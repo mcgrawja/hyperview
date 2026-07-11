@@ -12,6 +12,17 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var selection: SidebarItem = .dashboard
+    @Environment(\.mailService) private var mailService
+    @Environment(\.messagesDB) private var messagesDB
+    @State private var messagesUnread = 0
+
+    private func badgeCount(for item: SidebarItem) -> Int {
+        switch item {
+        case .mail: return mailService?.totalUnread ?? 0
+        case .messages: return messagesUnread
+        default: return 0
+        }
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -19,6 +30,7 @@ struct ContentView: View {
                 Section {
                     ForEach(SidebarItem.available) { item in
                         Label(item.title, systemImage: item.systemImage)
+                            .badge(badgeCount(for: item))
                             .tag(item)
                     }
                 }
@@ -32,6 +44,14 @@ struct ContentView: View {
             }
             .navigationTitle("Hyperview")
             .navigationSplitViewColumnWidth(min: 200, ideal: 220)
+            // Messages unread badge — polled (chat.db has no change feed);
+            // silently 0 until Full Disk Access is granted.
+            .task {
+                while !Task.isCancelled {
+                    messagesUnread = await messagesDB?.unreadCount() ?? 0
+                    try? await Task.sleep(for: .seconds(20))
+                }
+            }
         } detail: {
             switch selection {
             case .dashboard:

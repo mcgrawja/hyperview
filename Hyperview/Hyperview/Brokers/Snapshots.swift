@@ -49,6 +49,11 @@ nonisolated struct ReminderSnapshot: Identifiable, Sendable, Hashable, Codable {
     var listTitle: String
     /// EventKit `calendarIdentifier` of the containing reminders list.
     var listID: String = ""
+    var url: String?
+    /// Location-based alarm, if any.
+    var locationTitle: String?
+    /// "enter" (arriving) or "leave" (leaving) when a location alarm exists.
+    var locationProximity: String?
 }
 
 /// A photo library asset (from `PhotoBroker`). Pixels are fetched separately

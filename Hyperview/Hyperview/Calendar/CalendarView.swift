@@ -41,6 +41,8 @@ struct CalendarView: View {
     )
     @State private var composer: ComposerTarget?
     @State private var editingEvent: EventSnapshot?
+    @AppStorage("calendar.sidebarCollapsed") private var sidebarCollapsed = false
+    @AppStorage("calendar.defaultCalendarID") private var defaultCalendarID = ""
 
     private let calendar = Calendar.current
 
@@ -93,9 +95,11 @@ struct CalendarView: View {
 
     private var content: some View {
         HStack(spacing: 0) {
-            sidebar
-                .frame(width: 190)
-            Divider().overlay(Theme.Palette.separator)
+            if !sidebarCollapsed {
+                sidebar
+                    .frame(width: 190)
+                Divider().overlay(Theme.Palette.separator)
+            }
             VStack(spacing: 0) {
                 header
                 Divider().overlay(Theme.Palette.separator)
@@ -109,25 +113,63 @@ struct CalendarView: View {
                             modeRaw = CalendarViewMode.day.rawValue
                             Task { await load() }
                         },
-                        onEditEvent: { editingEvent = $0 }
+                        onNewEvent: { day in composer = ComposerTarget(start: day, precise: false) },
+                        onEditEvent: { editingEvent = $0 },
+                        onDuplicateEvent: { event in Task { await duplicate(event) } },
+                        onDeleteEvent: { event in Task { await delete(event) } }
                     )
                 case .week:
-                    TimeGridView(
-                        days: weekDays,
-                        events: visibleEvents,
-                        onCreate: { start in composer = ComposerTarget(start: start, precise: true) },
-                        onEditEvent: { editingEvent = $0 }
-                    )
+                    timeGrid(days: weekDays)
                 case .day:
-                    TimeGridView(
-                        days: [calendar.startOfDay(for: anchor)],
-                        events: visibleEvents,
-                        onCreate: { start in composer = ComposerTarget(start: start, precise: true) },
-                        onEditEvent: { editingEvent = $0 }
-                    )
+                    timeGrid(days: [calendar.startOfDay(for: anchor)])
                 }
             }
         }
+    }
+
+    private func timeGrid(days: [Date]) -> some View {
+        TimeGridView(
+            days: days,
+            events: visibleEvents,
+            onCreate: { start in composer = ComposerTarget(start: start, precise: true) },
+            onEditEvent: { editingEvent = $0 },
+            onDuplicateEvent: { event in Task { await duplicate(event) } },
+            onDeleteEvent: { event in Task { await delete(event) } },
+            onMoveEvent: { event, minuteDelta, dayDelta in
+                Task { await move(event, minuteDelta: minuteDelta, dayDelta: dayDelta) }
+            }
+        )
+    }
+
+    // MARK: Event actions
+
+    private func duplicate(_ event: EventSnapshot) async {
+        _ = try? await brokers.eventKit.createEvent(
+            title: event.title,
+            start: event.start,
+            end: event.end,
+            isAllDay: event.isAllDay,
+            location: event.location,
+            notes: event.notes,
+            calendarID: event.calendarID.isEmpty ? nil : event.calendarID
+        )
+        await load()
+    }
+
+    private func delete(_ event: EventSnapshot) async {
+        try? await brokers.eventKit.deleteEvent(id: event.id)
+        await load()
+    }
+
+    private func move(_ event: EventSnapshot, minuteDelta: Int, dayDelta: Int) async {
+        let delta = TimeInterval(minuteDelta * 60 + dayDelta * 86_400)
+        guard delta != 0 else { return }
+        _ = try? await brokers.eventKit.updateEvent(
+            id: event.id,
+            start: event.start.addingTimeInterval(delta),
+            end: event.end.addingTimeInterval(delta)
+        )
+        await load()
     }
 
     private var sidebar: some View {
@@ -169,16 +211,35 @@ struct CalendarView: View {
                     .foregroundStyle(Theme.Palette.textPrimary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                if cal.id == defaultCalendarID {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .help("Default calendar for new events")
+                }
             }
             .padding(.vertical, 3)
             .padding(.horizontal, Theme.Spacing.xs)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            if cal.id == defaultCalendarID {
+                Button("Clear Default Calendar") { defaultCalendarID = "" }
+            } else {
+                Button("Set as Default Calendar") { defaultCalendarID = cal.id }
+            }
+        }
     }
 
     private var header: some View {
         HStack(spacing: Theme.Spacing.md) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { sidebarCollapsed.toggle() }
+            } label: {
+                Image(systemName: "sidebar.left")
+            }
+            .help(sidebarCollapsed ? "Show Calendars" : "Hide Calendars")
             Text(headerTitle)
                 .font(Theme.Font.dashboardTitle)
                 .lineLimit(1)
@@ -283,7 +344,10 @@ private struct MonthGridView: View {
     let anchor: Date
     let events: [EventSnapshot]
     let onOpenDay: (Date) -> Void
+    let onNewEvent: (Date) -> Void
     let onEditEvent: (EventSnapshot) -> Void
+    let onDuplicateEvent: (EventSnapshot) -> Void
+    let onDeleteEvent: (EventSnapshot) -> Void
 
     private let calendar = Calendar.current
 
@@ -323,7 +387,10 @@ private struct MonthGridView: View {
                                     isToday: calendar.isDateInToday(day),
                                     events: dayEvents(day),
                                     onOpen: { onOpenDay(day) },
-                                    onEditEvent: onEditEvent
+                                    onNewEvent: { onNewEvent(day) },
+                                    onEditEvent: onEditEvent,
+                                    onDuplicateEvent: onDuplicateEvent,
+                                    onDeleteEvent: onDeleteEvent
                                 )
                                 .frame(maxWidth: .infinity)
                                 .frame(height: rowHeight)
@@ -357,7 +424,10 @@ private struct MonthDayCell: View {
     let isToday: Bool
     let events: [EventSnapshot]
     let onOpen: () -> Void
+    let onNewEvent: () -> Void
     let onEditEvent: (EventSnapshot) -> Void
+    let onDuplicateEvent: (EventSnapshot) -> Void
+    let onDeleteEvent: (EventSnapshot) -> Void
 
     private var dayNumber: String { "\(Calendar.current.component(.day, from: date))" }
 
@@ -381,6 +451,12 @@ private struct MonthDayCell: View {
             ForEach(events.prefix(3)) { event in
                 MonthEventChip(event: event, dimmed: !inMonth)
                     .onTapGesture { onEditEvent(event) }
+                    .contextMenu {
+                        Button("Edit Event…") { onEditEvent(event) }
+                        Button("Duplicate Event") { onDuplicateEvent(event) }
+                        Divider()
+                        Button("Delete Event", role: .destructive) { onDeleteEvent(event) }
+                    }
             }
             if events.count > 3 {
                 Text("+\(events.count - 3) more")
@@ -392,6 +468,10 @@ private struct MonthDayCell: View {
         }
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { onOpen() }
+        .contextMenu {
+            Button("New Event on \(date.formatted(.dateTime.month(.abbreviated).day()))…") { onNewEvent() }
+            Button("Open in Day View") { onOpen() }
+        }
     }
 }
 
@@ -439,10 +519,17 @@ private struct TimeGridView: View {
     let events: [EventSnapshot]
     let onCreate: (Date) -> Void
     let onEditEvent: (EventSnapshot) -> Void
+    let onDuplicateEvent: (EventSnapshot) -> Void
+    let onDeleteEvent: (EventSnapshot) -> Void
+    /// Drag-to-move: (event, minuteDelta snapped to 15, dayDelta).
+    let onMoveEvent: (EventSnapshot, Int, Int) -> Void
 
     private let calendar = Calendar.current
     private let hourHeight: CGFloat = 46
     private let gutterWidth: CGFloat = 54
+
+    /// Live drag translations keyed by event id (visual offset until release).
+    @State private var dragOffsets: [String: CGSize] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -534,14 +621,22 @@ private struct TimeGridView: View {
     private func dayColumn(_ day: Date, now: Date) -> some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
-                // Hour lines + double-click-to-create layer
+                // Hour lines: double-click OR right-click a slot to create there
                 VStack(spacing: 0) {
-                    ForEach(0..<24, id: \.self) { _ in
+                    ForEach(0..<24, id: \.self) { hour in
                         Rectangle()
                             .fill(Color.clear)
                             .frame(height: hourHeight)
                             .overlay(alignment: .top) {
                                 Rectangle().fill(Theme.Palette.separator.opacity(0.6)).frame(height: 0.5)
+                            }
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                Button("New Event at \(slotLabel(hour))…") {
+                                    if let start = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: day) {
+                                        onCreate(start)
+                                    }
+                                }
                             }
                     }
                 }
@@ -553,13 +648,42 @@ private struct TimeGridView: View {
                     }
                 }
 
-                // Events
+                // Events — click to edit, right-click for actions, drag to move
+                // (vertical = time in 15-minute snaps, horizontal = day).
                 ForEach(layout(timedEvents(on: day), day: day)) { laid in
                     let width = geometry.size.width / CGFloat(laid.cols)
+                    let dragOffset = dragOffsets[laid.event.id] ?? .zero
                     EventBlock(event: laid.event)
                         .frame(width: max(width - 3, 20), height: max(laid.height, 22))
-                        .offset(x: CGFloat(laid.col) * width + 1.5, y: laid.y)
+                        .offset(
+                            x: CGFloat(laid.col) * width + 1.5 + dragOffset.width,
+                            y: laid.y + dragOffset.height
+                        )
+                        .opacity(dragOffset == .zero ? 1 : 0.75)
+                        .zIndex(dragOffset == .zero ? 0 : 10)
                         .onTapGesture { onEditEvent(laid.event) }
+                        .contextMenu {
+                            Button("Edit Event…") { onEditEvent(laid.event) }
+                            Button("Duplicate Event") { onDuplicateEvent(laid.event) }
+                            Divider()
+                            Button("Delete Event", role: .destructive) { onDeleteEvent(laid.event) }
+                        }
+                        .gesture(
+                            DragGesture(minimumDistance: 6)
+                                .onChanged { value in
+                                    dragOffsets[laid.event.id] = value.translation
+                                }
+                                .onEnded { value in
+                                    dragOffsets[laid.event.id] = nil
+                                    let minuteDelta = Int((value.translation.height / hourHeight * 60 / 15).rounded()) * 15
+                                    let dayDelta = days.count > 1
+                                        ? Int((value.translation.width / geometry.size.width).rounded())
+                                        : 0
+                                    if minuteDelta != 0 || dayDelta != 0 {
+                                        onMoveEvent(laid.event, minuteDelta, dayDelta)
+                                    }
+                                }
+                        )
                 }
 
                 // Now line
@@ -659,6 +783,10 @@ private struct TimeGridView: View {
 
     private func hourLabel(_ hour: Int) -> String {
         guard hour > 0 else { return "" }
+        return slotLabel(hour)
+    }
+
+    private func slotLabel(_ hour: Int) -> String {
         let date = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: Date()) ?? Date()
         return date.formatted(.dateTime.hour(.defaultDigits(amPM: .abbreviated)))
     }
@@ -945,8 +1073,13 @@ struct EventComposerView: View {
         .background(Theme.Palette.background)
         .task {
             calendars = (try? await brokers.eventKit.eventCalendars()) ?? []
+            // Priority: the user-chosen default calendar, then the last one
+            // used from Mail, then "Jason", then the first available.
+            let preferred = UserDefaults.standard.string(forKey: "calendar.defaultCalendarID") ?? ""
             let saved = UserDefaults.standard.string(forKey: "mail.eventCalendarID") ?? ""
-            if calendars.contains(where: { $0.id == saved }) {
+            if calendars.contains(where: { $0.id == preferred }) {
+                selectedCalendarID = preferred
+            } else if calendars.contains(where: { $0.id == saved }) {
                 selectedCalendarID = saved
             } else if let jason = calendars.first(where: { $0.title.caseInsensitiveCompare("Jason") == .orderedSame }) {
                 selectedCalendarID = jason.id

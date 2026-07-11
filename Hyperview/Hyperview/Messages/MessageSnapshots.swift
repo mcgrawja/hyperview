@@ -30,6 +30,21 @@ nonisolated struct ChatSnapshot: Identifiable, Sendable, Hashable, Codable {
     var lastFromMe: Bool
 }
 
+/// A file attached to a message (from the `attachment` table).
+nonisolated struct MessageAttachmentSnapshot: Identifiable, Sendable, Hashable, Codable {
+    /// `attachment.ROWID`.
+    let id: Int64
+    /// Absolute on-disk path (inside ~/Library/Messages/Attachments).
+    var path: String
+    var mimeType: String
+    /// Original filename for display/saving.
+    var name: String
+
+    var isImage: Bool {
+        mimeType.hasPrefix("image/") && !mimeType.contains("heic-sequence")
+    }
+}
+
 /// One message within a chat.
 nonisolated struct MessageSnapshot: Identifiable, Sendable, Hashable, Codable {
     /// `message.ROWID`.
@@ -40,4 +55,5 @@ nonisolated struct MessageSnapshot: Identifiable, Sendable, Hashable, Codable {
     /// Sender handle for incoming messages (nil for own messages).
     var senderHandle: String?
     var hasAttachment: Bool
+    var attachments: [MessageAttachmentSnapshot] = []
 }

@@ -20,6 +20,7 @@ struct HyperviewApp: App {
     private let mailService: MailService
     private let mcp: MCPController
     private let claudeChat: ClaudeChatController
+    private let messagesDB = MessagesDatabase()
 
     init() {
         // Flush stdout immediately so diagnostic logs appear in real time even
@@ -63,6 +64,7 @@ struct HyperviewApp: App {
                 .environment(\.mcp, mcp)
                 .environment(\.automationContainer, automationContainer)
                 .environment(\.claudeChat, claudeChat)
+                .environment(\.messagesDB, messagesDB)
         }
         .modelContainer(modelContainer)
     }

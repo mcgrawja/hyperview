@@ -72,6 +72,7 @@ private struct MailModuleContent: View {
     @Query(sort: \MailTag.name) private var tags: [MailTag]
     @Query private var tagAssignments: [MailTagAssignment]
     @Query(sort: \SmartMailbox.sortIndex) private var smartMailboxes: [SmartMailbox]
+    @Query(sort: \BlockedSender.address) private var blockedSenders: [BlockedSender]
 
     /// Shared, app-level service (also used by the MCP tools) — connections
     /// survive tab switches.
@@ -86,6 +87,7 @@ private struct MailModuleContent: View {
     @State private var tagEditor: TagEditorTarget?
     @State private var smartEditor: SmartMailboxEditorTarget?
     @State private var showingRules = false
+    @State private var showingBlockedSenders = false
     /// Master disclosure for the per-account sections. Collapsed by default so
     /// the sidebar leads with just the unified boxes.
     @AppStorage("mail.accountsSectionExpanded") private var accountsExpanded = false
@@ -141,9 +143,9 @@ private struct MailModuleContent: View {
         GeometryReader { geometry in
             HSplitView {
                 mailboxPane
-                    .frame(minWidth: 170, idealWidth: geometry.size.width * 0.20, maxWidth: 380)
+                    .frame(minWidth: 170, idealWidth: geometry.size.width * 0.13, maxWidth: 380)
                 messageListPane
-                    .frame(minWidth: 250, idealWidth: geometry.size.width * 0.30, maxWidth: .infinity)
+                    .frame(minWidth: 250, idealWidth: geometry.size.width * 0.37, maxWidth: .infinity)
                 detailPane
                     .frame(minWidth: 320, maxWidth: .infinity)
             }
@@ -200,6 +202,7 @@ private struct MailModuleContent: View {
                 Menu {
                     Button("New Smart Mailbox…") { smartEditor = SmartMailboxEditorTarget(box: nil) }
                     Button("Manage Rules…") { showingRules = true }
+                    Button("Blocked Senders…") { showingBlockedSenders = true }
                 } label: { Image(systemName: "slider.horizontal.3") }
                 .help("Smart Mailboxes & Rules")
             }
@@ -228,6 +231,9 @@ private struct MailModuleContent: View {
         }
         .sheet(isPresented: $showingRules) {
             RulesManagerView(accounts: accounts)
+        }
+        .sheet(isPresented: $showingBlockedSenders) {
+            BlockedSendersView()
         }
     }
 
@@ -447,6 +453,20 @@ private struct MailModuleContent: View {
             }
             Button(message.isFlagged ? "Unflag" : "Flag") {
                 Task { await service.setFlagged(message, account: account, flagged: !message.isFlagged) }
+            }
+            if blockedSenders.contains(where: { $0.address == message.fromAddress.lowercased() }) {
+                Button("Unblock Sender") {
+                    for blocked in blockedSenders where blocked.address == message.fromAddress.lowercased() {
+                        context.delete(blocked)
+                    }
+                    try? context.save()
+                }
+            } else {
+                Button("Block Sender") {
+                    context.insert(BlockedSender(address: message.fromAddress))
+                    try? context.save()
+                    Task { await deleteMessage(message) }
+                }
             }
             Menu("Move To") {
                 ForEach(accountMailboxes(account).filter { $0.path != message.mailboxPath }) { box in

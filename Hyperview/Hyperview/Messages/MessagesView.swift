@@ -20,8 +20,10 @@ struct MessagesView: View {
     }
 
     @Environment(\.brokers) private var brokers
+    @Environment(\.messagesDB) private var sharedDatabase
 
-    @State private var database = MessagesDatabase()
+    @State private var fallbackDatabase = MessagesDatabase()
+    private var database: MessagesDatabase { sharedDatabase ?? fallbackDatabase }
     @State private var phase: Phase = .checking
     @State private var chats: [ChatSnapshot] = []
     @State private var selectedChatID: Int64?
@@ -31,6 +33,12 @@ struct MessagesView: View {
     @State private var sendError: String?
     /// handle (email lowercased / phone last-10-digits) → contact name.
     @State private var nameIndex: [String: String] = [:]
+    /// Local pin/hide state (chat guids) — chat.db is read-only, so these
+    /// live in Hyperview only and don't touch the Messages app.
+    @State private var pinned: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "messages.pinnedChats") ?? [])
+    @State private var hidden: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "messages.hiddenChats") ?? [])
+    @State private var showingNewMessage = false
+    @State private var enlargedImage: MessageAttachmentSnapshot?
 
     var body: some View {
         Group {
@@ -47,6 +55,49 @@ struct MessagesView: View {
         .background(Theme.Palette.background)
         .navigationTitle("Messages")
         .task { await start() }
+        .toolbar {
+            ToolbarItem {
+                Button { showingNewMessage = true } label: { Image(systemName: "square.and.pencil") }
+                    .help("New Message")
+                    .disabled(phase != .ready)
+            }
+            if !hidden.isEmpty {
+                ToolbarItem {
+                    Button("Unhide All (\(hidden.count))") {
+                        hidden = []
+                        persistChatState()
+                    }
+                    .help("Show all hidden conversations")
+                }
+            }
+        }
+        .sheet(isPresented: $showingNewMessage) {
+            NewMessageSheet { handle, text in
+                try MessagesSender.send(text, toHandle: handle)
+                Task {
+                    try? await Task.sleep(for: .seconds(1.5))
+                    chats = await database.chats()
+                    // Select the (possibly brand-new) conversation.
+                    let digits = String(handle.filter(\.isNumber).suffix(10))
+                    if let match = chats.first(where: { chat in
+                        chat.participants.contains { participant in
+                            participant.caseInsensitiveCompare(handle) == .orderedSame
+                                || (!digits.isEmpty && participant.filter(\.isNumber).hasSuffix(digits))
+                        }
+                    }) {
+                        selectedChatID = match.id
+                    }
+                }
+            }
+        }
+        .sheet(item: $enlargedImage) { attachment in
+            ImageAttachmentViewer(attachment: attachment)
+        }
+    }
+
+    private func persistChatState() {
+        UserDefaults.standard.set(Array(pinned), forKey: "messages.pinnedChats")
+        UserDefaults.standard.set(Array(hidden), forKey: "messages.hiddenChats")
     }
 
     // MARK: Access onboarding
@@ -127,14 +178,50 @@ struct MessagesView: View {
     }
 
     private var chatList: some View {
-        List(selection: $selectedChatID) {
-            ForEach(chats) { chat in
-                ChatRow(chat: chat, title: title(for: chat))
-                    .tag(chat.id)
+        let visible = chats.filter { !hidden.contains($0.guid) }
+        let pinnedChats = visible.filter { pinned.contains($0.guid) }
+        let rest = visible.filter { !pinned.contains($0.guid) }
+        return List(selection: $selectedChatID) {
+            if !pinnedChats.isEmpty {
+                Section("Pinned") {
+                    ForEach(pinnedChats) { chat in
+                        chatRow(chat)
+                    }
+                }
+            }
+            Section(pinnedChats.isEmpty ? "" : "Messages") {
+                ForEach(rest) { chat in
+                    chatRow(chat)
+                }
             }
         }
         .listStyle(.inset)
         .background(Theme.Palette.surface)
+    }
+
+    private func chatRow(_ chat: ChatSnapshot) -> some View {
+        ChatRow(chat: chat, title: title(for: chat), isPinned: pinned.contains(chat.guid))
+            .tag(chat.id)
+            .contextMenu {
+                Button(pinned.contains(chat.guid) ? "Unpin" : "Pin") {
+                    if pinned.contains(chat.guid) {
+                        pinned.remove(chat.guid)
+                    } else {
+                        pinned.insert(chat.guid)
+                    }
+                    persistChatState()
+                }
+                Divider()
+                Button("Hide Conversation") {
+                    hidden.insert(chat.guid)
+                    pinned.remove(chat.guid)
+                    if selectedChatID == chat.id { selectedChatID = nil }
+                    persistChatState()
+                }
+                // Honest label: chat.db is read-only and Messages has no
+                // scriptable delete — hiding is local to Hyperview.
+                Text("Hiding only affects Hyperview — the conversation stays in Messages.")
+            }
     }
 
     @ViewBuilder
@@ -198,7 +285,13 @@ struct MessagesView: View {
                                 .padding(.leading, Theme.Spacing.md)
                                 .padding(.top, 3)
                         case .message(let message):
-                            MessageBubble(message: message)
+                            MessageBubble(message: message) { attachment in
+                                if attachment.isImage {
+                                    enlargedImage = attachment
+                                } else {
+                                    saveAttachment(attachment)
+                                }
+                            }
                         }
                     }
                 }
@@ -225,6 +318,16 @@ struct MessagesView: View {
                     .foregroundStyle(Theme.Palette.danger)
             }
             HStack(alignment: .bottom, spacing: Theme.Spacing.sm) {
+                Button {
+                    attachFile(chat)
+                } label: {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(sending)
+                .help("Send a file")
                 TextField("iMessage", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
@@ -328,6 +431,30 @@ struct MessagesView: View {
         }
     }
 
+    private func attachFile(_ chat: ChatSnapshot) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a file to send"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        sendError = nil
+        do {
+            try MessagesSender.sendFile(
+                url.path,
+                chatGUID: chat.guid,
+                fallbackHandle: chat.isGroup ? nil : chat.participants.first ?? chat.identifier,
+                service: chat.serviceName
+            )
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                await refresh()
+            }
+        } catch {
+            sendError = error.localizedDescription
+        }
+    }
+
     private func send(_ chat: ChatSnapshot) async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !sending else { return }
@@ -348,6 +475,21 @@ struct MessagesView: View {
             sendError = error.localizedDescription
         }
         sending = false
+    }
+
+    /// Non-image attachments: other apps can't read ~/Library/Messages (TCC),
+    /// so "open" means saving a copy where the user chooses first.
+    private func saveAttachment(_ attachment: MessageAttachmentSnapshot) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = attachment.name
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        try? FileManager.default.removeItem(at: destination)
+        do {
+            try FileManager.default.copyItem(at: URL(fileURLWithPath: attachment.path), to: destination)
+            NSWorkspace.shared.activateFileViewerSelecting([destination])
+        } catch {
+            sendError = "Couldn't save the attachment."
+        }
     }
 
     // MARK: Contact names
@@ -396,9 +538,15 @@ struct MessagesView: View {
 private struct ChatRow: View {
     let chat: ChatSnapshot
     let title: String
+    var isPinned: Bool = false
 
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
+            if isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+            }
             ZStack {
                 Circle()
                     .fill(Theme.Palette.primary.opacity(0.25))
@@ -451,24 +599,247 @@ private struct ChatRow: View {
 
 private struct MessageBubble: View {
     let message: MessageSnapshot
+    var onAttachmentTap: (MessageAttachmentSnapshot) -> Void = { _ in }
 
     var body: some View {
         HStack {
             if message.isFromMe { Spacer(minLength: 60) }
-            Text(message.text)
-                .font(Theme.Font.cardBody)
-                .foregroundStyle(message.isFromMe ? Theme.Palette.textOnAccent : Theme.Palette.textPrimary)
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.vertical, Theme.Spacing.sm)
-                .background(
-                    message.isFromMe ? Theme.Palette.primary : Theme.Palette.surfaceRaised,
-                    in: RoundedRectangle(cornerRadius: 16)
-                )
-                .textSelection(.enabled)
-                .help(message.date.formatted(date: .abbreviated, time: .shortened))
+            VStack(alignment: message.isFromMe ? .trailing : .leading, spacing: 3) {
+                ForEach(message.attachments) { attachment in
+                    AttachmentView(attachment: attachment)
+                        .onTapGesture { onAttachmentTap(attachment) }
+                }
+                if !message.text.isEmpty {
+                    Text(message.text)
+                        .font(Theme.Font.cardBody)
+                        .foregroundStyle(message.isFromMe ? Theme.Palette.textOnAccent : Theme.Palette.textPrimary)
+                        .padding(.horizontal, Theme.Spacing.md)
+                        .padding(.vertical, Theme.Spacing.sm)
+                        .background(
+                            message.isFromMe ? Theme.Palette.primary : Theme.Palette.surfaceRaised,
+                            in: RoundedRectangle(cornerRadius: 16)
+                        )
+                        .textSelection(.enabled)
+                } else if message.attachments.isEmpty && message.hasAttachment {
+                    // The file is gone from disk (e.g. purged by Messages).
+                    Text("📎 Attachment unavailable")
+                        .font(Theme.Font.cardCaption)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                }
+            }
+            .help(message.date.formatted(date: .abbreviated, time: .shortened))
             if !message.isFromMe { Spacer(minLength: 60) }
         }
         .id("msg-\(message.id)")
         .frame(maxWidth: .infinity, alignment: message.isFromMe ? .trailing : .leading)
+    }
+}
+
+/// One attachment inside a bubble: inline preview for images, a labeled chip
+/// for everything else.
+private struct AttachmentView: View {
+    let attachment: MessageAttachmentSnapshot
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if attachment.isImage {
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 240, maxHeight: 240)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                } else {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Theme.Palette.surfaceRaised)
+                        .frame(width: 160, height: 110)
+                        .overlay(ProgressView().controlSize(.small))
+                        .task {
+                            image = NSImage(contentsOfFile: attachment.path)
+                        }
+                }
+            } else {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Image(systemName: "doc.fill")
+                        .foregroundStyle(Theme.Palette.primary)
+                    Text(attachment.name)
+                        .font(Theme.Font.cardCaption)
+                        .foregroundStyle(Theme.Palette.textPrimary)
+                        .lineLimit(1)
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                }
+                .padding(.horizontal, Theme.Spacing.sm)
+                .padding(.vertical, Theme.Spacing.xs)
+                .background(Theme.Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: 10))
+                .help("Save…")
+            }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+/// Full-size image viewer for a tapped image attachment.
+private struct ImageAttachmentViewer: View {
+    let attachment: MessageAttachmentSnapshot
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let image = NSImage(contentsOfFile: attachment.path) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 900, maxHeight: 620)
+            } else {
+                Text("Couldn't load the image.")
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .frame(width: 400, height: 200)
+            }
+            HStack {
+                Text(attachment.name)
+                    .font(Theme.Font.cardCaption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .lineLimit(1)
+                Spacer()
+                Button("Save…") {
+                    let panel = NSSavePanel()
+                    panel.nameFieldStringValue = attachment.name
+                    if panel.runModal() == .OK, let destination = panel.url {
+                        try? FileManager.default.removeItem(at: destination)
+                        try? FileManager.default.copyItem(at: URL(fileURLWithPath: attachment.path), to: destination)
+                    }
+                }
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(Theme.Spacing.md)
+        }
+        .background(Theme.Palette.background)
+    }
+}
+
+/// Compose a message to a new recipient: search contacts or type a raw
+/// phone/email handle.
+private struct NewMessageSheet: View {
+    /// (handle, text) — throws on send failure.
+    let onSend: (String, String) throws -> Void
+
+    @Environment(\.brokers) private var brokers
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var recipientQuery = ""
+    @State private var chosenHandle: String?
+    @State private var suggestions: [(name: String, handle: String)] = []
+    @State private var text = ""
+    @State private var errorText: String?
+
+    private var effectiveHandle: String {
+        chosenHandle ?? recipientQuery.trimmingCharacters(in: .whitespaces)
+    }
+
+    private var handleLooksSendable: Bool {
+        let handle = effectiveHandle
+        return handle.contains("@") || handle.filter(\.isNumber).count >= 7
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            Text("New Message").font(Theme.Font.cardTitle)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Text("To:")
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                    TextField("Name, phone, or email", text: $recipientQuery)
+                        .textFieldStyle(.plain)
+                        .onChange(of: recipientQuery) { _, _ in
+                            chosenHandle = nil
+                            Task { await searchContacts() }
+                        }
+                    if chosenHandle != nil {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Theme.Palette.primary)
+                    }
+                }
+                .padding(Theme.Spacing.sm)
+                .background(Theme.Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
+
+                if chosenHandle == nil, !suggestions.isEmpty {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(suggestions.enumerated()), id: \.offset) { _, suggestion in
+                                Button {
+                                    chosenHandle = suggestion.handle
+                                    recipientQuery = "\(suggestion.name) — \(suggestion.handle)"
+                                } label: {
+                                    HStack {
+                                        Text(suggestion.name).font(Theme.Font.cardBody)
+                                        Spacer()
+                                        Text(suggestion.handle)
+                                            .font(Theme.Font.cardCaption)
+                                            .foregroundStyle(Theme.Palette.textSecondary)
+                                    }
+                                    .padding(.vertical, 4)
+                                    .padding(.horizontal, Theme.Spacing.sm)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 140)
+                    .background(Theme.Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
+                }
+            }
+
+            TextField("Message", text: $text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(3...6)
+                .padding(Theme.Spacing.sm)
+                .background(Theme.Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
+
+            if let errorText {
+                Text(errorText)
+                    .font(Theme.Font.cardCaption)
+                    .foregroundStyle(Theme.Palette.danger)
+            }
+
+            HStack {
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                Spacer()
+                Button("Send") {
+                    do {
+                        try onSend(effectiveHandle, text.trimmingCharacters(in: .whitespacesAndNewlines))
+                        dismiss()
+                    } catch {
+                        errorText = error.localizedDescription
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.Palette.primary)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!handleLooksSendable || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(Theme.Spacing.lg)
+        .frame(width: 420)
+        .background(Theme.Palette.background)
+    }
+
+    private func searchContacts() async {
+        let query = recipientQuery.trimmingCharacters(in: .whitespaces)
+        guard query.count >= 2, !query.contains("@"), query.filter(\.isNumber).count < 7 else {
+            suggestions = []
+            return
+        }
+        let contacts = (try? await brokers.contacts.fetch(BrokerQuery(searchText: query, limit: 8))) ?? []
+        suggestions = contacts.flatMap { contact in
+            (contact.phoneNumbers + contact.emailAddresses).map { (name: contact.displayName, handle: $0) }
+        }
     }
 }

@@ -19,6 +19,8 @@ struct NotesView: View {
     @State private var selectedFolder: Folder?
     @State private var selectedNote: Note?
     @State private var showingNoteLinkPicker = false
+    @State private var renamingFolder: Folder?
+    @State private var renameText = ""
 
     private var store: NotesStore { NotesStore(context: context) }
 
@@ -51,6 +53,21 @@ struct NotesView: View {
             }
             selectedNote = target
         }
+        .alert("Rename Folder", isPresented: .init(
+            get: { renamingFolder != nil },
+            set: { if !$0 { renamingFolder = nil } }
+        )) {
+            TextField("Folder name", text: $renameText)
+            Button("Rename") {
+                let trimmed = renameText.trimmingCharacters(in: .whitespaces)
+                if let renamingFolder, !trimmed.isEmpty {
+                    renamingFolder.name = trimmed
+                    try? context.save()
+                }
+                renamingFolder = nil
+            }
+            Button("Cancel", role: .cancel) { renamingFolder = nil }
+        }
         .sheet(isPresented: $showingNoteLinkPicker) {
             NoteLinkPicker(notes: notes.filter { !$0.isArchived && $0.id != selectedNote?.id }) { note in
                 NotificationCenter.default.post(
@@ -82,8 +99,9 @@ struct NotesView: View {
             List(selection: $selectedNote) {
                 Section("Folders") {
                     folderRow(nil, label: "All Notes", systemImage: "tray.full")
-                    ForEach(folders) { folder in
-                        folderRow(folder, label: folder.name, systemImage: "folder", emoji: folder.emoji)
+                    ForEach(flattenedFolders, id: \.folder.id) { entry in
+                        folderRow(entry.folder, label: entry.folder.name, systemImage: "folder", emoji: entry.folder.emoji)
+                            .padding(.leading, CGFloat(entry.depth) * 14)
                     }
                 }
                 Section(selectedFolder?.name ?? "All Notes") {
@@ -95,6 +113,41 @@ struct NotesView: View {
             .listStyle(.sidebar)
         }
         .background(Theme.Palette.surface)
+    }
+
+    /// The folder tree flattened depth-first (indentation = depth).
+    private var flattenedFolders: [(folder: Folder, depth: Int)] {
+        func children(of parentID: UUID?) -> [Folder] {
+            folders.filter { $0.parentFolderID == parentID }
+        }
+        var result: [(Folder, Int)] = []
+        func walk(_ parentID: UUID?, depth: Int) {
+            guard depth < 8 else { return } // cycle guard
+            for folder in children(of: parentID) {
+                result.append((folder, depth))
+                walk(folder.id, depth: depth + 1)
+            }
+        }
+        walk(nil, depth: 0)
+        // Orphans (parent deleted elsewhere) still show, at top level.
+        let seen = Set(result.map(\.0.id))
+        for folder in folders where !seen.contains(folder.id) {
+            result.append((folder, 0))
+        }
+        return result.map { (folder: $0.0, depth: $0.1) }
+    }
+
+    /// Folders that may become `folder`'s parent (not itself, not a descendant).
+    private func validParents(for folder: Folder) -> [Folder] {
+        var descendants = Set<UUID>()
+        func mark(_ id: UUID) {
+            descendants.insert(id)
+            for child in folders where child.parentFolderID == id {
+                mark(child.id)
+            }
+        }
+        mark(folder.id)
+        return folders.filter { !descendants.contains($0.id) }
     }
 
     private func folderRow(_ folder: Folder?, label: String, systemImage: String, emoji: String? = nil) -> some View {
@@ -112,6 +165,48 @@ struct NotesView: View {
         .listRowBackground(
             selectedFolder?.id == folder?.id ? Theme.Palette.primary.opacity(0.12) : Color.clear
         )
+        .contextMenu {
+            if let folder {
+                Button("Rename…") {
+                    renameText = folder.name
+                    renamingFolder = folder
+                }
+                Button("New Subfolder") {
+                    let child = store.createFolder(parent: folder)
+                    try? context.save()
+                    selectedFolder = child
+                }
+                Menu("Move To") {
+                    if folder.parentFolderID != nil {
+                        Button("Top Level") {
+                            folder.parentFolderID = nil
+                            try? context.save()
+                        }
+                    }
+                    ForEach(validParents(for: folder)) { parent in
+                        Button(parent.name) {
+                            folder.parentFolderID = parent.id
+                            try? context.save()
+                        }
+                    }
+                }
+                Divider()
+                Button("Delete Folder", role: .destructive) {
+                    deleteFolder(folder)
+                }
+            }
+        }
+    }
+
+    /// Deleting a folder re-parents its subfolders to its parent; its notes
+    /// fall back to All Notes (relationship nullifies, §4.1).
+    private func deleteFolder(_ folder: Folder) {
+        for child in folders where child.parentFolderID == folder.id {
+            child.parentFolderID = folder.parentFolderID
+        }
+        if selectedFolder?.id == folder.id { selectedFolder = nil }
+        context.delete(folder)
+        try? context.save()
     }
 
     private func noteRow(_ note: Note) -> some View {

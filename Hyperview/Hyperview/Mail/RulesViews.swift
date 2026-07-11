@@ -269,3 +269,77 @@ struct RuleEditorView: View {
         dismiss()
     }
 }
+
+// MARK: - Blocked senders
+
+/// Manage the blocked-senders list: newly arrived mail from these addresses
+/// goes straight to Trash. Add manually here or via a message's context menu.
+struct BlockedSendersView: View {
+    @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
+    @Query(sort: \BlockedSender.address) private var blocked: [BlockedSender]
+
+    @State private var newAddress = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Blocked Senders")
+                .font(Theme.Font.cardTitle)
+                .padding(Theme.Spacing.lg)
+
+            Divider().overlay(Theme.Palette.separator)
+
+            if blocked.isEmpty {
+                EmptyStateLine(text: "No blocked senders. Right-click a message and choose “Block Sender”.")
+                    .padding(Theme.Spacing.lg)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                List {
+                    ForEach(blocked) { sender in
+                        HStack {
+                            Image(systemName: "nosign")
+                                .foregroundStyle(Theme.Palette.danger)
+                            Text(sender.address)
+                                .font(Theme.Font.cardBody)
+                            Spacer()
+                            Button {
+                                context.delete(sender)
+                                try? context.save()
+                            } label: {
+                                Image(systemName: "minus.circle")
+                                    .foregroundStyle(Theme.Palette.textSecondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Unblock")
+                        }
+                    }
+                }
+                .listStyle(.plain)
+            }
+
+            Divider().overlay(Theme.Palette.separator)
+
+            HStack(spacing: Theme.Spacing.sm) {
+                TextField("email@example.com", text: $newAddress)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(addManually)
+                Button("Block", action: addManually)
+                    .disabled(!newAddress.contains("@"))
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(Theme.Spacing.lg)
+        }
+        .frame(width: 420, height: 380)
+        .background(Theme.Palette.background)
+    }
+
+    private func addManually() {
+        let address = newAddress.trimmingCharacters(in: .whitespaces).lowercased()
+        guard address.contains("@"), !blocked.contains(where: { $0.address == address }) else { return }
+        context.insert(BlockedSender(address: address))
+        try? context.save()
+        newAddress = ""
+    }
+}
