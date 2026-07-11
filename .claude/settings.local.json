@@ -69,7 +69,8 @@
       "Bash(codesign -d --entitlements - /Applications/Hyperview.app)",
       "Bash(plutil -p /Applications/Hyperview.app/Contents/Info.plist)",
       "Bash(osascript -e 'tell application \"Messages\" to get name')",
-      "Bash(osascript *)"
+      "Bash(osascript *)",
+      "WebFetch(domain:docs.claude.com)"
     ]
   }
 }

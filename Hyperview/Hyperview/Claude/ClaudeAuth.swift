@@ -12,8 +12,33 @@ import Security
 enum ClaudeAuth {
     private static let service = "com.mcgraw.Hyperview.claude"
     private static let account = "anthropic-api-key"
+    /// Admin API key (sk-ant-admin01-…) for the Usage/Cost endpoints —
+    /// distinct from the regular API key, org-level, read-only reporting.
+    private static let adminAccount = "anthropic-admin-key"
 
     static func setAPIKey(_ key: String) {
+        store(key, account: account)
+    }
+
+    static func apiKey() -> String? {
+        read(account: account)
+    }
+
+    static func removeAPIKey() {
+        setAPIKey("")
+    }
+
+    static func setAdminKey(_ key: String) {
+        store(key, account: adminAccount)
+    }
+
+    static func adminKey() -> String? {
+        read(account: adminAccount)
+    }
+
+    // MARK: - Keychain plumbing
+
+    private static func store(_ key: String, account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -28,7 +53,7 @@ enum ClaudeAuth {
         SecItemAdd(add as CFDictionary, nil)
     }
 
-    static func apiKey() -> String? {
+    private static func read(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -42,9 +67,5 @@ enum ClaudeAuth {
               let key = String(data: data, encoding: .utf8),
               !key.isEmpty else { return nil }
         return key
-    }
-
-    static func removeAPIKey() {
-        setAPIKey("")
     }
 }

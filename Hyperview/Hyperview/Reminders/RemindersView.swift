@@ -21,6 +21,7 @@ struct RemindersView: View {
     @State private var selectedID: String?
     @State private var creatingList = false
     @State private var newListName = ""
+    @State private var saveError: String?
 
     var body: some View {
         Group {
@@ -63,6 +64,14 @@ struct RemindersView: View {
                 Toggle("Show Completed", isOn: $showCompleted)
                     .onChange(of: showCompleted) { _, _ in Task { await load() } }
             }
+        }
+        .alert("Couldn't Save", isPresented: .init(
+            get: { saveError != nil },
+            set: { if !$0 { saveError = nil } }
+        )) {
+            Button("OK") { saveError = nil }
+        } message: {
+            Text(saveError ?? "")
         }
         .alert("New Reminders List", isPresented: $creatingList) {
             TextField("List name", text: $newListName)
@@ -195,7 +204,9 @@ struct RemindersView: View {
             clearLocation = true
         }
 
-        let updated = try? await brokers.eventKit.updateReminder(
+        let updated: ReminderSnapshot?
+        do {
+            updated = try await brokers.eventKit.updateReminder(
             id: original.id,
             title: draft.title,
             dueDate: draft.hasDueDate ? draft.dueDate : nil,
@@ -207,7 +218,20 @@ struct RemindersView: View {
             clearURL: draft.url.trimmingCharacters(in: .whitespaces).isEmpty && original.url != nil,
             location: location,
             clearLocation: clearLocation
-        )
+            )
+        } catch {
+            updated = nil
+            switch error {
+            case BrokerError.underlying(let message), BrokerError.invalidInput(let message):
+                saveError = message
+            case BrokerError.accessDenied, BrokerError.accessRestricted:
+                saveError = "Reminders access was denied."
+            case BrokerError.notFound:
+                saveError = "That reminder no longer exists."
+            default:
+                saveError = error.localizedDescription
+            }
+        }
         // A cross-list move can mint a new identifier (copy+delete fallback).
         if let updated, updated.id != original.id {
             selectedID = updated.id

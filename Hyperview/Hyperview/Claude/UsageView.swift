@@ -15,6 +15,12 @@ struct UsageView: View {
     @State private var entries: [UsageEntry] = []
     @State private var loadedAt: Date?
     @State private var confirmingClear = false
+    // Anthropic account data (Admin API) — fetched only on Refresh.
+    @State private var hasAdminKey = ClaudeAuth.adminKey() != nil
+    @State private var adminKeyDraft = ""
+    @State private var remoteDays: [RemoteCostDay] = []
+    @State private var remoteError: String?
+    @State private var fetchingRemote = false
 
     private let calendar = Calendar.current
 
@@ -22,6 +28,7 @@ struct UsageView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                 header
+                accountCostSection
                 summaryCards
                 modelBreakdown
                 dailyList
@@ -43,6 +50,104 @@ struct UsageView: View {
     private func refresh() {
         entries = UsageLedger.entries()
         loadedAt = Date()
+        if hasAdminKey {
+            fetchRemote()
+        }
+    }
+
+    private func fetchRemote() {
+        guard let key = ClaudeAuth.adminKey(), !fetchingRemote else { return }
+        fetchingRemote = true
+        remoteError = nil
+        Task {
+            do {
+                remoteDays = try await AdminCostAPI.costReport(adminKey: key, days: 30)
+            } catch {
+                remoteError = error.localizedDescription
+            }
+            fetchingRemote = false
+        }
+    }
+
+    // MARK: Anthropic account data
+
+    @ViewBuilder
+    private var accountCostSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            HStack {
+                Text("ANTHROPIC ACCOUNT (BILLED)")
+                    .font(Theme.Font.cardCaption.weight(.semibold))
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                Spacer()
+                if fetchingRemote { ProgressView().controlSize(.small) }
+            }
+            if hasAdminKey {
+                if let remoteError {
+                    Text(remoteError)
+                        .font(Theme.Font.cardCaption)
+                        .foregroundStyle(Theme.Palette.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Remove Admin Key") {
+                        ClaudeAuth.setAdminKey("")
+                        hasAdminKey = false
+                        remoteDays = []
+                        self.remoteError = nil
+                    }
+                    .font(Theme.Font.cardCaption)
+                } else if remoteDays.isEmpty {
+                    Text(fetchingRemote ? "Fetching from Anthropic…" : "No billed costs in the last 30 days (or not yet fetched — click Refresh).")
+                        .font(Theme.Font.cardCaption)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                } else {
+                    let total = remoteDays.reduce(0) { $0 + $1.totalDollars }
+                    Text(String(format: "$%.2f", total))
+                        .font(Theme.Font.metricNumber)
+                    Text("Last 30 days, straight from Anthropic's Cost API — this matches the console cost page.")
+                        .font(Theme.Font.cardCaption)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                    ForEach(remoteDays.prefix(10)) { day in
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(day.day.formatted(date: .abbreviated, time: .omitted))
+                                .font(Theme.Font.cardBody)
+                            Spacer()
+                            Text(day.byModel.keys.sorted().joined(separator: " · "))
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                                .lineLimit(1)
+                            Text(String(format: "$%.2f", day.totalDollars))
+                                .font(Theme.Font.cardBody.weight(.semibold))
+                                .frame(width: 80, alignment: .trailing)
+                        }
+                        .padding(.vertical, 2)
+                        Divider().overlay(Theme.Palette.separator)
+                    }
+                }
+            } else {
+                Text("Connect Anthropic's Cost API to show your real billed costs here (exactly the console cost page). Requires an ADMIN API key — Anthropic only issues those to organizations, so an individual account first needs Console → Settings → Organization, then Settings → Admin keys.")
+                    .font(Theme.Font.cardCaption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: Theme.Spacing.sm) {
+                    SecureField("sk-ant-admin01-…", text: $adminKeyDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 340)
+                    Button("Save Key") {
+                        let key = adminKeyDraft.trimmingCharacters(in: .whitespaces)
+                        guard !key.isEmpty else { return }
+                        ClaudeAuth.setAdminKey(key)
+                        adminKeyDraft = ""
+                        hasAdminKey = true
+                        fetchRemote()
+                    }
+                    .disabled(adminKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                Text("Without it, the sections below still track every call Hyperview itself makes (estimates).")
+                    .font(Theme.Font.cardCaption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+            }
+        }
+        .padding(Theme.Spacing.lg)
+        .background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
     }
 
     // MARK: Sections
@@ -52,7 +157,7 @@ struct UsageView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("API Usage")
                     .font(Theme.Font.cardTitle)
-                Text("Every Anthropic API call Hyperview has made (chat + daily briefings). Costs are list-price estimates — the Anthropic console is the billing source of truth.")
+                Text("Billed account costs (with an Admin key) plus Hyperview's own call log (chat + daily briefings; recording began 2026-07-11 — earlier calls exist only in the console). Estimates use list prices.")
                     .font(Theme.Font.cardCaption)
                     .foregroundStyle(Theme.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -27,15 +27,35 @@ struct DriveView: View {
     @AppStorage("drive.showPreview") private var showPreview = true
 
     var body: some View {
-        HSplitView {
-            sidebar
-                .frame(minWidth: 180, idealWidth: 210, maxWidth: 280)
-            browser
-                .frame(minWidth: 420)
-            if showPreview, let selection, let item = items.first(where: { $0.url == selection }) {
-                DrivePreviewPane(item: item, onOpen: { open(item) })
-                    .frame(minWidth: 240, idealWidth: 300, maxWidth: 420)
-                    .id(item.url)
+        HStack(spacing: 0) {
+            HSplitView {
+                sidebar
+                    .frame(minWidth: 180, idealWidth: 210, maxWidth: 280)
+                browser
+                    .frame(minWidth: 420)
+            }
+            // Fixed sibling (not an HSplitView child): appears/disappears
+            // immediately when toggled, placeholder included.
+            if showPreview {
+                Divider().overlay(Theme.Palette.separator)
+                Group {
+                    if let selection, let item = items.first(where: { $0.url == selection }) {
+                        DrivePreviewPane(item: item, onOpen: { open(item) })
+                            .id(item.url)
+                    } else {
+                        VStack(spacing: Theme.Spacing.sm) {
+                            Image(systemName: "eye")
+                                .font(.system(size: 28))
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                            Text("Select a file to preview")
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Theme.Palette.surface)
+                    }
+                }
+                .frame(width: 300)
             }
         }
         .background(Theme.Palette.background)
@@ -231,7 +251,11 @@ struct DriveView: View {
             ForEach(items) { item in
                 DriveRow(item: item)
                     .tag(item.url)
-                    .onTapGesture(count: 2) { open(item) }
+                    .contentShape(Rectangle())
+                    // Simultaneous so single-click still selects the row (a
+                    // plain double-click gesture swallowed selection clicks).
+                    .simultaneousGesture(TapGesture(count: 2).onEnded { open(item) })
+                    .simultaneousGesture(TapGesture().onEnded { selection = item.url })
                     .contextMenu { rowMenu(item) }
             }
         }

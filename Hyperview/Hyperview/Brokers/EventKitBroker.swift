@@ -357,11 +357,15 @@ actor EventKitBroker: DataBroker {
         }
         if let notes { reminder.notes = notes }
         if let priority { reminder.priority = priority }
-        var movedToList: EKCalendar?
-        if let listID, listID != reminder.calendar?.calendarIdentifier,
-           let list = store.calendar(withIdentifier: listID) {
-            reminder.calendar = list
-            movedToList = list
+        // List moves are handled AFTER the field save below — EventKit can
+        // throw or silently refuse a cross-list save, which previously took
+        // the whole update down with it.
+        var targetList: EKCalendar?
+        if let listID, listID != reminder.calendar?.calendarIdentifier {
+            guard let list = store.calendar(withIdentifier: listID) else {
+                throw BrokerError.invalidInput("Unknown reminders list")
+            }
+            targetList = list
         }
         if clearURL {
             reminder.url = nil
@@ -387,38 +391,50 @@ actor EventKitBroker: DataBroker {
         } catch {
             throw BrokerError.underlying(error.localizedDescription)
         }
+        guard let targetList else {
+            return Self.snapshot(from: reminder)
+        }
 
-        // EventKit sometimes silently refuses an in-place cross-list move.
-        // Verify; if the reminder didn't actually move, fall back to a full
-        // copy into the target list + delete of the original.
-        if let targetList = movedToList {
+        // Move: try in-place first (catching failure instead of throwing);
+        // verify; fall back to copy-into-target + delete-original, which is
+        // the only approach EventKit honors reliably.
+        reminder.calendar = targetList
+        var movedInPlace = false
+        do {
+            try store.save(reminder, commit: true)
             store.refreshSourcesIfNecessary()
-            let saved = store.calendarItem(withIdentifier: id) as? EKReminder
-            if saved?.calendar?.calendarIdentifier != targetList.calendarIdentifier {
-                let original = saved ?? reminder
-                let copy = EKReminder(eventStore: store)
-                copy.title = original.title
-                copy.calendar = targetList
-                copy.dueDateComponents = original.dueDateComponents
-                copy.notes = original.notes
-                copy.priority = original.priority
-                copy.url = original.url
-                copy.isCompleted = original.isCompleted
-                for alarm in original.alarms ?? [] {
-                    if let cloned = alarm.copy() as? EKAlarm {
-                        copy.addAlarm(cloned)
-                    }
-                }
-                do {
-                    try store.save(copy, commit: true)
-                    try store.remove(original, commit: true)
-                } catch {
-                    throw BrokerError.underlying("Couldn't move the reminder: \(error.localizedDescription)")
-                }
-                return Self.snapshot(from: copy)
+            let check = store.calendarItem(withIdentifier: id) as? EKReminder
+            movedInPlace = check?.calendar?.calendarIdentifier == targetList.calendarIdentifier
+        } catch {
+            movedInPlace = false
+        }
+        if movedInPlace {
+            return Self.snapshot(from: reminder)
+        }
+
+        guard let original = store.calendarItem(withIdentifier: id) as? EKReminder else {
+            throw BrokerError.notFound
+        }
+        let copy = EKReminder(eventStore: store)
+        copy.title = original.title
+        copy.calendar = targetList
+        copy.dueDateComponents = original.dueDateComponents
+        copy.notes = original.notes
+        copy.priority = original.priority
+        copy.url = original.url
+        copy.isCompleted = original.isCompleted
+        for alarm in original.alarms ?? [] {
+            if let cloned = alarm.copy() as? EKAlarm {
+                copy.addAlarm(cloned)
             }
         }
-        return Self.snapshot(from: reminder)
+        do {
+            try store.save(copy, commit: true)
+            try store.remove(original, commit: true)
+        } catch {
+            throw BrokerError.underlying("Couldn't move the reminder: \(error.localizedDescription)")
+        }
+        return Self.snapshot(from: copy)
     }
 
     /// Delete a reminder.

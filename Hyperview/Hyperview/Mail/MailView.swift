@@ -143,7 +143,7 @@ private struct MailModuleContent: View {
         GeometryReader { geometry in
             HSplitView {
                 mailboxPane
-                    .frame(minWidth: 140, idealWidth: geometry.size.width * 0.065, maxWidth: 300)
+                    .frame(minWidth: 105, idealWidth: geometry.size.width * 0.049, maxWidth: 300)
                 messageListPane
                     .frame(minWidth: 220, idealWidth: geometry.size.width * 0.20, maxWidth: 520)
                 detailPane
