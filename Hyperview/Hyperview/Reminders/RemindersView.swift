@@ -44,6 +44,11 @@ struct RemindersView: View {
         .background(Theme.Palette.background)
         .navigationTitle("Reminders")
         .task { await start() }
+        .onReceive(NotificationCenter.default.publisher(for: .hyperviewOpenReminder)) { notification in
+            if let id = notification.userInfo?["id"] as? String {
+                selectedID = id
+            }
+        }
         .toolbar {
             ToolbarItem {
                 Button {

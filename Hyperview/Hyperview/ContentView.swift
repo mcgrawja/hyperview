@@ -9,12 +9,34 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
     @State private var selection: SidebarItem = .dashboard
     @Environment(\.mailService) private var mailService
     @Environment(\.messagesDB) private var messagesDB
     @State private var messagesUnread = 0
+    @State private var showingSearch = false
+
+    /// Universal-search navigation: files reveal in Finder; everything else
+    /// switches modules, then posts the deep-link once the module has mounted
+    /// (its onReceive registers on appear).
+    private func handleSearchHit(_ hit: SearchHit) {
+        if let revealURL = hit.revealURL {
+            NSWorkspace.shared.activateFileViewerSelecting([revealURL])
+            return
+        }
+        selection = hit.module
+        if let notification = hit.notification {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                NotificationCenter.default.post(
+                    name: notification.name,
+                    object: nil,
+                    userInfo: notification.userInfo
+                )
+            }
+        }
+    }
 
     private func badgeCount(for item: SidebarItem) -> Int {
         switch item {
@@ -52,6 +74,22 @@ struct ContentView: View {
                     try? await Task.sleep(for: .seconds(20))
                 }
             }
+            .toolbar {
+                ToolbarItem {
+                    Button {
+                        showingSearch = true
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .keyboardShortcut("k", modifiers: .command)
+                    .help("Search Hyperview (⌘K)")
+                }
+            }
+            .sheet(isPresented: $showingSearch) {
+                UniversalSearchView { hit in
+                    handleSearchHit(hit)
+                }
+            }
         } detail: {
             switch selection {
             case .dashboard:
@@ -62,6 +100,8 @@ struct ContentView: View {
                 RemindersView()
             case .notes:
                 NotesView()
+            case .drive:
+                DriveView()
             case .contacts:
                 ContactsView()
             case .mail:
@@ -83,6 +123,7 @@ enum SidebarItem: String, Identifiable, CaseIterable {
     case calendar
     case reminders
     case notes
+    case drive
     case contacts
     case mail
     case messages
@@ -97,6 +138,7 @@ enum SidebarItem: String, Identifiable, CaseIterable {
         case .calendar: return "Calendar"
         case .reminders: return "Reminders"
         case .notes: return "Notes"
+        case .drive: return "Drive"
         case .contacts: return "Contacts"
         case .mail: return "Mail"
         case .messages: return "Messages"
@@ -111,6 +153,7 @@ enum SidebarItem: String, Identifiable, CaseIterable {
         case .calendar: return "calendar"
         case .reminders: return "checklist"
         case .notes: return "note.text"
+        case .drive: return "externaldrive"
         case .contacts: return "person.2"
         case .mail: return "envelope"
         case .messages: return "message"
@@ -119,7 +162,7 @@ enum SidebarItem: String, Identifiable, CaseIterable {
         }
     }
 
-    static var available: [SidebarItem] { [.dashboard, .mail, .messages, .reminders, .calendar, .notes, .photos, .contacts, .claude] }
+    static var available: [SidebarItem] { [.dashboard, .mail, .messages, .reminders, .calendar, .notes, .drive, .photos, .contacts, .claude] }
     static var upcoming: [SidebarItem] { [] }
 }
 

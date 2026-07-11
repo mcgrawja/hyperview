@@ -55,6 +55,11 @@ struct MessagesView: View {
         .background(Theme.Palette.background)
         .navigationTitle("Messages")
         .task { await start() }
+        .onReceive(NotificationCenter.default.publisher(for: .hyperviewOpenChat)) { notification in
+            if let id = notification.userInfo?["id"] as? Int64 {
+                selectedChatID = id
+            }
+        }
         .toolbar {
             ToolbarItem {
                 Button { showingNewMessage = true } label: { Image(systemName: "square.and.pencil") }

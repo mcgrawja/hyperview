@@ -164,6 +164,13 @@ private struct MailModuleContent: View {
         .onChange(of: searchText) { _, newValue in
             if newValue.isEmpty { Task { await syncSelection() } }
         }
+        // Universal-search deep link: select the message wherever it lives.
+        .onReceive(NotificationCenter.default.publisher(for: .hyperviewOpenMailMessage)) { notification in
+            guard let id = notification.userInfo?["id"] as? UUID,
+                  let message = messages.first(where: { $0.id == id }) else { return }
+            selection = .mailbox(MailboxSelection(accountID: message.accountID, path: message.mailboxPath))
+            selectedMessage = message
+        }
         .task(id: accounts.map(\.id)) {
             service.context = context
             if selection == nil, let first = accounts.first {

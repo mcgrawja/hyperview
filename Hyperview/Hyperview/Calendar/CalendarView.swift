@@ -76,6 +76,12 @@ struct CalendarView: View {
         .background(Theme.Palette.background)
         .navigationTitle("Calendar")
         .task { await start() }
+        .onReceive(NotificationCenter.default.publisher(for: .hyperviewOpenCalendarDate)) { notification in
+            guard let date = notification.userInfo?["date"] as? Date else { return }
+            anchor = date
+            modeRaw = CalendarViewMode.day.rawValue
+            Task { await load() }
+        }
         .sheet(item: $composer) { target in
             EventComposerView(
                 defaultDate: target.start,
