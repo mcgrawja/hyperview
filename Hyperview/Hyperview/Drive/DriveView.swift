@@ -10,11 +10,13 @@
 //
 
 import SwiftUI
+import SwiftData
 import AppKit
 import UniformTypeIdentifiers
 import QuickLookThumbnailing
 
 struct DriveView: View {
+    @Environment(\.modelContext) private var modelContext
     @State private var locations = DriveLocations()
     @State private var currentFolder: URL?
     @State private var items: [DriveItem] = []
@@ -42,7 +44,7 @@ struct DriveView: View {
                 previewResizeHandle
                 Group {
                     if let selection, let item = items.first(where: { $0.url == selection }) {
-                        DrivePreviewPane(item: item, onOpen: { open(item) })
+                        DrivePreviewPane(item: item, tagKey: fileTagKey(item.url), onOpen: { open(item) })
                             .id(item.url)
                     } else {
                         VStack(spacing: Theme.Spacing.sm) {
@@ -62,6 +64,7 @@ struct DriveView: View {
         }
         .background(Theme.Palette.background)
         .navigationTitle("Drive")
+        .task { migrateFileTagKeysIfNeeded() }
         .toolbar {
             ToolbarItem {
                 Button {
@@ -279,7 +282,7 @@ struct DriveView: View {
     private var fileList: some View {
         List(selection: $selection) {
             ForEach(items) { item in
-                DriveRow(item: item)
+                DriveRow(item: item, tagKey: fileTagKey(item.url))
                     .tag(item.url)
                     .contentShape(Rectangle())
                     // Simultaneous so single-click still selects the row (a
@@ -309,7 +312,7 @@ struct DriveView: View {
             renamingItem = item
         }
         Button("Duplicate") { duplicate(item) }
-        TagMenu(kind: TagKind.file, key: item.url.path)
+        TagMenu(kind: TagKind.file, key: fileTagKey(item.url))
         Button("Copy Path") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(item.url.path, forType: .string)
@@ -396,6 +399,43 @@ struct DriveView: View {
         }
     }
 
+    /// Cross-device tag key: "<location folder name>/<path inside it>".
+    /// Absolute paths never match another device; the location-relative form
+    /// does whenever both devices have the same (synced) folder added to
+    /// Drive — iCloud Drive, Dropbox, a NAS share, the iOS Files picker.
+    private func fileTagKey(_ url: URL) -> String {
+        for root in locations.roots {
+            if url.path == root.path {
+                return root.lastPathComponent
+            }
+            if url.path.hasPrefix(root.path + "/") {
+                let relative = String(url.path.dropFirst(root.path.count + 1))
+                return root.lastPathComponent + "/" + relative
+            }
+        }
+        return url.path // outside every location (shouldn't happen)
+    }
+
+    /// One-time: rewrite absolute-path file tag keys to the relative form.
+    private func migrateFileTagKeysIfNeeded() {
+        let flag = "tags.fileKeysMigrated"
+        guard !UserDefaults.standard.bool(forKey: flag) else { return }
+        let links = (try? modelContext.fetch(FetchDescriptor<HVTagLink>())) ?? []
+        var changed = false
+        for link in links where link.itemKind == TagKind.file && link.itemKey.hasPrefix("/") {
+            let newKey = fileTagKey(URL(fileURLWithPath: link.itemKey))
+            if newKey != link.itemKey {
+                link.itemKey = newKey
+                changed = true
+            }
+        }
+        if changed {
+            try? modelContext.save()
+            NotificationCenter.default.post(name: .hyperviewTagsChanged, object: nil)
+        }
+        UserDefaults.standard.set(true, forKey: flag)
+    }
+
     private func createFolder(named name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, let currentFolder else { return }
@@ -437,6 +477,7 @@ struct DriveItem: Identifiable {
 /// frames, documents…), inline text for plain-text files, plus metadata.
 private struct DrivePreviewPane: View {
     let item: DriveItem
+    let tagKey: String
     let onOpen: () -> Void
 
     @State private var thumbnail: NSImage?
@@ -465,7 +506,7 @@ private struct DrivePreviewPane: View {
                                 .font(Theme.Font.cardCaption)
                                 .foregroundStyle(Theme.Palette.textSecondary)
                         }
-                        TagDots(kind: TagKind.file, key: item.url.path)
+                        TagDots(kind: TagKind.file, key: tagKey)
                     }
                 }
                 .padding(Theme.Spacing.md)
@@ -537,6 +578,7 @@ private struct DrivePreviewPane: View {
 
 private struct DriveRow: View {
     let item: DriveItem
+    let tagKey: String
 
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
@@ -546,7 +588,7 @@ private struct DriveRow: View {
             Text(item.name)
                 .font(Theme.Font.cardBody)
                 .lineLimit(1)
-            TagDots(kind: TagKind.file, key: item.url.path)
+            TagDots(kind: TagKind.file, key: tagKey)
             Spacer()
             if !item.isDirectory, let size = item.size {
                 Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
