@@ -8,9 +8,13 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct ContactsView: View {
     @Environment(\.brokers) private var brokers
+    @Query(sort: \HVTag.name) private var allTags: [HVTag]
+    @Query private var tagLinks: [HVTagLink]
+    @State private var selectedTagID: UUID?
 
     @State private var contacts: [ContactSnapshot] = []
     @State private var access: ModuleAccess = .needsPermission
@@ -101,6 +105,28 @@ struct ContactsView: View {
                             }
                         }
                 }
+                if !allTags.isEmpty {
+                    Section("Tags") {
+                        ForEach(allTags) { tag in
+                            Button {
+                                selectedTagID = selectedTagID == tag.id ? nil : tag.id
+                            } label: {
+                                HStack(spacing: Theme.Spacing.sm) {
+                                    Circle()
+                                        .fill(Color(hexString: tag.colorHex) ?? Theme.Palette.primary)
+                                        .frame(width: 9, height: 9)
+                                    Text(tag.name).lineLimit(1)
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(
+                                selectedTagID == tag.id ? Theme.Palette.primary.softFill(0.12) : Color.clear
+                            )
+                        }
+                    }
+                }
             }
             .listStyle(.sidebar)
         }
@@ -132,11 +158,11 @@ struct ContactsView: View {
                 if let errorText {
                     EmptyStateLine(text: errorText)
                         .padding(Theme.Spacing.lg)
-                } else if contacts.isEmpty {
+                } else if visibleContacts.isEmpty {
                     EmptyStateLine(text: searchText.isEmpty ? "No contacts found." : "No matches for \u{201C}\(searchText)\u{201D}.")
                         .padding(Theme.Spacing.lg)
                 } else {
-                    ForEach(contacts) { contact in
+                    ForEach(visibleContacts) { contact in
                         Button {
                             editing = contact
                         } label: {
@@ -145,6 +171,7 @@ struct ContactsView: View {
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
+                            TagMenu(kind: TagKind.contact, key: contact.id)
                             if !groups.isEmpty {
                                 Menu("Add to Group") {
                                     ForEach(groups) { group in
@@ -199,6 +226,17 @@ struct ContactsView: View {
         } catch {
             access = ModuleAccess(brokers.contacts.authorization)
         }
+    }
+
+    /// The fetched contacts, narrowed by the selected universal tag.
+    private var visibleContacts: [ContactSnapshot] {
+        guard let selectedTagID else { return contacts }
+        let keys = Set(
+            tagLinks
+                .filter { $0.tagID == selectedTagID && $0.itemKind == TagKind.contact }
+                .map(\.itemKey)
+        )
+        return contacts.filter { keys.contains($0.id) }
     }
 
     private func loadGroups() async {

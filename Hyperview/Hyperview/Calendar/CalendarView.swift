@@ -460,6 +460,7 @@ private struct MonthDayCell: View {
                     .contextMenu {
                         Button("Edit Event…") { onEditEvent(event) }
                         Button("Duplicate Event") { onDuplicateEvent(event) }
+                        TagMenu(kind: TagKind.event, key: event.id)
                         Divider()
                         Button("Delete Event", role: .destructive) { onDeleteEvent(event) }
                     }
@@ -671,6 +672,7 @@ private struct TimeGridView: View {
                         .contextMenu {
                             Button("Edit Event…") { onEditEvent(laid.event) }
                             Button("Duplicate Event") { onDuplicateEvent(laid.event) }
+                            TagMenu(kind: TagKind.event, key: laid.event.id)
                             Divider()
                             Button("Delete Event", role: .destructive) { onDeleteEvent(laid.event) }
                         }

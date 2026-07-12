@@ -208,6 +208,7 @@ struct MessagesView: View {
         ChatRow(chat: chat, title: title(for: chat), isPinned: pinned.contains(chat.guid))
             .tag(chat.id)
             .contextMenu {
+                TagMenu(kind: TagKind.chat, key: chat.guid)
                 Button(pinned.contains(chat.guid) ? "Unpin" : "Pin") {
                     if pinned.contains(chat.guid) {
                         pinned.remove(chat.guid)

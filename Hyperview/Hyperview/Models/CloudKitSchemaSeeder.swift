@@ -20,7 +20,9 @@ import CoreData
 import SwiftData
 
 nonisolated enum CloudKitSchemaSeeder {
-    private static let flag = "cloudkit.schemaInitialized.v2"
+    // v3: HVTag/HVTagLink added — re-run so the new record types register in
+    // the CloudKit development schema (then deploy to production in Console).
+    private static let flag = "cloudkit.schemaInitialized.v3"
 
     /// One-shot, off the main thread (the upload can take a little while).
     static func initializeIfNeeded() {

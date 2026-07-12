@@ -358,6 +358,9 @@ private struct ReminderListColumn: View {
                             onToggle: { onToggle(reminder) }
                         )
                         .onTapGesture { selectedID = reminder.id }
+                        .contextMenu {
+                            TagMenu(kind: TagKind.reminder, key: reminder.id)
+                        }
                     }
                     if sorted.isEmpty {
                         Text("No reminders")
@@ -422,6 +425,7 @@ private struct ReminderColumnRow: View {
                         .strikethrough(reminder.isCompleted)
                         .foregroundStyle(reminder.isCompleted ? Theme.Palette.textSecondary : Theme.Palette.textPrimary)
                         .lineLimit(2)
+                    TagDots(kind: TagKind.reminder, key: reminder.id)
                 }
                 if let due = reminder.dueDate {
                     Text(due.formatted(date: .abbreviated, time: .shortened))

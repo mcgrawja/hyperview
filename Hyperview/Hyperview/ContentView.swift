@@ -17,6 +17,7 @@ struct ContentView: View {
     @Environment(\.messagesDB) private var messagesDB
     @State private var messagesUnread = 0
     @State private var showingSearch = false
+    @State private var showingTagManager = false
 
     /// Universal-search navigation: files reveal in Finder; everything else
     /// switches modules, then posts the deep-link once the module has mounted
@@ -96,6 +97,14 @@ struct ContentView: View {
                 UniversalSearchView { hit in
                     handleSearchHit(hit)
                 }
+            }
+            // Context menus can't present sheets — the tag manager is
+            // app-global, summoned from any module's "Edit Tags…".
+            .onReceive(NotificationCenter.default.publisher(for: .hyperviewShowTagManager)) { _ in
+                showingTagManager = true
+            }
+            .sheet(isPresented: $showingTagManager) {
+                TagManagerView()
             }
         } detail: {
             switch selection {

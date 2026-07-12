@@ -15,6 +15,9 @@ struct NotesView: View {
 
     @Query(sort: \Folder.sortKey) private var folders: [Folder]
     @Query(sort: \Note.sortKey) private var notes: [Note]
+    @Query(sort: \HVTag.name) private var allTags: [HVTag]
+    @Query private var tagLinks: [HVTagLink]
+    @State private var selectedTagID: UUID?
 
     @State private var selectedFolder: Folder?
     @State private var selectedNote: Note?
@@ -25,9 +28,18 @@ struct NotesView: View {
     private var store: NotesStore { NotesStore(context: context) }
 
     private var visibleNotes: [Note] {
-        notes.filter { note in
+        var result = notes.filter { note in
             !note.isArchived && (selectedFolder == nil || note.folder?.id == selectedFolder?.id)
         }
+        if let selectedTagID {
+            let keys = Set(
+                tagLinks
+                    .filter { $0.tagID == selectedTagID && $0.itemKind == TagKind.note }
+                    .map(\.itemKey)
+            )
+            result = result.filter { keys.contains($0.id.uuidString) }
+        }
+        return result
     }
 
     var body: some View {
@@ -102,6 +114,28 @@ struct NotesView: View {
                     ForEach(flattenedFolders, id: \.folder.id) { entry in
                         folderRow(entry.folder, label: entry.folder.name, systemImage: "folder", emoji: entry.folder.emoji)
                             .padding(.leading, CGFloat(entry.depth) * 14)
+                    }
+                }
+                if !allTags.isEmpty {
+                    Section("Tags") {
+                        ForEach(allTags) { tag in
+                            Button {
+                                selectedTagID = selectedTagID == tag.id ? nil : tag.id
+                            } label: {
+                                HStack(spacing: Theme.Spacing.sm) {
+                                    Circle()
+                                        .fill(Color(hexString: tag.colorHex) ?? Theme.Palette.primary)
+                                        .frame(width: 9, height: 9)
+                                    Text(tag.name).lineLimit(1)
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(
+                                selectedTagID == tag.id ? Theme.Palette.primary.softFill(0.12) : Color.clear
+                            )
+                        }
                     }
                 }
                 Section(selectedFolder?.name ?? "All Notes") {
@@ -213,15 +247,20 @@ struct NotesView: View {
         HStack(spacing: Theme.Spacing.sm) {
             Text(note.emoji ?? "📝")
             VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                Text(note.title.isEmpty ? "Untitled" : note.title)
-                    .font(Theme.Font.cardBody)
-                    .lineLimit(1)
+                HStack(spacing: Theme.Spacing.xs) {
+                    Text(note.title.isEmpty ? "Untitled" : note.title)
+                        .font(Theme.Font.cardBody)
+                        .lineLimit(1)
+                    TagDots(kind: TagKind.note, key: note.id.uuidString)
+                }
                 Text(note.modifiedAt.formatted(date: .abbreviated, time: .shortened))
                     .font(Theme.Font.cardCaption)
                     .foregroundStyle(Theme.Palette.textSecondary)
             }
         }
         .contextMenu {
+            TagMenu(kind: TagKind.note, key: note.id.uuidString)
+            Divider()
             Button("Delete", role: .destructive) { delete(note) }
         }
     }

@@ -19,6 +19,10 @@ nonisolated enum HyperviewSchema {
         Block.self,
         Folder.self,
         Asset.self,
+        // Universal tags (added 2026-07-11; additive — production needs a
+        // one-time "Deploy Schema Changes" in the CloudKit Console).
+        HVTag.self,
+        HVTagLink.self,
         // Dormant until "Hyperview 1.5: Databases" (§4.3) — listed so they ship
         // in the production schema and 1.5 needs no migration.
         DBProperty.self,

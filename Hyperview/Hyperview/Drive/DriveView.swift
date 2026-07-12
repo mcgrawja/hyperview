@@ -25,6 +25,8 @@ struct DriveView: View {
     @State private var newFolderName = ""
     @State private var errorText: String?
     @AppStorage("drive.showPreview") private var showPreview = true
+    @AppStorage("drive.previewWidth") private var previewWidth = 300.0
+    @State private var previewDragBase: Double?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -34,10 +36,10 @@ struct DriveView: View {
                 browser
                     .frame(minWidth: 420)
             }
-            // Fixed sibling (not an HSplitView child): appears/disappears
-            // immediately when toggled, placeholder included.
+            // Sibling pane (not an HSplitView child): appears/disappears
+            // immediately when toggled; width adjustable via the drag handle.
             if showPreview {
-                Divider().overlay(Theme.Palette.separator)
+                previewResizeHandle
                 Group {
                     if let selection, let item = items.first(where: { $0.url == selection }) {
                         DrivePreviewPane(item: item, onOpen: { open(item) })
@@ -55,7 +57,7 @@ struct DriveView: View {
                         .background(Theme.Palette.surface)
                     }
                 }
-                .frame(width: 300)
+                .frame(width: previewWidth)
             }
         }
         .background(Theme.Palette.background)
@@ -111,6 +113,34 @@ struct DriveView: View {
             Button("Create") { createFolder(named: newFolderName) }
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    /// Thin draggable divider for the preview pane (drag left = wider).
+    private var previewResizeHandle: some View {
+        Rectangle()
+            .fill(Theme.Palette.separator)
+            .frame(width: 1)
+            .overlay(
+                Color.clear
+                    .frame(width: 9)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                let base = previewDragBase ?? previewWidth
+                                previewDragBase = base
+                                previewWidth = min(560, max(220, base - value.translation.width))
+                            }
+                            .onEnded { _ in previewDragBase = nil }
+                    )
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.resizeLeftRight.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+            )
     }
 
     // MARK: Sidebar
@@ -279,6 +309,21 @@ struct DriveView: View {
             renamingItem = item
         }
         Button("Duplicate") { duplicate(item) }
+        // Real Finder tags — visible in Finder and Apple's apps (this is the
+        // one place tags CAN reach the Apple ecosystem).
+        Menu("Finder Tags") {
+            ForEach(["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"], id: \.self) { name in
+                Button {
+                    toggleFinderTag(item, name)
+                } label: {
+                    if item.finderTags.contains(name) {
+                        Label(name, systemImage: "checkmark")
+                    } else {
+                        Text(name)
+                    }
+                }
+            }
+        }
         Button("Copy Path") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(item.url.path, forType: .string)
@@ -362,6 +407,21 @@ struct DriveView: View {
             reload()
         } catch {
             errorText = "Couldn't move “\(item.name)” to the Trash."
+        }
+    }
+
+    private func toggleFinderTag(_ item: DriveItem, _ name: String) {
+        var tags = item.finderTags
+        if let index = tags.firstIndex(of: name) {
+            tags.remove(at: index)
+        } else {
+            tags.append(name)
+        }
+        do {
+            try (item.url as NSURL).setResourceValue(tags, forKey: .tagNamesKey)
+            reload()
+        } catch {
+            errorText = "Couldn't change the Finder tags for “\(item.name)”."
         }
     }
 
