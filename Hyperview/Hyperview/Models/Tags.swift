@@ -63,6 +63,7 @@ nonisolated enum TagKind {
     static let contact = "contact"
     static let chat = "chat"
     static let mail = "mail"
-    /// Keyed by absolute path (per-Mac; Drive locations are local folders).
-    static let file = "file"
+    // NOTE: no "file" kind — Drive uses real Finder tags (file metadata that
+    // iCloud Drive syncs with the file and Apple's apps display). Reaffirmed
+    // by the owner 2026-07-11 after briefly trying universal tags there.
 }

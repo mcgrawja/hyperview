@@ -44,7 +44,7 @@ struct DriveView: View {
                 previewResizeHandle
                 Group {
                     if let selection, let item = items.first(where: { $0.url == selection }) {
-                        DrivePreviewPane(item: item, tagKey: fileTagKey(item.url), onOpen: { open(item) })
+                        DrivePreviewPane(item: item, onOpen: { open(item) })
                             .id(item.url)
                     } else {
                         VStack(spacing: Theme.Spacing.sm) {
@@ -64,7 +64,7 @@ struct DriveView: View {
         }
         .background(Theme.Palette.background)
         .navigationTitle("Drive")
-        .task { migrateFileTagKeysIfNeeded() }
+        .task { removeUniversalFileLinksIfNeeded() }
         .toolbar {
             ToolbarItem {
                 Button {
@@ -282,7 +282,7 @@ struct DriveView: View {
     private var fileList: some View {
         List(selection: $selection) {
             ForEach(items) { item in
-                DriveRow(item: item, tagKey: fileTagKey(item.url))
+                DriveRow(item: item)
                     .tag(item.url)
                     .contentShape(Rectangle())
                     // Simultaneous so single-click still selects the row (a
@@ -312,7 +312,21 @@ struct DriveView: View {
             renamingItem = item
         }
         Button("Duplicate") { duplicate(item) }
-        TagMenu(kind: TagKind.file, key: fileTagKey(item.url))
+        // Real Finder tags — file metadata, visible in Finder/Apple apps,
+        // synced with the file by iCloud Drive.
+        Menu("Finder Tags") {
+            ForEach(["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"], id: \.self) { name in
+                Button {
+                    toggleFinderTag(item, name)
+                } label: {
+                    if item.finderTags.contains(name) {
+                        Label(name, systemImage: "checkmark")
+                    } else {
+                        Text(name)
+                    }
+                }
+            }
+        }
         Button("Copy Path") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(item.url.path, forType: .string)
@@ -335,7 +349,7 @@ struct DriveView: View {
         do {
             let urls = try FileManager.default.contentsOfDirectory(
                 at: currentFolder,
-                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
+                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .tagNamesKey],
                 options: [.skipsHiddenFiles]
             )
             items = urls.map(DriveItem.init(url:)).sorted { a, b in
@@ -399,35 +413,33 @@ struct DriveView: View {
         }
     }
 
-    /// Cross-device tag key: "<location folder name>/<path inside it>".
-    /// Absolute paths never match another device; the location-relative form
-    /// does whenever both devices have the same (synced) folder added to
-    /// Drive — iCloud Drive, Dropbox, a NAS share, the iOS Files picker.
-    private func fileTagKey(_ url: URL) -> String {
-        for root in locations.roots {
-            if url.path == root.path {
-                return root.lastPathComponent
-            }
-            if url.path.hasPrefix(root.path + "/") {
-                let relative = String(url.path.dropFirst(root.path.count + 1))
-                return root.lastPathComponent + "/" + relative
-            }
+    private func toggleFinderTag(_ item: DriveItem, _ name: String) {
+        var tags = item.finderTags
+        if let index = tags.firstIndex(of: name) {
+            tags.remove(at: index)
+        } else {
+            tags.append(name)
         }
-        return url.path // outside every location (shouldn't happen)
+        do {
+            try (item.url as NSURL).setResourceValue(tags, forKey: .tagNamesKey)
+            reload()
+        } catch {
+            errorText = "Couldn't change the Finder tags for “\(item.name)”."
+        }
     }
 
-    /// One-time: rewrite absolute-path file tag keys to the relative form.
-    private func migrateFileTagKeysIfNeeded() {
-        let flag = "tags.fileKeysMigrated"
+    /// Drive uses REAL Finder tags (owner decision, reaffirmed 2026-07-11
+    /// after trying universal tags here): they live as file metadata, show in
+    /// Finder/Apple apps, and iCloud Drive syncs them with the file itself.
+    /// This one-time cleanup removes the experimental universal file links.
+    private func removeUniversalFileLinksIfNeeded() {
+        let flag = "tags.fileLinksRemoved"
         guard !UserDefaults.standard.bool(forKey: flag) else { return }
         let links = (try? modelContext.fetch(FetchDescriptor<HVTagLink>())) ?? []
         var changed = false
-        for link in links where link.itemKind == TagKind.file && link.itemKey.hasPrefix("/") {
-            let newKey = fileTagKey(URL(fileURLWithPath: link.itemKey))
-            if newKey != link.itemKey {
-                link.itemKey = newKey
-                changed = true
-            }
+        for link in links where link.itemKind == "file" {
+            modelContext.delete(link)
+            changed = true
         }
         if changed {
             try? modelContext.save()
@@ -458,6 +470,8 @@ struct DriveItem: Identifiable {
     let isDirectory: Bool
     let size: Int?
     let modified: Date?
+    /// Finder tags (real ones — visible in Finder and Apple apps).
+    let finderTags: [String]
 
     var id: URL { url }
 
@@ -465,11 +479,12 @@ struct DriveItem: Identifiable {
         self.url = url
         self.name = url.lastPathComponent
         let values = try? url.resourceValues(forKeys: [
-            .isDirectoryKey, .fileSizeKey, .contentModificationDateKey,
+            .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .tagNamesKey,
         ])
         self.isDirectory = values?.isDirectory ?? false
         self.size = values?.fileSize
         self.modified = values?.contentModificationDate
+        self.finderTags = values?.tagNames ?? []
     }
 }
 
@@ -477,7 +492,6 @@ struct DriveItem: Identifiable {
 /// frames, documents…), inline text for plain-text files, plus metadata.
 private struct DrivePreviewPane: View {
     let item: DriveItem
-    let tagKey: String
     let onOpen: () -> Void
 
     @State private var thumbnail: NSImage?
@@ -506,7 +520,11 @@ private struct DrivePreviewPane: View {
                                 .font(Theme.Font.cardCaption)
                                 .foregroundStyle(Theme.Palette.textSecondary)
                         }
-                        TagDots(kind: TagKind.file, key: tagKey)
+                        if !item.finderTags.isEmpty {
+                            Text(item.finderTags.joined(separator: " · "))
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                        }
                     }
                 }
                 .padding(Theme.Spacing.md)
@@ -578,7 +596,12 @@ private struct DrivePreviewPane: View {
 
 private struct DriveRow: View {
     let item: DriveItem
-    let tagKey: String
+
+    /// Finder's standard tag-name → color mapping.
+    private static let tagColors: [String: Color] = [
+        "Red": .red, "Orange": .orange, "Yellow": .yellow,
+        "Green": .green, "Blue": .blue, "Purple": .purple, "Gray": .gray,
+    ]
 
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
@@ -588,7 +611,14 @@ private struct DriveRow: View {
             Text(item.name)
                 .font(Theme.Font.cardBody)
                 .lineLimit(1)
-            TagDots(kind: TagKind.file, key: tagKey)
+            HStack(spacing: 2) {
+                ForEach(item.finderTags.prefix(4), id: \.self) { tag in
+                    Circle()
+                        .fill(Self.tagColors[tag] ?? Theme.Palette.primary)
+                        .frame(width: 7, height: 7)
+                        .help(tag)
+                }
+            }
             Spacer()
             if !item.isDirectory, let size = item.size {
                 Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
