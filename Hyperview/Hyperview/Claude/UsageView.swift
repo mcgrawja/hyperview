@@ -1,9 +1,9 @@
 //
 //  UsageView.swift
-//  Hyperview
+//  Unifyr
 //
 //  Cost/usage pane like console.anthropic.com's cost page, built from the
-//  local UsageLedger (every API call Hyperview makes: chat + briefings).
+//  local UsageLedger (every API call Unifyr makes: chat + briefings).
 //  Loads only when opened or when Refresh is clicked — never in the
 //  background. Dollar figures are list-price ESTIMATES; the Anthropic console
 //  is the billing ground truth.
@@ -141,7 +141,7 @@ struct UsageView: View {
                     }
                     .disabled(adminKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                Text("Without it, the sections below still track every call Hyperview itself makes (estimates).")
+                Text("Without it, the sections below still track every call Unifyr itself makes (estimates).")
                     .font(Theme.Font.cardCaption)
                     .foregroundStyle(Theme.Palette.textSecondary)
             }
@@ -157,7 +157,7 @@ struct UsageView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("API Usage")
                     .font(Theme.Font.cardTitle)
-                Text("Billed account costs (with an Admin key) plus Hyperview's own call log (chat + daily briefings; recording began 2026-07-11 — earlier calls exist only in the console). Estimates use list prices.")
+                Text("Billed account costs (with an Admin key) plus Unifyr's own call log (chat + daily briefings; recording began 2026-07-11 — earlier calls exist only in the console). Estimates use list prices.")
                     .font(Theme.Font.cardCaption)
                     .foregroundStyle(Theme.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)

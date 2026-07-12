@@ -71,7 +71,13 @@
       "Bash(osascript -e 'tell application \"Messages\" to get name')",
       "Bash(osascript *)",
       "WebFetch(domain:docs.claude.com)",
-      "Bash(plutil -p ~/Library/Preferences/com.apple.finder.plist)"
+      "Bash(plutil -p ~/Library/Preferences/com.apple.finder.plist)",
+      "Bash(/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Hyperview.app)",
+      "Bash(killall usernoted *)",
+      "Bash(killall Dock)",
+      "Bash(killall -HUP iconservicesagent)",
+      "Bash(killall -HUP iconservicesd)",
+      "Bash(xcodebuild -project Hyperview.xcodeproj -scheme Hyperview -configuration Release build)"
     ]
   }
 }

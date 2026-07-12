@@ -1,6 +1,6 @@
 //
 //  MCPToolRegistry.swift
-//  Hyperview
+//  Unifyr
 //
 //  §7 — the v1 MCP tool inventory. Every public broker verb gets a tool; the
 //  registry is transport-agnostic (today: local HTTP shim → Node stdio bridge →
@@ -57,7 +57,7 @@ nonisolated enum MCPToolRegistry {
         // MARK: Notes (NotesStore)
         MCPTool(
             name: "notes_search",
-            description: "Search Hyperview notes by title and text content. Returns id, title, folder, modified date.",
+            description: "Search Unifyr notes by title and text content. Returns id, title, folder, modified date.",
             schema: MCPTool.object(["query": MCPTool.prop("string", "Text to search for; empty lists recent notes")])
         ),
         MCPTool(
@@ -221,7 +221,7 @@ nonisolated enum MCPToolRegistry {
         ),
         MCPTool(
             name: "mail_draft",
-            description: "Compose a draft reply/message. DRAFT ONLY — Hyperview never sends via MCP; the user reviews and sends in-app.",
+            description: "Compose a draft reply/message. DRAFT ONLY — Unifyr never sends via MCP; the user reviews and sends in-app.",
             schema: MCPTool.object([
                 "account": MCPTool.prop("string", "From account email"),
                 "to": MCPTool.prop("string", "Recipient(s), comma separated"),

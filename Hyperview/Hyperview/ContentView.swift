@@ -1,6 +1,6 @@
 //
 //  ContentView.swift
-//  Hyperview
+//  Unifyr
 //
 //  App shell: a sidebar of modules + a detail area. Phase 1 lights up the
 //  Dashboard; later phases (Notes, Mail, Photos, Claude) attach to the same
@@ -73,7 +73,7 @@ struct ContentView: View {
                     .selectionDisabled()
                 }
             }
-            .navigationTitle("Hyperview")
+            .navigationTitle("Unifyr")
             .navigationSplitViewColumnWidth(min: 200, ideal: 220)
             // Messages unread badge — polled (chat.db has no change feed);
             // silently 0 until Full Disk Access is granted.
@@ -97,7 +97,7 @@ struct ContentView: View {
                         Image(systemName: "magnifyingglass")
                     }
                     .keyboardShortcut("k", modifiers: .command)
-                    .help("Search Hyperview (⌘K)")
+                    .help("Search Unifyr (⌘K)")
                 }
             }
             .sheet(isPresented: $showingSearch) {
@@ -126,7 +126,7 @@ struct ContentView: View {
                     NotificationCenter.default.post(name: .hyperviewOpenReminder, object: nil, userInfo: ["id": id])
                 }
             }
-            // Tapping a Hyperview notification opens its module.
+            // Tapping a Unifyr notification opens its module.
             .onReceive(NotificationCenter.default.publisher(for: .hyperviewOpenModule)) { notification in
                 guard let raw = notification.userInfo?["module"] as? String,
                       let item = SidebarItem(rawValue: raw),

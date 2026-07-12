@@ -1,6 +1,6 @@
 //
 //  MessagesView.swift
-//  Hyperview
+//  Unifyr
 //
 //  Experimental Messages module: conversation list + transcript over the
 //  read-only chat.db reader, sending via Messages.app automation. Explicitly a
@@ -34,7 +34,7 @@ struct MessagesView: View {
     /// handle (email lowercased / phone last-10-digits) → contact name.
     @State private var nameIndex: [String: String] = [:]
     /// Local pin/hide state (chat guids) — chat.db is read-only, so these
-    /// live in Hyperview only and don't touch the Messages app.
+    /// live in Unifyr only and don't touch the Messages app.
     @State private var pinned: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "messages.pinnedChats") ?? [])
     @State private var hidden: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "messages.hiddenChats") ?? [])
     @State private var showingNewMessage = false
@@ -116,15 +116,15 @@ struct MessagesView: View {
                 Text("Connect Messages")
                     .font(Theme.Font.cardTitle)
             }
-            Text("Hyperview reads your iMessage history directly from the Messages database, which macOS protects behind Full Disk Access. Reading is local and read-only; sending goes through the Messages app itself.")
+            Text("Unifyr reads your iMessage history directly from the Messages database, which macOS protects behind Full Disk Access. Reading is local and read-only; sending goes through the Messages app itself.")
                 .font(Theme.Font.cardBody)
                 .foregroundStyle(Theme.Palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 stepLine("1", "Click “Open System Settings” below (Privacy & Security → Full Disk Access).")
-                stepLine("2", "Turn on **Hyperview** — use the ＋ button and pick /Applications/Hyperview.app if it isn't listed.")
-                stepLine("3", "Come back and click “Check Again”. If it still doesn't connect, quit and reopen Hyperview once.")
+                stepLine("2", "Turn on **Unifyr** — use the ＋ button and pick /Applications/Unifyr.app if it isn't listed.")
+                stepLine("3", "Come back and click “Check Again”. If it still doesn't connect, quit and reopen Unifyr once.")
             }
             .padding(Theme.Spacing.md)
             .background(Theme.Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
@@ -225,8 +225,8 @@ struct MessagesView: View {
                     persistChatState()
                 }
                 // Honest label: chat.db is read-only and Messages has no
-                // scriptable delete — hiding is local to Hyperview.
-                Text("Hiding only affects Hyperview — the conversation stays in Messages.")
+                // scriptable delete — hiding is local to Unifyr.
+                Text("Hiding only affects Unifyr — the conversation stays in Messages.")
             }
     }
 

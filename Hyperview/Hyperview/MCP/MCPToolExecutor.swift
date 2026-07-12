@@ -1,6 +1,6 @@
 //
 //  MCPToolExecutor.swift
-//  Hyperview
+//  Unifyr
 //
 //  Executes §7 tools against the live brokers and stores. Transport-agnostic:
 //  the HTTP shim (→ Node bridge → Claude Desktop) calls this today; a future
@@ -364,7 +364,7 @@ final class MCPToolExecutor {
                 "subject": try require(args, "subject"),
                 "body": try require(args, "body"),
             ],
-            "note": "Draft only — open Hyperview → Mail → Compose to review and send.",
+            "note": "Draft only — open Unifyr → Mail → Compose to review and send.",
         ])
     }
 
@@ -464,7 +464,7 @@ final class MCPToolExecutor {
         if let mcp = error as? MCPError { return mcp.message }
         if let broker = error as? BrokerError {
             switch broker {
-            case .accessDenied: return "Hyperview doesn't have permission for that module — open the app and connect it first."
+            case .accessDenied: return "Unifyr doesn't have permission for that module — open the app and connect it first."
             case .accessRestricted: return "Access restricted by system policy."
             case .notFound: return "Not found."
             case .invalidInput(let detail): return "Invalid input: \(detail)"

@@ -1,6 +1,6 @@
 //
 //  ClaudeChatView.swift
-//  Hyperview
+//  Unifyr
 //
 //  Phase 5 chat UI: message list with live streaming, tool-call chips, input
 //  bar, and settings (API key in Keychain, model picker). Orange (Theme
@@ -66,7 +66,7 @@ struct ClaudeChatView: View {
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text("Ask about your day, your mail, your notes — Claude has Hyperview's tools.")
+            Text("Ask about your day, your mail, your notes — Claude has Unifyr's tools.")
                 .font(Theme.Font.cardBody)
                 .foregroundStyle(Theme.Palette.textSecondary)
             ForEach(["What needs my attention today?",
@@ -211,9 +211,9 @@ struct ClaudeChatView: View {
     private var setupCard: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-                DashboardCard(title: "Chat with Claude in Hyperview", systemImage: "sparkles", accent: Theme.Palette.claude) {
+                DashboardCard(title: "Chat with Claude in Unifyr", systemImage: "sparkles", accent: Theme.Palette.claude) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                        Text("Add an Anthropic API key to chat with Claude right here — with full access to Hyperview's tools. Usage is billed per token to your API account (separate from your Claude subscription); typical chats cost fractions of a cent.")
+                        Text("Add an Anthropic API key to chat with Claude right here — with full access to Unifyr's tools. Usage is billed per token to your API account (separate from your Claude subscription); typical chats cost fractions of a cent.")
                             .font(Theme.Font.cardBody)
                             .foregroundStyle(Theme.Palette.textSecondary)
                         HStack(spacing: Theme.Spacing.md) {

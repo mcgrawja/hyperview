@@ -1,6 +1,6 @@
 //
 //  ClaudeView.swift
-//  Hyperview
+//  Unifyr
 //
 //  Phase 6 control surface: MCP server toggle + status, Claude Desktop setup
 //  (exact config with copy button), and the tool-invocation audit log (§7).
@@ -78,7 +78,7 @@ private struct ClaudeContent: View {
                 Image(systemName: "sparkles")
                     .font(.system(size: 28))
                     .foregroundStyle(Theme.Palette.claude)
-                Text("Claude + Hyperview")
+                Text("Claude + Unifyr")
                     .font(Theme.Font.dashboardTitle)
             }
             Text("Expose your notes, mail, calendar, reminders, contacts, and photos to Claude Desktop as MCP tools. Claude reads by default; mail can only be drafted, never sent. Every tool call is logged below.")
@@ -115,7 +115,7 @@ private struct ClaudeContent: View {
     private var setupCard: some View {
         DashboardCard(title: "Connect Claude Desktop", systemImage: "link", accent: Theme.Palette.claude) {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                Text("One-time setup: add Hyperview to Claude Desktop's MCP config, then restart Claude Desktop.")
+                Text("One-time setup: add Unifyr to Claude Desktop's MCP config, then restart Claude Desktop.")
                     .font(Theme.Font.cardBody)
                     .foregroundStyle(Theme.Palette.textSecondary)
 
@@ -149,7 +149,7 @@ private struct ClaudeContent: View {
                     }
                 }
 
-                Text("2.  Merge it into ~/Library/Application Support/Claude/claude_desktop_config.json (create the file if it doesn't exist).\n3.  Restart Claude Desktop — a \u{201C}hyperview\u{201D} tool server appears.\n4.  Keep Hyperview running; try: \u{201C}What needs my attention today?\u{201D}")
+                Text("2.  Merge it into ~/Library/Application Support/Claude/claude_desktop_config.json (create the file if it doesn't exist).\n3.  Restart Claude Desktop — a \u{201C}hyperview\u{201D} tool server appears.\n4.  Keep Unifyr running; try: \u{201C}What needs my attention today?\u{201D}")
                     .font(Theme.Font.cardCaption)
                     .foregroundStyle(Theme.Palette.textSecondary)
             }

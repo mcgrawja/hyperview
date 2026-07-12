@@ -154,7 +154,7 @@ final class MCPController {
     private static func route(method: String, path: String, body: Data, executor: MCPToolExecutor) async -> Data {
         switch (method, path) {
         case ("GET", "/health"):
-            return Data(#"{"ok":true,"app":"Hyperview"}"#.utf8)
+            return Data(#"{"ok":true,"app":"Unifyr"}"#.utf8)
         case ("GET", "/tools"):
             return MCPToolRegistry.listJSON()
         case ("POST", "/call"):

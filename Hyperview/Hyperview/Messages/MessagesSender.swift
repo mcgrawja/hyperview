@@ -1,11 +1,11 @@
 //
 //  MessagesSender.swift
-//  Hyperview
+//  Unifyr
 //
 //  Sending half of the Messages wrapper: there is no public send API, so this
 //  automates Messages.app with Apple events (NSAppleScript — main thread
 //  only). Needs the com.apple.security.automation.apple-events entitlement;
-//  the first send triggers the TCC "Hyperview wants to control Messages"
+//  the first send triggers the TCC "Unifyr wants to control Messages"
 //  prompt. Primary path targets the existing conversation by its chat guid
 //  (works for groups and 1:1); fallback addresses the participant directly.
 //
@@ -100,7 +100,7 @@ enum MessagesSender {
         script.executeAndReturnError(&errorInfo)
         guard let errorInfo else { return nil }
         if let number = errorInfo[NSAppleScript.errorNumber] as? Int, number == -1743 {
-            return "Automation permission denied — allow Hyperview to control Messages in System Settings → Privacy & Security → Automation."
+            return "Automation permission denied — allow Unifyr to control Messages in System Settings → Privacy & Security → Automation."
         }
         return (errorInfo[NSAppleScript.errorMessage] as? String) ?? "Messages rejected the send."
     }

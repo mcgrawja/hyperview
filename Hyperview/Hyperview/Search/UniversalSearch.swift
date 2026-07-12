@@ -1,8 +1,8 @@
 //
 //  UniversalSearch.swift
-//  Hyperview
+//  Unifyr
 //
-//  Spotlight-for-Hyperview: ⌘K opens a palette that searches every module —
+//  Spotlight-for-Unifyr: ⌘K opens a palette that searches every module —
 //  notes (titles + block text), cached mail, calendar events, reminders,
 //  contacts, message conversations, and files in the Drive locations. Picking
 //  a result switches to the module and deep-links where the module supports
@@ -53,7 +53,7 @@ struct UniversalSearchView: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(Theme.Palette.textSecondary)
-                TextField("Search Hyperview — notes, mail, events, reminders, contacts, messages, files…", text: $query)
+                TextField("Search Unifyr — notes, mail, events, reminders, contacts, messages, files…", text: $query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 16))
                     .focused($fieldFocused)

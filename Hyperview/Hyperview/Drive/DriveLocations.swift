@@ -1,6 +1,6 @@
 //
 //  DriveLocations.swift
-//  Hyperview
+//  Unifyr
 //
 //  The Drive module's roots. The app is sandboxed, so it can only browse
 //  folders the user explicitly adds (NSOpenPanel). Each grant is persisted as
@@ -28,7 +28,7 @@ final class DriveLocations {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.message = "Choose folders to browse in Hyperview"
+        panel.message = "Choose folders to browse in Unifyr"
         panel.prompt = "Add"
         guard panel.runModal() == .OK else { return }
         for url in panel.urls {

@@ -1,11 +1,11 @@
 //
 //  ClaudeChat.swift
-//  Hyperview
+//  Unifyr
 //
 //  Phase 5 — the in-app Claude chat (§7.1): Anthropic Messages API over plain
 //  URLSession (no SDK exists for Swift), streaming SSE, adaptive thinking, and
 //  a tool-use loop over the SAME MCPToolExecutor the MCP server uses — so
-//  in-app Claude has every Hyperview capability, and every tool call lands in
+//  in-app Claude has every Unifyr capability, and every tool call lands in
 //  the same audit log.
 //
 //  API notes (per current Anthropic docs):
@@ -66,7 +66,7 @@ final class ClaudeChatController {
     init() {
         // 2026-07-11: the app previously defaulted to Opus 4.8 (which is why
         // Opus dominated the first cost reports). Jason wants Sonnet as the
-        // Hyperview default — switch the stored value once; the Settings
+        // Unifyr default — switch the stored value once; the Settings
         // picker still allows Opus per-conversation.
         if !UserDefaults.standard.bool(forKey: "claude.model.sonnetDefaultMigrated") {
             UserDefaults.standard.set("claude-sonnet-5", forKey: "claude.model")
@@ -209,7 +209,7 @@ final class ClaudeChatController {
 
     private func runTool(name: String, arguments: [String: Any]) async -> (ok: Bool, content: String) {
         guard let executor = mcp?.executor else {
-            return (false, "Hyperview's tool layer is unavailable.")
+            return (false, "Unifyr's tool layer is unavailable.")
         }
         return await executor.execute(name: name, arguments: arguments)
     }
@@ -352,7 +352,7 @@ final class ClaudeChatController {
 
     private var systemPrompt: String {
         """
-        You are Claude, embedded inside Hyperview — the user's personal data \
+        You are Claude, embedded inside Unifyr — the user's personal data \
         app on their Mac. You have tools for their notes, mail (multiple \
         accounts), calendar, reminders, contacts, and photos. Use them freely \
         to answer questions and take actions; prefer fetching real data over \
