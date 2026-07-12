@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F4F7FC"></stop><stop offset="1" stop-color="#E1E9F5"></stop></linearGradient>
+    <filter id="lift" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#12305F" flood-opacity="0.20"></feDropShadow></filter>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"></rect>
+  <g transform="translate(112,112) scale(4)">
+    <g>
+      <rect x="42" y="34" width="98" height="128" rx="14" fill="#EAF1FC" stroke="#4C86E0" stroke-width="4"></rect>
+      <rect x="56" y="58" width="70" height="7" rx="3.5" fill="#A9C6F0"></rect>
+      <rect x="56" y="76" width="70" height="7" rx="3.5" fill="#A9C6F0"></rect>
+      <rect x="56" y="94" width="70" height="7" rx="3.5" fill="#A9C6F0"></rect>
+      <rect x="56" y="112" width="48" height="7" rx="3.5" fill="#A9C6F0"></rect>
+    </g>
+    <g filter="url(#lift)">
+      <rect x="104" y="104" width="72" height="66" rx="14" fill="#3E8EF7"></rect>
+      <path d="M104 126 L104 118 Q104 104 118 104 L162 104 Q176 104 176 118 L176 126 Z" fill="#2A66CE"></path>
+      <rect x="118" y="96" width="8" height="18" rx="4" fill="#1E4A94"></rect>
+      <rect x="152" y="96" width="8" height="18" rx="4" fill="#1E4A94"></rect>
+      <path d="M116 146 L128 158 L164 128" fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"></path>
+    </g>
+  </g>
+</svg>

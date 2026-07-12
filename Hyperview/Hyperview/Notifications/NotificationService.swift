@@ -167,18 +167,25 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         return content
     }
 
-    /// The trailing-edge type icon: an SF Symbol on a rounded tinted tile,
-    /// rendered once to a PNG in caches and reused.
+    /// The trailing-edge type icon: an SF Symbol on a rounded tinted tile.
+    /// The system MOVES an attachment's source file out of our folder into its
+    /// own store, so we keep a rendered master and hand each notification a
+    /// fresh throwaway COPY — otherwise only the first notification per type
+    /// would get an icon and the rest would show none.
     private func iconAttachment(for kind: NotificationKind) -> UNNotificationAttachment? {
-        let url: URL
-        if let cached = iconURLs[kind] {
-            url = cached
+        let master: URL
+        if let cached = iconURLs[kind], FileManager.default.fileExists(atPath: cached.path) {
+            master = cached
         } else {
             guard let rendered = renderIcon(for: kind) else { return nil }
             iconURLs[kind] = rendered
-            url = rendered
+            master = rendered
         }
-        return try? UNNotificationAttachment(identifier: "icon-\(kind.rawValue)", url: url, options: nil)
+        let dir = FileManager.default.temporaryDirectory.appending(path: "hv-notif-icons", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let copy = dir.appending(path: "\(kind.rawValue)-\(UUID().uuidString).png")
+        guard (try? FileManager.default.copyItem(at: master, to: copy)) != nil else { return nil }
+        return try? UNNotificationAttachment(identifier: "icon-\(kind.rawValue)", url: copy, options: nil)
     }
 
     private func renderIcon(for kind: NotificationKind) -> URL? {
