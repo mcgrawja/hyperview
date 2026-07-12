@@ -80,43 +80,85 @@ actor MessagesDatabase {
 
     // MARK: Chats
 
-    /// Recent conversations, newest first.
+    /// Recent conversations, newest first — with iMessage/SMS chat rows for the
+    /// same person MERGED into one, and the service badge taken from the most
+    /// recent message rather than the chat's static `service_name`.
     func chats(limit: Int = 80) -> [ChatSnapshot] {
         guard let db, hasAccess() else { return [] }
+        // Fetch extra raw rows so merging still yields ~limit conversations.
         let sql = """
         SELECT c.ROWID, c.guid, IFNULL(c.display_name, ''), IFNULL(c.chat_identifier, ''),
-               IFNULL(c.service_name, ''), c.style, MAX(m.date)
+               c.style, MAX(m.date)
         FROM chat c
         JOIN chat_message_join j ON j.chat_id = c.ROWID
         JOIN message m ON m.ROWID = j.message_id
         WHERE m.item_type = 0
         GROUP BY c.ROWID
         ORDER BY MAX(m.date) DESC
-        LIMIT \(limit)
+        LIMIT \(limit * 3)
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(statement) }
 
-        var result: [ChatSnapshot] = []
+        var raws: [ChatSnapshot] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             let chatID = sqlite3_column_int64(statement, 0)
-            let style = sqlite3_column_int(statement, 5)
-            let (preview, fromMe) = lastMessagePreview(chatID: chatID)
-            result.append(ChatSnapshot(
+            let style = sqlite3_column_int(statement, 4)
+            let handles = participants(chatID: chatID)
+            let info = lastMessageInfo(chatID: chatID)
+            raws.append(ChatSnapshot(
                 id: chatID,
                 guid: columnString(statement, 1),
                 displayName: columnString(statement, 2),
                 identifier: columnString(statement, 3),
-                serviceName: columnString(statement, 4),
+                serviceName: info.service,
                 isGroup: style == 43, // 43 = group, 45 = 1:1
-                participants: participants(chatID: chatID),
-                lastDate: Self.appleDate(sqlite3_column_int64(statement, 6)),
-                lastPreview: preview,
-                lastFromMe: fromMe
+                participants: handles,
+                lastDate: Self.appleDate(sqlite3_column_int64(statement, 5)),
+                lastPreview: info.preview,
+                lastFromMe: info.fromMe,
+                memberChatIDs: [chatID]
             ))
         }
-        return result
+
+        // Merge rows that are the same conversation (a person's iMessage + SMS
+        // threads). Group 1:1 chats by their single normalized handle; keep
+        // group chats separate by guid.
+        func mergeKey(_ chat: ChatSnapshot) -> String {
+            if chat.isGroup { return "g:" + chat.guid }
+            if let handle = chat.participants.first { return "h:" + Self.normalize(handle) }
+            return "i:" + chat.identifier
+        }
+        var groups: [String: ChatSnapshot] = [:]
+        for raw in raws {
+            let key = mergeKey(raw)
+            if var existing = groups[key] {
+                existing.memberChatIDs.append(contentsOf: raw.memberChatIDs)
+                // Keep the most-recent row as the representative (its guid is
+                // the active service to reply on; its message drives the badge).
+                if raw.lastDate > existing.lastDate {
+                    let members = existing.memberChatIDs
+                    existing = raw
+                    existing.memberChatIDs = members
+                }
+                groups[key] = existing
+            } else {
+                groups[key] = raw
+            }
+        }
+        return groups.values
+            .sorted { $0.lastDate > $1.lastDate }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    /// Normalize a handle for merge-matching: emails lowercased, phone numbers
+    /// reduced to their last 10 digits.
+    private static func normalize(_ handle: String) -> String {
+        if handle.contains("@") { return handle.lowercased() }
+        let digits = handle.filter(\.isNumber)
+        return digits.count >= 7 ? String(digits.suffix(10)) : handle
     }
 
     private func participants(chatID: Int64) -> [String] {
@@ -137,20 +179,20 @@ actor MessagesDatabase {
         return handles
     }
 
-    private func lastMessagePreview(chatID: Int64) -> (String, Bool) {
-        guard let db else { return ("", false) }
+    private func lastMessageInfo(chatID: Int64) -> (preview: String, fromMe: Bool, service: String) {
+        guard let db else { return ("", false, "iMessage") }
         let sql = """
-        SELECT m.text, m.attributedBody, m.is_from_me, m.cache_has_attachments
+        SELECT m.text, m.attributedBody, m.is_from_me, m.cache_has_attachments, IFNULL(m.service, 'iMessage')
         FROM message m
         JOIN chat_message_join j ON j.message_id = m.ROWID
         WHERE j.chat_id = ? AND m.item_type = 0 AND m.associated_message_type = 0
         ORDER BY m.date DESC LIMIT 1
         """
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return ("", false) }
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return ("", false, "iMessage") }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int64(statement, 1, chatID)
-        guard sqlite3_step(statement) == SQLITE_ROW else { return ("", false) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { return ("", false, "iMessage") }
         let hasAttachment = sqlite3_column_int(statement, 3) != 0
         let text = messageText(
             plain: columnString(statement, 0),
@@ -158,29 +200,34 @@ actor MessagesDatabase {
             hasAttachment: hasAttachment
         )
         let preview = text.isEmpty && hasAttachment ? "📎 Attachment" : text
-        return (preview, sqlite3_column_int(statement, 2) != 0)
+        let service = columnString(statement, 4)
+        return (preview, sqlite3_column_int(statement, 2) != 0, service.isEmpty ? "iMessage" : service)
     }
 
     // MARK: Messages
 
-    /// The most recent messages of a chat, oldest → newest (transcript order).
-    /// Tapbacks/edits (associated messages) and group-event rows are skipped.
-    func messages(chatID: Int64, limit: Int = 300) -> [MessageSnapshot] {
-        guard let db, hasAccess() else { return [] }
+    /// The most recent messages of a conversation, oldest → newest. Accepts
+    /// ALL merged member chat IDs so a person's iMessage + SMS threads read as
+    /// one transcript. Tapbacks/edits and group-event rows are skipped.
+    func messages(chatIDs: [Int64], limit: Int = 300) -> [MessageSnapshot] {
+        guard let db, hasAccess(), !chatIDs.isEmpty else { return [] }
+        let placeholders = chatIDs.map { _ in "?" }.joined(separator: ",")
         let sql = """
-        SELECT m.ROWID, m.text, m.attributedBody, m.date, m.is_from_me,
-               h.id, m.cache_has_attachments, m.guid
+        SELECT DISTINCT m.ROWID, m.text, m.attributedBody, m.date, m.is_from_me,
+               h.id, m.cache_has_attachments, m.guid, IFNULL(m.service, 'iMessage')
         FROM message m
         JOIN chat_message_join j ON j.message_id = m.ROWID
         LEFT JOIN handle h ON h.ROWID = m.handle_id
-        WHERE j.chat_id = ? AND m.item_type = 0 AND m.associated_message_type = 0
+        WHERE j.chat_id IN (\(placeholders)) AND m.item_type = 0 AND m.associated_message_type = 0
         ORDER BY m.date DESC
         LIMIT \(limit)
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_int64(statement, 1, chatID)
+        for (index, chatID) in chatIDs.enumerated() {
+            sqlite3_bind_int64(statement, Int32(index + 1), chatID)
+        }
 
         var result: [MessageSnapshot] = []
         var guidToRowID: [String: Int64] = [:]
@@ -196,26 +243,34 @@ actor MessagesDatabase {
             let guid = columnString(statement, 7)
             if !guid.isEmpty { guidToRowID[guid] = rowID }
             let sender = columnString(statement, 5)
+            let service = columnString(statement, 8)
             result.append(MessageSnapshot(
                 id: rowID,
                 text: text,
                 date: Self.appleDate(sqlite3_column_int64(statement, 3)),
                 isFromMe: sqlite3_column_int(statement, 4) != 0,
                 senderHandle: sender.isEmpty ? nil : sender,
-                hasAttachment: hasAttachment
+                hasAttachment: hasAttachment,
+                service: service.isEmpty ? "iMessage" : service
             ))
         }
         var ordered = Array(result.reversed())
         attachInFiles(&ordered)
-        attachReactions(&ordered, chatID: chatID, guidToRowID: guidToRowID)
+        attachReactions(&ordered, chatIDs: chatIDs, guidToRowID: guidToRowID)
         return ordered
+    }
+
+    /// Convenience for a single chat row.
+    func messages(chatID: Int64, limit: Int = 300) -> [MessageSnapshot] {
+        messages(chatIDs: [chatID], limit: limit)
     }
 
     /// Tapbacks live as separate rows: associated_message_type 2000–2005
     /// (❤️👍👎😂‼️❓, +2006 custom emoji) adds one, 3000-range removes it.
     /// Replayed in date order per (target, kind, sender) so removals cancel.
-    private func attachReactions(_ messages: inout [MessageSnapshot], chatID: Int64, guidToRowID: [String: Int64]) {
-        guard let db, !guidToRowID.isEmpty else { return }
+    private func attachReactions(_ messages: inout [MessageSnapshot], chatIDs: [Int64], guidToRowID: [String: Int64]) {
+        guard let db, !guidToRowID.isEmpty, !chatIDs.isEmpty else { return }
+        let placeholders = chatIDs.map { _ in "?" }.joined(separator: ",")
         // associated_message_emoji only exists on newer macOS — retry without.
         let withEmoji = """
         SELECT m.associated_message_guid, m.associated_message_type, m.is_from_me,
@@ -223,7 +278,7 @@ actor MessagesDatabase {
         FROM message m
         JOIN chat_message_join j ON j.message_id = m.ROWID
         LEFT JOIN handle h ON h.ROWID = m.handle_id
-        WHERE j.chat_id = ? AND m.associated_message_type >= 2000 AND m.associated_message_type < 4000
+        WHERE j.chat_id IN (\(placeholders)) AND m.associated_message_type >= 2000 AND m.associated_message_type < 4000
         ORDER BY m.date ASC
         LIMIT 1000
         """
@@ -237,7 +292,9 @@ actor MessagesDatabase {
             guard sqlite3_prepare_v2(db, withoutEmoji, -1, &statement, nil) == SQLITE_OK else { return }
         }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_int64(statement, 1, chatID)
+        for (index, chatID) in chatIDs.enumerated() {
+            sqlite3_bind_int64(statement, Int32(index + 1), chatID)
+        }
 
         // (targetRowID, kind, sender) → emoji currently in effect.
         var active: [String: String] = [:]
@@ -395,18 +452,22 @@ actor MessagesDatabase {
         return sqlite3_column_int64(statement, 0)
     }
 
-    /// ROWID of the newest message in a chat — cheap "anything new?" poll.
-    func latestMessageID(chatID: Int64) -> Int64 {
-        guard let db, hasAccess() else { return 0 }
+    /// ROWID of the newest message across the conversation's member chats —
+    /// cheap "anything new?" poll.
+    func latestMessageID(chatIDs: [Int64]) -> Int64 {
+        guard let db, hasAccess(), !chatIDs.isEmpty else { return 0 }
+        let placeholders = chatIDs.map { _ in "?" }.joined(separator: ",")
         let sql = """
         SELECT MAX(m.ROWID) FROM message m
         JOIN chat_message_join j ON j.message_id = m.ROWID
-        WHERE j.chat_id = ?
+        WHERE j.chat_id IN (\(placeholders))
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_int64(statement, 1, chatID)
+        for (index, chatID) in chatIDs.enumerated() {
+            sqlite3_bind_int64(statement, Int32(index + 1), chatID)
+        }
         guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
         return sqlite3_column_int64(statement, 0)
     }

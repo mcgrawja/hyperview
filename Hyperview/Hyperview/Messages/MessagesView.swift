@@ -258,15 +258,7 @@ struct MessagesView: View {
             Text(title(for: chat))
                 .font(Theme.Font.cardTitle)
                 .lineLimit(1)
-            Text(chat.serviceName)
-                .font(Theme.Font.cardCaption)
-                .foregroundStyle(Theme.Palette.textOnAccent)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(
-                    chat.serviceName == "SMS" ? Color.green.opacity(0.8) : Theme.Palette.primary.opacity(0.8),
-                    in: Capsule()
-                )
+            ServiceBadge(service: chat.serviceName)
             Spacer()
         }
         .padding(Theme.Spacing.md)
@@ -417,12 +409,17 @@ struct MessagesView: View {
         phase = .ready
     }
 
+    /// All member chat rows for a conversation (iMessage + SMS threads merged).
+    private func memberIDs(_ chat: ChatSnapshot) -> [Int64] {
+        chat.memberChatIDs.isEmpty ? [chat.id] : chat.memberChatIDs
+    }
+
     private func loadTranscript() async {
-        guard let selectedChatID else {
+        guard let chat = selectedChat else {
             messages = []
             return
         }
-        messages = await database.messages(chatID: selectedChatID)
+        messages = await database.messages(chatIDs: memberIDs(chat))
     }
 
     /// Quiet poll: refresh the chat list; reload the open transcript only
@@ -430,10 +427,11 @@ struct MessagesView: View {
     private func refresh() async {
         guard phase == .ready else { return }
         chats = await database.chats()
-        guard let selectedChatID else { return }
-        let latest = await database.latestMessageID(chatID: selectedChatID)
+        guard let chat = selectedChat else { return }
+        let ids = memberIDs(chat)
+        let latest = await database.latestMessageID(chatIDs: ids)
         if latest != messages.last?.id {
-            messages = await database.messages(chatID: selectedChatID)
+            messages = await database.messages(chatIDs: ids)
         }
     }
 
@@ -603,6 +601,30 @@ private struct ChatRow: View {
     }
 }
 
+/// iMessage green vs SMS — the color Apple's app uses for SMS bubbles.
+let hyperviewSMSGreen = Color(hex: 0x34C759)
+
+/// The per-type service icon (matching the notification icon style): a
+/// rounded tinted tile with a message glyph, plus the service name.
+private struct ServiceBadge: View {
+    let service: String
+
+    private var isSMS: Bool { service.caseInsensitiveCompare("SMS") == .orderedSame }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "message.fill")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 18, height: 18)
+                .background(isSMS ? hyperviewSMSGreen : Theme.Palette.primary, in: RoundedRectangle(cornerRadius: 5))
+            Text(isSMS ? "SMS" : "iMessage")
+                .font(Theme.Font.cardCaption)
+                .foregroundStyle(Theme.Palette.textSecondary)
+        }
+    }
+}
+
 private struct MessageBubble: View {
     let message: MessageSnapshot
     var onAttachmentTap: (MessageAttachmentSnapshot) -> Void = { _ in }
@@ -622,7 +644,9 @@ private struct MessageBubble: View {
                         .padding(.horizontal, Theme.Spacing.md)
                         .padding(.vertical, Theme.Spacing.sm)
                         .background(
-                            message.isFromMe ? Theme.Palette.primary : Theme.Palette.surfaceRaised,
+                            message.isFromMe
+                                ? (message.isSMS ? hyperviewSMSGreen : Theme.Palette.primary)
+                                : Theme.Palette.surfaceRaised,
                             in: RoundedRectangle(cornerRadius: 16)
                         )
                         .textSelection(.enabled)

@@ -20,7 +20,9 @@ nonisolated struct ChatSnapshot: Identifiable, Sendable, Hashable, Codable {
     var displayName: String
     /// `chat.chat_identifier` — the handle for 1:1 chats, chatNN for groups.
     var identifier: String
-    /// "iMessage" or "SMS".
+    /// "iMessage" or "SMS" — derived from the MOST RECENT message's own
+    /// service, not the chat row's static `service_name` (which is often the
+    /// SMS-fallback variant even for iMessage threads).
     var serviceName: String
     var isGroup: Bool
     /// Participant handles (phone numbers / Apple ID emails).
@@ -28,6 +30,10 @@ nonisolated struct ChatSnapshot: Identifiable, Sendable, Hashable, Codable {
     var lastDate: Date
     var lastPreview: String
     var lastFromMe: Bool
+    /// Every chat.ROWID merged into this one conversation. Apple stores a
+    /// person's iMessage and SMS threads as separate chat rows; we merge them
+    /// (like Messages does) and load the transcript across all of them.
+    var memberChatIDs: [Int64] = []
 }
 
 /// A file attached to a message (from the `attachment` table).
@@ -59,4 +65,10 @@ nonisolated struct MessageSnapshot: Identifiable, Sendable, Hashable, Codable {
     /// Tapbacks on this message as emoji ("❤️", "👍", custom emoji…), one per
     /// reaction. Display-only — sending reactions has no public surface.
     var reactions: [String] = []
+    /// This message's own service ("iMessage" or "SMS"), so a green SMS
+    /// bubble can sit inside an otherwise-blue iMessage thread — as Apple's
+    /// app shows it.
+    var service: String = "iMessage"
+
+    var isSMS: Bool { service.caseInsensitiveCompare("SMS") == .orderedSame }
 }
