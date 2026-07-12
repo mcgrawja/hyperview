@@ -510,7 +510,8 @@ actor EventKitBroker: DataBroker {
             notes: event.notes,
             calendarTitle: event.calendar?.title ?? "",
             calendarColorHex: event.calendar?.cgColor.flatMap(hexString(from:)),
-            calendarID: event.calendar?.calendarIdentifier ?? ""
+            calendarID: event.calendar?.calendarIdentifier ?? "",
+            tagKey: event.calendarItemExternalIdentifier ?? event.eventIdentifier ?? ""
         )
     }
 
@@ -527,7 +528,8 @@ actor EventKitBroker: DataBroker {
             listID: reminder.calendar?.calendarIdentifier ?? "",
             url: reminder.url?.absoluteString,
             locationTitle: locationAlarm?.structuredLocation?.title,
-            locationProximity: locationAlarm.map { $0.proximity == .leave ? "leave" : "enter" }
+            locationProximity: locationAlarm.map { $0.proximity == .leave ? "leave" : "enter" },
+            tagKey: reminder.calendarItemExternalIdentifier ?? reminder.calendarItemIdentifier
         )
     }
 

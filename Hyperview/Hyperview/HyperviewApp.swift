@@ -21,6 +21,7 @@ struct HyperviewApp: App {
     private let mcp: MCPController
     private let claudeChat: ClaudeChatController
     private let messagesDB = MessagesDatabase()
+    private let tagsStore: TagsStore
 
     init() {
         // Flush stdout immediately so diagnostic logs appear in real time even
@@ -37,8 +38,17 @@ struct HyperviewApp: App {
         // TEMPORARY: Messages module bring-up probe (see MessagesDiagnostics).
         MessagesDiagnostics.run()
 
+        // Unify Mail's old tag data into the universal system, then stand up
+        // the shared tags window (Mail + rules use it; other modules @Query).
+        TagsStore.migrateMailTagsIfNeeded(mailContainer: mailContainer, mainContainer: modelContainer)
+        let tags = TagsStore(container: modelContainer)
+        tagsStore = tags
+
         let service = MailService()
         service.context = mailContainer.mainContext
+        service.universalTagLink = { [weak tags] tagID, header in
+            tags?.link(tagID, kind: TagKind.mail, key: header)
+        }
         service.startAutoRefresh()
         mailService = service
 
@@ -65,6 +75,7 @@ struct HyperviewApp: App {
                 .environment(\.automationContainer, automationContainer)
                 .environment(\.claudeChat, claudeChat)
                 .environment(\.messagesDB, messagesDB)
+                .environment(\.tagsStore, tagsStore)
         }
         .modelContainer(modelContainer)
     }

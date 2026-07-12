@@ -168,6 +168,9 @@ final class MailService {
     /// Sum of all inbox unread counts — drives the app-sidebar Mail badge.
     private(set) var totalUnread = 0
 
+    /// Applies a universal tag to a message (rules) — injected by the app.
+    @ObservationIgnored var universalTagLink: ((UUID, String) -> Void)?
+
     /// On a network error, drop that account's connection so the next action
     /// reconnects.
     private func failed(_ account: MailAccount, _ error: Error) {
@@ -409,10 +412,9 @@ final class MailService {
                 if action.markRead { await setSeen(message, account: account, seen: true) }
                 if action.flag { await setFlagged(message, account: account, flagged: true) }
                 if let tagID = action.addTagID, let header = message.messageID, !header.isEmpty {
-                    let assignments = (try? context.fetch(FetchDescriptor<MailTagAssignment>())) ?? []
-                    if !assignments.contains(where: { $0.tagID == tagID && $0.messageIDHeader == header }) {
-                        context.insert(MailTagAssignment(tagID: tagID, messageIDHeader: header))
-                    }
+                    // Universal tags live in the main (CloudKit) container —
+                    // the app wires this closure to TagsStore.link.
+                    universalTagLink?(tagID, header)
                 }
                 if action.moveToTrash {
                     await delete(message, account: account)

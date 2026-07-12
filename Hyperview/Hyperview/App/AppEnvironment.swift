@@ -54,4 +54,8 @@ extension EnvironmentValues {
     /// Shared read-only Messages database connection (Messages module + the
     /// app-sidebar unread badge).
     @Entry var messagesDB: MessagesDatabase? = nil
+
+    /// Universal tags for consumers outside the main container's view subtree
+    /// (the Mail module overrides \.modelContext with the mail cache).
+    @Entry var tagsStore: TagsStore? = nil
 }

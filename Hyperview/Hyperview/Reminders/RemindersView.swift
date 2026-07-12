@@ -359,7 +359,7 @@ private struct ReminderListColumn: View {
                         )
                         .onTapGesture { selectedID = reminder.id }
                         .contextMenu {
-                            TagMenu(kind: TagKind.reminder, key: reminder.id)
+                            TagMenu(kind: TagKind.reminder, key: reminder.tagKey)
                         }
                     }
                     if sorted.isEmpty {
@@ -425,7 +425,7 @@ private struct ReminderColumnRow: View {
                         .strikethrough(reminder.isCompleted)
                         .foregroundStyle(reminder.isCompleted ? Theme.Palette.textSecondary : Theme.Palette.textPrimary)
                         .lineLimit(2)
-                    TagDots(kind: TagKind.reminder, key: reminder.id)
+                    TagDots(kind: TagKind.reminder, key: reminder.tagKey)
                 }
                 if let due = reminder.dueDate {
                     Text(due.formatted(date: .abbreviated, time: .shortened))

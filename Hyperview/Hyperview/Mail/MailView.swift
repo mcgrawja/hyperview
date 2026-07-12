@@ -69,8 +69,9 @@ private struct MailModuleContent: View {
     @Query(sort: \MailAccount.createdAt) private var accounts: [MailAccount]
     @Query(sort: \Mailbox.sortIndex) private var mailboxes: [Mailbox]
     @Query private var messages: [MailMessage]
-    @Query(sort: \MailTag.name) private var tags: [MailTag]
-    @Query private var tagAssignments: [MailTagAssignment]
+    // Universal tags (main CloudKit container) — this subtree's \.modelContext
+    // is the mail cache, so tags come through the app-level TagsStore.
+    @Environment(\.tagsStore) private var tagsStore
     @Query(sort: \SmartMailbox.sortIndex) private var smartMailboxes: [SmartMailbox]
     @Query(sort: \BlockedSender.address) private var blockedSenders: [BlockedSender]
 
@@ -84,7 +85,6 @@ private struct MailModuleContent: View {
     @State private var composeSheet: ComposeSheet?
     @State private var addingAccount = false
     @State private var settingsAccount: MailAccount?
-    @State private var tagEditor: TagEditorTarget?
     @State private var smartEditor: SmartMailboxEditorTarget?
     @State private var showingRules = false
     @State private var showingBlockedSenders = false
@@ -230,9 +230,6 @@ private struct MailModuleContent: View {
         .sheet(item: $settingsAccount) { account in
             AccountSettingsView(account: account)
         }
-        .sheet(item: $tagEditor) { target in
-            TagEditorView(target: target)
-        }
         .sheet(item: $smartEditor) { target in
             SmartMailboxEditorView(target: target, accounts: accounts)
         }
@@ -292,25 +289,25 @@ private struct MailModuleContent: View {
                         Text("Smart Mailboxes")
                     }
                 }
-                if !tags.isEmpty {
+                if let tagsStore, !tagsStore.tags.isEmpty {
                     Section(isExpanded: $tagsExpanded) {
-                        ForEach(tags) { tag in
+                        ForEach(tagsStore.tags) { tag in
                             HStack {
                                 Circle()
                                     .fill(Color(hexString: tag.colorHex) ?? Theme.Palette.primary)
                                     .frame(width: 9, height: 9)
                                 Text(tag.name).lineLimit(1)
                                 Spacer()
-                                let count = tagAssignments.filter { $0.tagID == tag.id }.count
+                                let count = tagsStore.count(tag.id, kind: TagKind.mail)
                                 if count > 0 {
                                     CountBadge(count: count, accent: Color(hexString: tag.colorHex) ?? Theme.Palette.primary)
                                 }
                             }
                             .tag(MailSidebarSelection.tag(tag.id))
                             .contextMenu {
-                                Button("Edit Tag…") { tagEditor = TagEditorTarget(tag: tag) }
-                                Divider()
-                                Button("Delete Tag", role: .destructive) { deleteTag(tag) }
+                                Button("Edit Tags…") {
+                                    NotificationCenter.default.post(name: .hyperviewShowTagManager, object: nil)
+                                }
                             }
                         }
                     } header: {
@@ -492,12 +489,12 @@ private struct MailModuleContent: View {
                     }
                 }
             }
-            if message.messageID != nil {
+            if let header = message.messageID, let tagsStore {
                 Menu("Tags") {
-                    ForEach(tags) { tag in
-                        let isOn = isTagged(message, tag)
+                    ForEach(tagsStore.tags) { tag in
+                        let isOn = tagsStore.isTagged(tag.id, kind: TagKind.mail, key: header)
                         Button {
-                            toggleTag(message, tag)
+                            tagsStore.toggle(tag.id, kind: TagKind.mail, key: header)
                         } label: {
                             if isOn {
                                 Label(tag.name, systemImage: "checkmark")
@@ -506,9 +503,9 @@ private struct MailModuleContent: View {
                             }
                         }
                     }
-                    if !tags.isEmpty { Divider() }
-                    Button("New Tag…") {
-                        tagEditor = TagEditorTarget(assignTo: message)
+                    if !tagsStore.tags.isEmpty { Divider() }
+                    Button("Edit Tags…") {
+                        NotificationCenter.default.post(name: .hyperviewShowTagManager, object: nil)
                     }
                 }
             }
@@ -521,40 +518,15 @@ private struct MailModuleContent: View {
 
     // MARK: Tags
 
-    private func isTagged(_ message: MailMessage, _ tag: MailTag) -> Bool {
-        guard let header = message.messageID else { return false }
-        return tagAssignments.contains { $0.tagID == tag.id && $0.messageIDHeader == header }
-    }
-
-    private func toggleTag(_ message: MailMessage, _ tag: MailTag) {
-        guard let header = message.messageID else { return }
-        if let existing = tagAssignments.first(where: { $0.tagID == tag.id && $0.messageIDHeader == header }) {
-            context.delete(existing)
-        } else {
-            context.insert(MailTagAssignment(tagID: tag.id, messageIDHeader: header))
-        }
-        try? context.save()
-    }
-
     private func deleteSmartMailbox(_ box: SmartMailbox) {
         if case .smart(let id) = selection, id == box.id { selection = nil }
         context.delete(box)
         try? context.save()
     }
 
-    private func deleteTag(_ tag: MailTag) {
-        if case .tag(let id) = selection, id == tag.id { selection = nil }
-        for assignment in tagAssignments where assignment.tagID == tag.id {
-            context.delete(assignment)
-        }
-        context.delete(tag)
-        try? context.save()
-    }
-
-    private func tagsFor(_ message: MailMessage) -> [MailTag] {
-        guard let header = message.messageID else { return [] }
-        let ids = Set(tagAssignments.filter { $0.messageIDHeader == header }.map(\.tagID))
-        return tags.filter { ids.contains($0.id) }
+    private func tagsFor(_ message: MailMessage) -> [TagInfo] {
+        guard let header = message.messageID, let tagsStore else { return [] }
+        return tagsStore.tags(kind: TagKind.mail, key: header)
     }
 
     private func deleteMessage(_ message: MailMessage) async {
@@ -625,7 +597,7 @@ private struct MailModuleContent: View {
                 .sorted { $0.date > $1.date }
         }
         if case .tag(let tagID) = selection {
-            let headers = Set(tagAssignments.filter { $0.tagID == tagID }.map(\.messageIDHeader))
+            let headers = tagsStore?.keys(with: tagID, kind: TagKind.mail) ?? []
             // A message can be cached in several folders (e.g. inbox + All Mail);
             // dedupe by Message-ID for the tag view.
             var seen = Set<String>()

@@ -34,6 +34,9 @@ nonisolated struct EventSnapshot: Identifiable, Sendable, Hashable, Codable {
     var calendarColorHex: String?
     /// EventKit `calendarIdentifier` of the containing calendar.
     var calendarID: String = ""
+    /// Cross-device stable key (`calendarItemExternalIdentifier`) — local
+    /// `eventIdentifier`s differ per device, so universal tags key on this.
+    var tagKey: String = ""
 }
 
 /// A reminder (from `EventKitBroker`).
@@ -54,6 +57,9 @@ nonisolated struct ReminderSnapshot: Identifiable, Sendable, Hashable, Codable {
     var locationTitle: String?
     /// "enter" (arriving) or "leave" (leaving) when a location alarm exists.
     var locationProximity: String?
+    /// Cross-device stable key (`calendarItemExternalIdentifier`) — local
+    /// item identifiers differ per device, so universal tags key on this.
+    var tagKey: String = ""
 }
 
 /// A photo library asset (from `PhotoBroker`). Pixels are fetched separately

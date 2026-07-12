@@ -171,7 +171,7 @@ struct RuleEditorView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
-    @Query(sort: \MailTag.name) private var tags: [MailTag]
+    @Environment(\.tagsStore) private var tagsStore
     @Query(sort: \Mailbox.sortIndex) private var mailboxes: [Mailbox]
 
     @State private var name = ""
@@ -204,7 +204,7 @@ struct RuleEditorView: View {
                     Toggle("Flag", isOn: $action.flag)
                     Picker("Add tag", selection: $action.addTagID) {
                         Text("None").tag(UUID?.none)
-                        ForEach(tags) { tag in
+                        ForEach(tagsStore?.tags ?? []) { tag in
                             Text(tag.name).tag(Optional(tag.id))
                         }
                     }
