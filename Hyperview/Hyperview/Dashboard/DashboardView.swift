@@ -26,6 +26,10 @@ struct DashboardView: View {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: Theme.Spacing.lg) {
                     CalendarCard()
                     RemindersCard()
+                    // Render only while something is pinned (context menus in
+                    // Notes/Reminders: "Pin to Dashboard").
+                    PinnedNotesCard()
+                    PinnedRemindersCard()
                 }
             }
             .padding(Theme.Spacing.xl)

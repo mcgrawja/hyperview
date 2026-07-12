@@ -360,6 +360,9 @@ private struct ReminderListColumn: View {
                         .onTapGesture { selectedID = reminder.id }
                         .contextMenu {
                             TagMenu(kind: TagKind.reminder, key: reminder.tagKey)
+                            Button(PinStore.isPinned(reminder: reminder.id) ? "Unpin from Dashboard" : "Pin to Dashboard") {
+                                PinStore.toggle(reminder: reminder.id)
+                            }
                         }
                     }
                     if sorted.isEmpty {

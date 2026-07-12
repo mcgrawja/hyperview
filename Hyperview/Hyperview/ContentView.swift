@@ -103,6 +103,22 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .hyperviewShowTagManager)) { _ in
                 showingTagManager = true
             }
+            // Dashboard pinned-item rows: switch to the module, then post the
+            // module-level open notification once it has mounted.
+            .onReceive(NotificationCenter.default.publisher(for: .hyperviewRevealNote)) { notification in
+                guard let id = notification.userInfo?["id"] as? UUID else { return }
+                selection = .notes
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    NotificationCenter.default.post(name: .hyperviewOpenNote, object: nil, userInfo: ["id": id])
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .hyperviewRevealReminder)) { notification in
+                guard let id = notification.userInfo?["id"] as? String else { return }
+                selection = .reminders
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    NotificationCenter.default.post(name: .hyperviewOpenReminder, object: nil, userInfo: ["id": id])
+                }
+            }
             .sheet(isPresented: $showingTagManager) {
                 TagManagerView()
             }

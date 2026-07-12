@@ -141,6 +141,20 @@ nonisolated struct ContactSnapshot: Identifiable, Sendable, Hashable, Codable {
     var instantMessages: [LabeledValueSnapshot] = []
     var dates: [ContactDateSnapshot] = []
 
+    /// Cross-device stable tagging key. CNContact identifiers differ between
+    /// devices for iCloud contacts, so tags key on identity content instead:
+    /// first email, else last-10 phone digits, else normalized name.
+    var tagKey: String {
+        if let email = emailAddresses.first?.lowercased(), !email.isEmpty {
+            return "email:" + email
+        }
+        if let phone = phoneNumbers.first {
+            let digits = phone.filter(\.isNumber)
+            if digits.count >= 7 { return "phone:" + String(digits.suffix(10)) }
+        }
+        return "name:" + (givenName + "|" + familyName).lowercased()
+    }
+
     /// Display name, falling back to organization, then a placeholder.
     var displayName: String {
         let full = [givenName, familyName]

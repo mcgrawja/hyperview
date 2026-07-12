@@ -309,21 +309,7 @@ struct DriveView: View {
             renamingItem = item
         }
         Button("Duplicate") { duplicate(item) }
-        // Real Finder tags — visible in Finder and Apple's apps (this is the
-        // one place tags CAN reach the Apple ecosystem).
-        Menu("Finder Tags") {
-            ForEach(["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"], id: \.self) { name in
-                Button {
-                    toggleFinderTag(item, name)
-                } label: {
-                    if item.finderTags.contains(name) {
-                        Label(name, systemImage: "checkmark")
-                    } else {
-                        Text(name)
-                    }
-                }
-            }
-        }
+        TagMenu(kind: TagKind.file, key: item.url.path)
         Button("Copy Path") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(item.url.path, forType: .string)
@@ -346,7 +332,7 @@ struct DriveView: View {
         do {
             let urls = try FileManager.default.contentsOfDirectory(
                 at: currentFolder,
-                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .tagNamesKey],
+                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
                 options: [.skipsHiddenFiles]
             )
             items = urls.map(DriveItem.init(url:)).sorted { a, b in
@@ -410,21 +396,6 @@ struct DriveView: View {
         }
     }
 
-    private func toggleFinderTag(_ item: DriveItem, _ name: String) {
-        var tags = item.finderTags
-        if let index = tags.firstIndex(of: name) {
-            tags.remove(at: index)
-        } else {
-            tags.append(name)
-        }
-        do {
-            try (item.url as NSURL).setResourceValue(tags, forKey: .tagNamesKey)
-            reload()
-        } catch {
-            errorText = "Couldn't change the Finder tags for “\(item.name)”."
-        }
-    }
-
     private func createFolder(named name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, let currentFolder else { return }
@@ -447,8 +418,6 @@ struct DriveItem: Identifiable {
     let isDirectory: Bool
     let size: Int?
     let modified: Date?
-    /// Finder tags (real ones — visible in Finder and Apple apps).
-    let finderTags: [String]
 
     var id: URL { url }
 
@@ -456,12 +425,11 @@ struct DriveItem: Identifiable {
         self.url = url
         self.name = url.lastPathComponent
         let values = try? url.resourceValues(forKeys: [
-            .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .tagNamesKey,
+            .isDirectoryKey, .fileSizeKey, .contentModificationDateKey,
         ])
         self.isDirectory = values?.isDirectory ?? false
         self.size = values?.fileSize
         self.modified = values?.contentModificationDate
-        self.finderTags = values?.tagNames ?? []
     }
 }
 
@@ -497,11 +465,7 @@ private struct DrivePreviewPane: View {
                                 .font(Theme.Font.cardCaption)
                                 .foregroundStyle(Theme.Palette.textSecondary)
                         }
-                        if !item.finderTags.isEmpty {
-                            Text(item.finderTags.joined(separator: " · "))
-                                .font(Theme.Font.cardCaption)
-                                .foregroundStyle(Theme.Palette.textSecondary)
-                        }
+                        TagDots(kind: TagKind.file, key: item.url.path)
                     }
                 }
                 .padding(Theme.Spacing.md)
@@ -574,12 +538,6 @@ private struct DrivePreviewPane: View {
 private struct DriveRow: View {
     let item: DriveItem
 
-    /// Finder's standard tag-name → color mapping.
-    private static let tagColors: [String: Color] = [
-        "Red": .red, "Orange": .orange, "Yellow": .yellow,
-        "Green": .green, "Blue": .blue, "Purple": .purple, "Gray": .gray,
-    ]
-
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
             Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
@@ -588,14 +546,7 @@ private struct DriveRow: View {
             Text(item.name)
                 .font(Theme.Font.cardBody)
                 .lineLimit(1)
-            HStack(spacing: 2) {
-                ForEach(item.finderTags.prefix(4), id: \.self) { tag in
-                    Circle()
-                        .fill(Self.tagColors[tag] ?? Theme.Palette.primary)
-                        .frame(width: 7, height: 7)
-                        .help(tag)
-                }
-            }
+            TagDots(kind: TagKind.file, key: item.url.path)
             Spacer()
             if !item.isDirectory, let size = item.size {
                 Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))

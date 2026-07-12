@@ -260,6 +260,9 @@ struct NotesView: View {
         }
         .contextMenu {
             TagMenu(kind: TagKind.note, key: note.id.uuidString)
+            Button(PinStore.isPinned(note: note.id) ? "Unpin from Dashboard" : "Pin to Dashboard") {
+                PinStore.toggle(note: note.id)
+            }
             Divider()
             Button("Delete", role: .destructive) { delete(note) }
         }

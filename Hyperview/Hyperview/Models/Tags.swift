@@ -63,4 +63,6 @@ nonisolated enum TagKind {
     static let contact = "contact"
     static let chat = "chat"
     static let mail = "mail"
+    /// Keyed by absolute path (per-Mac; Drive locations are local folders).
+    static let file = "file"
 }

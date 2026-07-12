@@ -12,6 +12,7 @@ import SwiftData
 
 struct ContactsView: View {
     @Environment(\.brokers) private var brokers
+    @Environment(\.modelContext) private var modelContext
     @Query(sort: \HVTag.name) private var allTags: [HVTag]
     @Query private var tagLinks: [HVTagLink]
     @State private var selectedTagID: UUID?
@@ -171,7 +172,7 @@ struct ContactsView: View {
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
-                            TagMenu(kind: TagKind.contact, key: contact.id)
+                            TagMenu(kind: TagKind.contact, key: contact.tagKey)
                             if !groups.isEmpty {
                                 Menu("Add to Group") {
                                     ForEach(groups) { group in
@@ -211,6 +212,7 @@ struct ContactsView: View {
     private func start() async {
         access = ModuleAccess(brokers.contacts.authorization)
         guard access == .ready else { return }
+        await migrateContactTagKeysIfNeeded()
         await loadGroups()
         await load()
         await observe()
@@ -236,7 +238,29 @@ struct ContactsView: View {
                 .filter { $0.tagID == selectedTagID && $0.itemKind == TagKind.contact }
                 .map(\.itemKey)
         )
-        return contacts.filter { keys.contains($0.id) }
+        return contacts.filter { keys.contains($0.tagKey) }
+    }
+
+    /// One-time: contact tag links used to key on CNContact.identifier, which
+    /// doesn't match across devices — remap them to the identity-based key.
+    private func migrateContactTagKeysIfNeeded() async {
+        let flag = "tags.contactKeysMigrated"
+        guard !UserDefaults.standard.bool(forKey: flag) else { return }
+        let contactLinks = tagLinks.filter { $0.itemKind == TagKind.contact }
+        guard !contactLinks.isEmpty else {
+            UserDefaults.standard.set(true, forKey: flag)
+            return
+        }
+        guard let all = try? await brokers.contacts.fetch(BrokerQuery(limit: 5000)) else { return }
+        let keyByIdentifier = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0.tagKey) })
+        for link in contactLinks {
+            if let newKey = keyByIdentifier[link.itemKey] {
+                link.itemKey = newKey
+            }
+        }
+        try? modelContext.save()
+        UserDefaults.standard.set(true, forKey: flag)
+        NotificationCenter.default.post(name: .hyperviewTagsChanged, object: nil)
     }
 
     private func loadGroups() async {
