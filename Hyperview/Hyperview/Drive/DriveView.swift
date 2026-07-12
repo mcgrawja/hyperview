@@ -26,6 +26,9 @@ struct DriveView: View {
     @State private var creatingFolder = false
     @State private var newFolderName = ""
     @State private var errorText: String?
+    @State private var tagStore = FinderTagStore()
+    @State private var newTagTarget: DriveItem?
+    @State private var newTagName = ""
     @AppStorage("drive.showPreview") private var showPreview = true
     @AppStorage("drive.previewWidth") private var previewWidth = 300.0
     @State private var previewDragBase: Double?
@@ -64,7 +67,13 @@ struct DriveView: View {
         }
         .background(Theme.Palette.background)
         .navigationTitle("Drive")
-        .task { removeUniversalFileLinksIfNeeded() }
+        .task {
+            removeUniversalFileLinksIfNeeded()
+            tagStore.refresh(locations: locations.roots)
+        }
+        .onChange(of: locations.roots) { _, roots in
+            tagStore.refresh(locations: roots)
+        }
         .toolbar {
             ToolbarItem {
                 Button {
@@ -110,6 +119,23 @@ struct DriveView: View {
                 renamingItem = nil
             }
             Button("Cancel", role: .cancel) { renamingItem = nil }
+        }
+        .alert("New Tag", isPresented: .init(
+            get: { newTagTarget != nil },
+            set: { if !$0 { newTagTarget = nil } }
+        )) {
+            TextField("Tag name", text: $newTagName)
+            Button("Create & Apply") {
+                let name = newTagName.trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty, let target = newTagTarget {
+                    tagStore.addCustom(name)
+                    toggleFinderTag(target, name)
+                }
+                newTagTarget = nil
+            }
+            Button("Cancel", role: .cancel) { newTagTarget = nil }
+        } message: {
+            Text("Creates a Finder tag and applies it to “\(newTagTarget?.name ?? "")”. It becomes available everywhere Finder tags are used.")
         }
         .alert("New Folder", isPresented: $creatingFolder) {
             TextField("Folder name", text: $newFolderName)
@@ -313,9 +339,10 @@ struct DriveView: View {
         }
         Button("Duplicate") { duplicate(item) }
         // Real Finder tags — file metadata, visible in Finder/Apple apps,
-        // synced with the file by iCloud Drive.
+        // synced with the file by iCloud Drive. The full vocabulary comes
+        // from FinderTagStore (favorites + in-use + standard + user-created).
         Menu("Finder Tags") {
-            ForEach(["Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray"], id: \.self) { name in
+            ForEach(tagStore.allTags, id: \.self) { name in
                 Button {
                     toggleFinderTag(item, name)
                 } label: {
@@ -325,6 +352,11 @@ struct DriveView: View {
                         Text(name)
                     }
                 }
+            }
+            Divider()
+            Button("New Tag…") {
+                newTagName = ""
+                newTagTarget = item
             }
         }
         Button("Copy Path") {

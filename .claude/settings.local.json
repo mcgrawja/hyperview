@@ -70,7 +70,8 @@
       "Bash(plutil -p /Applications/Hyperview.app/Contents/Info.plist)",
       "Bash(osascript -e 'tell application \"Messages\" to get name')",
       "Bash(osascript *)",
-      "WebFetch(domain:docs.claude.com)"
+      "WebFetch(domain:docs.claude.com)",
+      "Bash(plutil -p ~/Library/Preferences/com.apple.finder.plist)"
     ]
   }
 }
