@@ -58,4 +58,7 @@ extension EnvironmentValues {
     /// Universal tags for consumers outside the main container's view subtree
     /// (the Mail module overrides \.modelContext with the mail cache).
     @Entry var tagsStore: TagsStore? = nil
+
+    /// Drives Hyperview's notification hub (scheduling + Dock badge).
+    @Entry var notificationCoordinator: NotificationCoordinator? = nil
 }

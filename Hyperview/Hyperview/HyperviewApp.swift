@@ -22,6 +22,7 @@ struct HyperviewApp: App {
     private let claudeChat: ClaudeChatController
     private let messagesDB = MessagesDatabase()
     private let tagsStore: TagsStore
+    private let notificationCoordinator: NotificationCoordinator
 
     init() {
         // Flush stdout immediately so diagnostic logs appear in real time even
@@ -44,13 +45,26 @@ struct HyperviewApp: App {
         let tags = TagsStore(container: modelContainer)
         tagsStore = tags
 
+        // Hyperview's notification hub — the app becomes the single alert
+        // source once Apple's own apps are silenced.
+        NotificationService.shared.bootstrap()
+
         let service = MailService()
         service.context = mailContainer.mainContext
         service.universalTagLink = { [weak tags] tagID, header in
             tags?.link(tagID, kind: TagKind.mail, key: header)
         }
+        service.onNewMail = { sender, subject in
+            NotificationService.shared.notify(kind: .mail, title: sender, body: subject)
+        }
         service.startAutoRefresh()
         mailService = service
+
+        notificationCoordinator = NotificationCoordinator(
+            brokers: brokers,
+            messagesDB: messagesDB,
+            mailService: service
+        )
 
         mcp = MCPController(
             brokers: brokers,
@@ -76,6 +90,7 @@ struct HyperviewApp: App {
                 .environment(\.claudeChat, claudeChat)
                 .environment(\.messagesDB, messagesDB)
                 .environment(\.tagsStore, tagsStore)
+                .environment(\.notificationCoordinator, notificationCoordinator)
         }
         .modelContainer(modelContainer)
     }

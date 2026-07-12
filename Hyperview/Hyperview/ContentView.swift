@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var selection: SidebarItem = .dashboard
     @Environment(\.mailService) private var mailService
     @Environment(\.messagesDB) private var messagesDB
+    @Environment(\.notificationCoordinator) private var notificationCoordinator
     @State private var messagesUnread = 0
     @State private var showingSearch = false
     @State private var showingTagManager = false
@@ -79,7 +80,13 @@ struct ContentView: View {
             .task {
                 while !Task.isCancelled {
                     messagesUnread = await messagesDB?.unreadCount() ?? 0
-                    try? await Task.sleep(for: .seconds(20))
+                    // Drive the notification hub from the same tick: message
+                    // arrivals, reminder/event scheduling, Dock badge.
+                    if let coordinator = notificationCoordinator {
+                        coordinator.cachedMessagesUnread = messagesUnread
+                        await coordinator.tick()
+                    }
+                    try? await Task.sleep(for: .seconds(30))
                 }
             }
             .toolbar {
@@ -119,6 +126,13 @@ struct ContentView: View {
                     NotificationCenter.default.post(name: .hyperviewOpenReminder, object: nil, userInfo: ["id": id])
                 }
             }
+            // Tapping a Hyperview notification opens its module.
+            .onReceive(NotificationCenter.default.publisher(for: .hyperviewOpenModule)) { notification in
+                guard let raw = notification.userInfo?["module"] as? String,
+                      let item = SidebarItem(rawValue: raw),
+                      SidebarItem.available.contains(item) else { return }
+                selection = item
+            }
             .sheet(isPresented: $showingTagManager) {
                 TagManagerView()
             }
@@ -140,6 +154,8 @@ struct ContentView: View {
                 MailView()
             case .messages:
                 MessagesView()
+            case .clock:
+                ClockView()
             case .photos:
                 PhotosView()
             case .claude:
@@ -159,6 +175,7 @@ enum SidebarItem: String, Identifiable, CaseIterable {
     case contacts
     case mail
     case messages
+    case clock
     case photos
     case claude
 
@@ -174,6 +191,7 @@ enum SidebarItem: String, Identifiable, CaseIterable {
         case .contacts: return "Contacts"
         case .mail: return "Mail"
         case .messages: return "Messages"
+        case .clock: return "Clock"
         case .photos: return "Photos"
         case .claude: return "Claude"
         }
@@ -189,12 +207,21 @@ enum SidebarItem: String, Identifiable, CaseIterable {
         case .contacts: return "person.2"
         case .mail: return "envelope"
         case .messages: return "message"
+        case .clock: return "clock"
         case .photos: return "photo.on.rectangle"
         case .claude: return "sparkles"
         }
     }
 
-    static var available: [SidebarItem] { [.dashboard, .mail, .messages, .reminders, .calendar, .notes, .drive, .photos, .contacts, .claude] }
+    // iOS/iPadOS drops Messages (Mac-only) and shows Clock in its place;
+    // macOS keeps both.
+    static var available: [SidebarItem] {
+        #if os(iOS)
+        [.dashboard, .mail, .clock, .reminders, .calendar, .notes, .drive, .photos, .contacts, .claude]
+        #else
+        [.dashboard, .mail, .messages, .clock, .reminders, .calendar, .notes, .drive, .photos, .contacts, .claude]
+        #endif
+    }
     static var upcoming: [SidebarItem] { [] }
 }
 

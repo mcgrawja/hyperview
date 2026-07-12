@@ -341,6 +341,60 @@ actor MessagesDatabase {
         return Int(sqlite3_column_int64(statement, 0))
     }
 
+    /// One newly-arrived incoming message, for notifications.
+    nonisolated struct IncomingPing: Sendable {
+        let rowID: Int64
+        let handle: String
+        let text: String
+    }
+
+    /// Incoming (not-from-me) messages with ROWID greater than `afterRowID`,
+    /// oldest→newest. Returns the new high-water ROWID plus the pings. Passing
+    /// `afterRowID == 0` returns only the current high-water mark and NO pings
+    /// (so the first poll establishes a baseline without notifying history).
+    func newIncoming(afterRowID: Int64, limit: Int = 10) -> (latest: Int64, pings: [IncomingPing]) {
+        guard hasAccess(), let db else { return (afterRowID, []) }
+        let highWater = latestOverallMessageID()
+        guard afterRowID > 0, highWater > afterRowID else { return (highWater, []) }
+        let sql = """
+        SELECT m.ROWID, IFNULL(h.id, ''), m.text, m.attributedBody, m.cache_has_attachments
+        FROM message m
+        LEFT JOIN handle h ON h.ROWID = m.handle_id
+        WHERE m.ROWID > ? AND m.is_from_me = 0 AND m.item_type = 0 AND m.associated_message_type = 0
+        ORDER BY m.ROWID ASC
+        LIMIT \(limit)
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return (highWater, []) }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, afterRowID)
+        var pings: [IncomingPing] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let hasAttachment = sqlite3_column_int(statement, 4) != 0
+            let text = messageText(
+                plain: columnString(statement, 2),
+                body: columnData(statement, 3),
+                hasAttachment: hasAttachment
+            )
+            pings.append(IncomingPing(
+                rowID: sqlite3_column_int64(statement, 0),
+                handle: columnString(statement, 1),
+                text: text.isEmpty && hasAttachment ? "📎 Attachment" : text
+            ))
+        }
+        return (highWater, pings)
+    }
+
+    /// Highest message ROWID overall — the message "clock".
+    func latestOverallMessageID() -> Int64 {
+        guard hasAccess(), let db else { return 0 }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT MAX(ROWID) FROM message", -1, &statement, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+        return sqlite3_column_int64(statement, 0)
+    }
+
     /// ROWID of the newest message in a chat — cheap "anything new?" poll.
     func latestMessageID(chatID: Int64) -> Int64 {
         guard let db, hasAccess() else { return 0 }

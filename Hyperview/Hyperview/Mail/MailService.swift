@@ -109,8 +109,11 @@ final class MailService {
             let summaries = try await imap.fetchSummaries(path: mailboxPath, limit: limit)
             MailLog.log("[Mail] fetchSummaries \(mailboxPath) -> \(summaries.count) messages")
             let arrived = upsertMessages(summaries, accountID: account.id, mailboxPath: mailboxPath, in: context)
+            let syncKey = "\(account.id.uuidString)|\(mailboxPath)"
+            let firstSync = !syncedMailboxes.contains(syncKey)
+            syncedMailboxes.insert(syncKey)
             if mailboxPath.uppercased() == "INBOX" {
-                await applyRules(to: arrived, account: account, in: context)
+                await applyRules(to: arrived, account: account, in: context, notifyNew: !firstSync)
             }
             // Update just this mailbox's badge (cheap, one round trip).
             let counts = await imap.status(mailboxPath)
@@ -170,6 +173,14 @@ final class MailService {
 
     /// Applies a universal tag to a message (rules) — injected by the app.
     @ObservationIgnored var universalTagLink: ((UUID, String) -> Void)?
+
+    /// Fired for each genuinely new, undelivered-to-trash, unread INBOX
+    /// message (sender display name, subject) — the app posts a notification.
+    @ObservationIgnored var onNewMail: ((String, String) -> Void)?
+
+    /// Mailboxes synced at least once this launch — so the initial backfill
+    /// doesn't fire a notification for every historical message.
+    @ObservationIgnored private var syncedMailboxes: Set<String> = []
 
     /// On a network error, drop that account's connection so the next action
     /// reconnects.
@@ -380,7 +391,7 @@ final class MailService {
 
     /// Run enabled rules over newly arrived INBOX messages. First matching
     /// terminal action (move/trash) wins; non-terminal actions all apply.
-    private func applyRules(to newMessages: [MailMessage], account: MailAccount, in context: ModelContext) async {
+    private func applyRules(to newMessages: [MailMessage], account: MailAccount, in context: ModelContext, notifyNew: Bool = false) async {
         guard !newMessages.isEmpty else { return }
 
         // Blocked senders first — straight to Trash, rules never see them.
@@ -398,12 +409,9 @@ final class MailService {
         let rules = ((try? context.fetch(FetchDescriptor<MailRule>())) ?? [])
             .filter(\.isEnabled)
             .sorted { $0.sortIndex < $1.sortIndex }
-        guard !rules.isEmpty else {
-            try? context.save()
-            return
-        }
 
         for message in remaining {
+            var delivered = true // still in this inbox after rules
             for rule in rules {
                 guard rule.condition.matches(message) else { continue }
                 let action = rule.action
@@ -418,12 +426,21 @@ final class MailService {
                 }
                 if action.moveToTrash {
                     await delete(message, account: account)
+                    delivered = false
                     break // message left this mailbox; stop processing it
                 }
                 if !action.moveToMailboxPath.isEmpty {
                     await move(message, account: account, to: action.moveToMailboxPath)
+                    delivered = false
                     break
                 }
+            }
+            // Notify only for genuinely new, still-in-inbox, unread mail.
+            if notifyNew, delivered, !message.isSeen {
+                onNewMail?(
+                    message.fromName.isEmpty ? message.fromAddress : message.fromName,
+                    message.subject.isEmpty ? "(No Subject)" : message.subject
+                )
             }
         }
         try? context.save()
