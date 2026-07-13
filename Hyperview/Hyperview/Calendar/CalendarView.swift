@@ -43,6 +43,9 @@ struct CalendarView: View {
     @State private var editingEvent: EventSnapshot?
     @AppStorage("calendar.sidebarCollapsed") private var sidebarCollapsed = false
     @AppStorage("calendar.defaultCalendarID") private var defaultCalendarID = ""
+    @Environment(\.isCompactLayout) private var isCompact
+    /// iPhone: the calendars list is presented as a sheet.
+    @State private var showingCalendarsSheet = false
 
     private let calendar = Calendar.current
 
@@ -95,13 +98,21 @@ struct CalendarView: View {
                 Task { await load() }
             }
         }
+        .sheet(isPresented: $showingCalendarsSheet) {
+            NavigationStack {
+                sidebar
+                    .navigationTitle("Calendars")
+            }
+        }
     }
 
     // MARK: Layout
 
     private var content: some View {
         HStack(spacing: 0) {
-            if !sidebarCollapsed {
+            // iPhone has no room for a 190pt calendar list beside the grid —
+            // it's reachable from the toolbar's sidebar button as a sheet.
+            if !sidebarCollapsed && !isCompact {
                 sidebar
                     .frame(width: 190)
                 Divider().overlay(Theme.Palette.separator)
@@ -241,7 +252,11 @@ struct CalendarView: View {
     private var header: some View {
         HStack(spacing: Theme.Spacing.md) {
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) { sidebarCollapsed.toggle() }
+                if isCompact {
+                    showingCalendarsSheet = true
+                } else {
+                    withAnimation(.easeInOut(duration: 0.15)) { sidebarCollapsed.toggle() }
+                }
             } label: {
                 Image(systemName: "sidebar.left")
             }

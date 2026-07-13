@@ -87,7 +87,9 @@
       "Bash(xcrun --show-sdk-path --sdk macosx)",
       "Bash(grep -nE 'initWithLocation|@property.*location|@property.*address|MKAddress \\\\*' __TRACKED_VAR__/MKMapItem.h)",
       "Bash(xcrun simctl *)",
-      "Bash(xargs sed -i '' 's/\\\\.toggleStyle\\(\\\\.checkbox\\)/.platformCheckbox\\(\\)/g')"
+      "Bash(xargs sed -i '' 's/\\\\.toggleStyle\\(\\\\.checkbox\\)/.platformCheckbox\\(\\)/g')",
+      "Bash(xargs sed -i '' 's/\\\\.navigationBarTitleDisplayMode\\(\\\\.inline\\)/.inlineNavigationTitle\\(\\)/g')",
+      "Bash(xcodebuild -project Hyperview.xcodeproj -scheme Hyperview -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build)"
     ]
   }
 }

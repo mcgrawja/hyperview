@@ -60,6 +60,20 @@ enum PlatformKit {
     }
 }
 
+// MARK: - Layout size
+
+extension EnvironmentValues {
+    /// True when the UI must show ONE pane at a time (iPhone portrait). iPad
+    /// and Mac are always "regular" and keep their multi-pane layouts.
+    var isCompactLayout: Bool {
+        #if os(iOS)
+        return horizontalSizeClass == .compact
+        #else
+        return false
+        #endif
+    }
+}
+
 // MARK: - Cross-platform view styles
 
 extension View {
@@ -69,6 +83,17 @@ extension View {
     func platformCheckbox() -> some View {
         #if os(macOS)
         self.toggleStyle(.checkbox)
+        #else
+        self
+        #endif
+    }
+
+    /// Inline navigation-bar title on iOS; a no-op on macOS (which has no
+    /// navigation bar).
+    @ViewBuilder
+    func inlineNavigationTitle() -> some View {
+        #if os(iOS)
+        self.navigationBarTitleDisplayMode(.inline)
         #else
         self
         #endif

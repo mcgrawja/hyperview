@@ -92,6 +92,7 @@ private struct MailModuleContent: View {
     /// Master disclosure for the per-account sections. Collapsed by default so
     /// the sidebar leads with just the unified boxes.
     @AppStorage("mail.accountsSectionExpanded") private var accountsExpanded = false
+    @Environment(\.isCompactLayout) private var isCompact
     @AppStorage("mail.unifiedSectionExpanded") private var unifiedExpanded = true
     @AppStorage("mail.smartSectionExpanded") private var smartExpanded = true
     @AppStorage("mail.tagsSectionExpanded") private var tagsExpanded = true
@@ -139,16 +140,11 @@ private struct MailModuleContent: View {
     }
 
     private var mailboxLayout: some View {
-        // Default proportions: mailbox list ~20%, message list ~30%, reading
-        // pane the remainder (~50%). Panes stay user-draggable within minimums.
-        GeometryReader { geometry in
-            PlatformHSplit {
-                mailboxPane
-                    .frame(minWidth: 105, idealWidth: geometry.size.width * 0.049, maxWidth: 300)
-                messageListPane
-                    .frame(minWidth: 220, idealWidth: geometry.size.width * 0.20, maxWidth: 520)
-                detailPane
-                    .frame(minWidth: 360, idealWidth: geometry.size.width * 0.735, maxWidth: .infinity)
+        Group {
+            if isCompact {
+                compactPanes
+            } else {
+                regularPanes
             }
         }
         .background(Theme.Palette.background)
@@ -190,33 +186,57 @@ private struct MailModuleContent: View {
             await syncSelection()
         }
         .toolbar {
-            ToolbarItem {
-                Button { composeSheet = ComposeSheet(mode: .new) } label: { Image(systemName: "square.and.pencil") }
-                    .help("Compose")
-            }
-            ToolbarItem {
-                Button {
-                    Task { await syncSelection(quiet: false) }
-                } label: { Image(systemName: "arrow.clockwise") }
-                .help("Refresh")
-            }
-            ToolbarItem {
-                Button {
-                    Task { await clearCacheAndReload() }
-                } label: { Image(systemName: "arrow.triangle.2.circlepath.circle") }
-                .help("Clear cached messages and re-download")
-            }
-            ToolbarItem {
-                Menu {
-                    Button("New Smart Mailbox…") { smartEditor = SmartMailboxEditorTarget(box: nil) }
-                    Button("Manage Rules…") { showingRules = true }
-                    Button("Blocked Senders…") { showingBlockedSenders = true }
-                } label: { Image(systemName: "slider.horizontal.3") }
-                .help("Smart Mailboxes & Rules")
-            }
-            ToolbarItem {
-                Button { addingAccount = true } label: { Image(systemName: "person.crop.circle.badge.plus") }
-                    .help("Add Account")
+            // A phone nav bar can't hold five buttons — on compact, everything
+            // but Compose and Refresh collapses into one overflow menu.
+            if isCompact {
+                ToolbarItem {
+                    Button { composeSheet = ComposeSheet(mode: .new) } label: { Image(systemName: "square.and.pencil") }
+                }
+                ToolbarItem {
+                    Button {
+                        Task { await syncSelection(quiet: false) }
+                    } label: { Image(systemName: "arrow.clockwise") }
+                }
+                ToolbarItem {
+                    Menu {
+                        Button("Add Account…") { addingAccount = true }
+                        Divider()
+                        Button("New Smart Mailbox…") { smartEditor = SmartMailboxEditorTarget(box: nil) }
+                        Button("Manage Rules…") { showingRules = true }
+                        Button("Blocked Senders…") { showingBlockedSenders = true }
+                        Divider()
+                        Button("Re-download Messages") { Task { await clearCacheAndReload() } }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                }
+            } else {
+                ToolbarItem {
+                    Button { composeSheet = ComposeSheet(mode: .new) } label: { Image(systemName: "square.and.pencil") }
+                        .help("Compose")
+                }
+                ToolbarItem {
+                    Button {
+                        Task { await syncSelection(quiet: false) }
+                    } label: { Image(systemName: "arrow.clockwise") }
+                    .help("Refresh")
+                }
+                ToolbarItem {
+                    Button {
+                        Task { await clearCacheAndReload() }
+                    } label: { Image(systemName: "arrow.triangle.2.circlepath.circle") }
+                    .help("Clear cached messages and re-download")
+                }
+                ToolbarItem {
+                    Menu {
+                        Button("New Smart Mailbox…") { smartEditor = SmartMailboxEditorTarget(box: nil) }
+                        Button("Manage Rules…") { showingRules = true }
+                        Button("Blocked Senders…") { showingBlockedSenders = true }
+                    } label: { Image(systemName: "slider.horizontal.3") }
+                    .help("Smart Mailboxes & Rules")
+                }
+                ToolbarItem {
+                    Button { addingAccount = true } label: { Image(systemName: "person.crop.circle.badge.plus") }
+                        .help("Add Account")
+                }
             }
         }
         .sheet(item: $composeSheet) { sheet in
@@ -243,6 +263,50 @@ private struct MailModuleContent: View {
     }
 
     // MARK: Panes
+
+    /// Mac / iPad: all three panes side by side. Default proportions —
+    /// mailboxes ~5%, message list ~20%, reading pane the rest.
+    private var regularPanes: some View {
+        GeometryReader { geometry in
+            PlatformHSplit {
+                mailboxPane
+                    .frame(minWidth: 105, idealWidth: geometry.size.width * 0.049, maxWidth: 300)
+                messageListPane
+                    .frame(minWidth: 220, idealWidth: geometry.size.width * 0.20, maxWidth: 520)
+                detailPane
+                    .frame(minWidth: 360, idealWidth: geometry.size.width * 0.735, maxWidth: .infinity)
+            }
+        }
+    }
+
+    /// iPhone: one pane at a time — mailboxes → messages → the message.
+    private var compactPanes: some View {
+        NavigationStack {
+            mailboxPane
+                .navigationTitle("Mailboxes")
+                .navigationDestination(item: $selection) { _ in
+                    messageListPane
+                        .navigationTitle(compactListTitle)
+                        .inlineNavigationTitle()
+                        .navigationDestination(item: $selectedMessage) { _ in
+                            detailPane
+                                .inlineNavigationTitle()
+                        }
+                }
+        }
+    }
+
+    /// Title for the message-list screen on iPhone.
+    private var compactListTitle: String {
+        switch selection {
+        case .unified(let box): return box.title
+        case .mailbox(let box):
+            return mailboxes.first { $0.accountID == box.accountID && $0.path == box.path }?.displayName ?? box.path
+        case .smart(let id): return smartMailboxes.first { $0.id == id }?.name ?? "Smart Mailbox"
+        case .tag(let id): return tagsStore?.tags.first { $0.id == id }?.name ?? "Tag"
+        case nil: return "Mail"
+        }
+    }
 
     private var mailboxPane: some View {
         VStack(alignment: .leading, spacing: 0) {

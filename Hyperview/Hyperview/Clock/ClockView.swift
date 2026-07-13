@@ -196,6 +196,15 @@ private struct TimerView: View {
     }
 
     private var wheels: some View {
+        #if os(iOS)
+        // iOS has real wheel pickers — the native way to set a duration.
+        HStack(spacing: 0) {
+            wheel("hours", range: 0...23, selection: $hours)
+            wheel("min", range: 0...59, selection: $minutes)
+            wheel("sec", range: 0...59, selection: $seconds)
+        }
+        .frame(height: 170)
+        #else
         HStack(alignment: .center, spacing: Theme.Spacing.lg) {
             field("hours", range: 0...23, selection: $hours)
             colon
@@ -203,8 +212,25 @@ private struct TimerView: View {
             colon
             field("sec", range: 0...59, selection: $seconds)
         }
+        #endif
     }
 
+    #if os(iOS)
+    private func wheel(_ label: String, range: ClosedRange<Int>, selection: Binding<Int>) -> some View {
+        VStack(spacing: 2) {
+            Picker(label, selection: selection) {
+                ForEach(Array(range), id: \.self) { Text("\($0)").tag($0) }
+            }
+            .pickerStyle(.wheel)
+            .labelsHidden()
+            Text(label)
+                .font(Theme.Font.cardCaption)
+                .foregroundStyle(Theme.Palette.textSecondary)
+        }
+    }
+    #endif
+
+    #if os(macOS)
     private var colon: some View {
         Text(":")
             .font(.system(size: 40, weight: .light, design: .monospaced))
@@ -228,6 +254,7 @@ private struct TimerView: View {
                 .foregroundStyle(Theme.Palette.textSecondary)
         }
     }
+    #endif
 
     private func start() {
         let duration = configuredSeconds

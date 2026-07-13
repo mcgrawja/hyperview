@@ -24,6 +24,7 @@ struct NotesView: View {
     @State private var showingNoteLinkPicker = false
     @State private var renamingFolder: Folder?
     @State private var renameText = ""
+    @Environment(\.isCompactLayout) private var isCompact
 
     private var store: NotesStore { NotesStore(context: context) }
 
@@ -43,11 +44,26 @@ struct NotesView: View {
     }
 
     var body: some View {
-        PlatformHSplit {
-            listPane
-                .frame(minWidth: 240, idealWidth: 280, maxWidth: 360)
-            editorPane
-                .frame(minWidth: 380)
+        Group {
+            if isCompact {
+                // iPhone: note list, drill into the editor.
+                NavigationStack {
+                    listPane
+                        .navigationTitle("Notes")
+                        .navigationDestination(item: $selectedNote) { note in
+                            NoteEditorHost(note: note)
+                                .id(note.id)
+                                .inlineNavigationTitle()
+                        }
+                }
+            } else {
+                PlatformHSplit {
+                    listPane
+                        .frame(minWidth: 240, idealWidth: 280, maxWidth: 360)
+                    editorPane
+                        .frame(minWidth: 380)
+                }
+            }
         }
         .background(Theme.Palette.background)
         .navigationTitle("Notes")

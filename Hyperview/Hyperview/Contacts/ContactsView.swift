@@ -27,6 +27,20 @@ struct ContactsView: View {
     @State private var selectedGroupID: String?
     @State private var creatingGroup = false
     @State private var newGroupName = ""
+    @Environment(\.isCompactLayout) private var isCompact
+    /// iPhone: pushes the contact list after picking a group/tag.
+    @State private var showingCompactList = false
+
+    /// Title of the pushed contact list on iPhone.
+    private var compactListTitle: String {
+        if let selectedGroupID, let group = groups.first(where: { $0.id == selectedGroupID }) {
+            return group.name
+        }
+        if let selectedTagID, let tag = allTags.first(where: { $0.id == selectedTagID }) {
+            return tag.name
+        }
+        return "All Contacts"
+    }
 
     var body: some View {
         Group {
@@ -40,11 +54,24 @@ struct ContactsView: View {
             case .blocked:
                 CenteredMessage { BlockedPrompt(moduleName: "Contacts") }
             case .ready:
-                PlatformHSplit {
-                    groupsPane
-                        .frame(minWidth: 160, idealWidth: 190, maxWidth: 260)
-                    list
-                        .frame(minWidth: 360)
+                if isCompact {
+                    // iPhone: the groups/tags pane becomes a drill-down root.
+                    NavigationStack {
+                        groupsPane
+                            .navigationTitle("Groups")
+                            .navigationDestination(isPresented: $showingCompactList) {
+                                list
+                                    .navigationTitle(compactListTitle)
+                                    .inlineNavigationTitle()
+                            }
+                    }
+                } else {
+                    PlatformHSplit {
+                        groupsPane
+                            .frame(minWidth: 160, idealWidth: 190, maxWidth: 260)
+                        list
+                            .frame(minWidth: 360)
+                    }
                 }
             }
         }
@@ -111,6 +138,7 @@ struct ContactsView: View {
                         ForEach(allTags) { tag in
                             Button {
                                 selectedTagID = selectedTagID == tag.id ? nil : tag.id
+                                if isCompact, selectedTagID != nil { showingCompactList = true }
                             } label: {
                                 HStack(spacing: Theme.Spacing.sm) {
                                     Circle()
@@ -137,6 +165,8 @@ struct ContactsView: View {
     private func groupRow(_ groupID: String?, label: String, systemImage: String) -> some View {
         Button {
             selectedGroupID = groupID
+            selectedTagID = nil
+            if isCompact { showingCompactList = true }
             Task { await load() }
         } label: {
             HStack(spacing: Theme.Spacing.sm) {

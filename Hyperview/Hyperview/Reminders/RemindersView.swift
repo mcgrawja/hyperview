@@ -23,6 +23,7 @@ struct RemindersView: View {
     @State private var creatingList = false
     @State private var newListName = ""
     @State private var saveError: String?
+    @Environment(\.isCompactLayout) private var isCompact
 
     var body: some View {
         Group {
@@ -111,22 +112,37 @@ struct RemindersView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            if let selected = reminders.first(where: { $0.id == selectedID }) {
+            // Mac/iPad: the editor is a side panel. iPhone: it's a sheet
+            // (a 300pt panel next to the columns won't fit a phone).
+            if !isCompact, let selected = reminders.first(where: { $0.id == selectedID }) {
                 Divider().overlay(Theme.Palette.separator)
-                ReminderDetailPanel(
-                    reminder: selected,
-                    lists: lists,
-                    onSave: { draft in Task { await save(draft, original: selected) } },
-                    onDelete: { Task { await delete(selected) } },
-                    onClose: { selectedID = nil }
-                )
-                .frame(width: 300)
-                // Re-init the panel when the reminder's stored fields change
-                // externally (e.g. a completed list move), not just on
-                // selection change — otherwise the draft goes stale.
-                .id("\(selected.id)|\(selected.listID)|\(selected.isCompleted)")
+                detailPanel(selected)
+                    .frame(width: 300)
             }
         }
+        .sheet(isPresented: .init(
+            get: { isCompact && selectedID != nil },
+            set: { if !$0 { selectedID = nil } }
+        )) {
+            if let selected = reminders.first(where: { $0.id == selectedID }) {
+                detailPanel(selected)
+            }
+        }
+    }
+
+    /// The reminder editor — a side panel on Mac/iPad, a sheet on iPhone.
+    private func detailPanel(_ selected: ReminderSnapshot) -> some View {
+        ReminderDetailPanel(
+            reminder: selected,
+            lists: lists,
+            onSave: { draft in Task { await save(draft, original: selected) } },
+            onDelete: { Task { await delete(selected) } },
+            onClose: { selectedID = nil }
+        )
+        // Re-init when the reminder's stored fields change externally (e.g. a
+        // completed list move), not just on selection change — otherwise the
+        // draft goes stale.
+        .id("\(selected.id)|\(selected.listID)|\(selected.isCompleted)")
     }
 
     // MARK: Data

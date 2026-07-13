@@ -68,12 +68,15 @@ struct ContentView: View {
                             .tag(item)
                     }
                 }
-                Section("Coming soon") {
-                    ForEach(SidebarItem.upcoming) { item in
-                        Label(item.title, systemImage: item.systemImage)
-                            .foregroundStyle(Theme.Palette.textSecondary)
+                // Only render the header when something is actually queued.
+                if !SidebarItem.upcoming.isEmpty {
+                    Section("Coming soon") {
+                        ForEach(SidebarItem.upcoming) { item in
+                            Label(item.title, systemImage: item.systemImage)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                        }
+                        .selectionDisabled()
                     }
-                    .selectionDisabled()
                 }
             }
             .navigationTitle("Unifyr")
