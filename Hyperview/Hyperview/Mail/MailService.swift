@@ -31,11 +31,20 @@ final class MailService {
     @ObservationIgnored var context: ModelContext?
     /// One live IMAP connection per account.
     @ObservationIgnored private var clients: [UUID: IMAPClient] = [:]
+    /// Accounts with a connect attempt in flight (see `connect`).
+    @ObservationIgnored private var connecting: Set<UUID> = []
 
     // MARK: Connection
 
     func connect(_ account: MailAccount) async {
         guard clients[account.id] == nil else { return }
+        // The client is only filed once login succeeds, so a slow connect lets
+        // the next caller start a SECOND one behind it (three piled up on the
+        // first iPhone run). Hold the slot for the whole attempt.
+        guard !connecting.contains(account.id) else { return }
+        connecting.insert(account.id)
+        defer { connecting.remove(account.id) }
+
         guard var password = MailKeychain.password(for: account.id) else {
             // On a device that just pulled this account from iCloud, the config
             // can land before iCloud Keychain hands over the password — say so,
@@ -72,8 +81,9 @@ final class MailService {
             await syncMailboxes(account)
         } catch {
             MailLog.log("[Mail] connect/login error (\(account.emailAddress)): \(error)")
-            status = .error("\(account.emailAddress): \(describe(error))")
-            accountErrors[account.id] = "\(account.emailAddress): \(describe(error))"
+            let message = connectFailureMessage(account, error)
+            status = .error(message)
+            accountErrors[account.id] = message
         }
     }
 
@@ -499,7 +509,22 @@ final class MailService {
         case MailError.connectionClosed: return "The server closed the connection."
         case MailError.notConnected: return "Not connected."
         case MailError.commandFailed(let m): return "Server error: \(m)"
+        case MailError.timeout: return "Couldn't reach the server."
         default: return error.localizedDescription
+        }
+    }
+
+    /// A failed connect is nearly always a wrong server name — the setup screen
+    /// guesses `imap.<your-domain>`, which doesn't exist for a domain whose mail
+    /// is actually hosted elsewhere (an iCloud or Google custom domain). Say that,
+    /// instead of leaving a bare "Couldn't reach the server".
+    private func connectFailureMessage(_ account: MailAccount, _ error: Error) -> String {
+        let base = "\(account.emailAddress): \(describe(error))"
+        switch error {
+        case MailError.timeout, MailError.connectionClosed:
+            return base + " Check the IMAP server in this account's settings — “\(account.imapHost)” may not exist. If your domain's mail is hosted by iCloud use imap.mail.me.com, or by Google, imap.gmail.com."
+        default:
+            return base
         }
     }
 }

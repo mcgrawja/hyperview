@@ -54,15 +54,50 @@ actor SocketConnection {
         try await startConnection(connection)
     }
 
+    /// Seconds to wait for the connection to come up before giving up. Without
+    /// this the app hangs forever on an unreachable host — see `.waiting` below.
+    private static let connectTimeout: TimeInterval = 20
+
     private func startConnection(_ conn: NWConnection) async throws {
         let once = Once()
+        // Locals: the callbacks run on `queue`, outside this actor.
+        let host = self.host
+        let port = self.port
+        let queue = self.queue
+
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            // DispatchWorkItem isn't Sendable, but the deadline and the state
+            // handler both run on the same serial `queue` and `Once` guards the
+            // resume — same pattern as receiveMore's read timeout.
+            nonisolated(unsafe) let deadline = DispatchWorkItem {
+                once.fire {
+                    MailLog.log("[Mail] connect to \(host):\(port) gave up after \(Int(Self.connectTimeout))s")
+                    conn.cancel()
+                    cont.resume(throwing: MailError.timeout)
+                }
+            }
+            queue.asyncAfter(deadline: .now() + Self.connectTimeout, execute: deadline)
+
             conn.stateUpdateHandler = { state in
                 switch state {
-                case .ready: once.fire { cont.resume() }
-                case .failed(let error): once.fire { cont.resume(throwing: error) }
-                case .cancelled: once.fire { cont.resume(throwing: MailError.connectionClosed) }
-                default: break
+                case .ready:
+                    deadline.cancel()
+                    once.fire { cont.resume() }
+                case .failed(let error):
+                    deadline.cancel()
+                    once.fire { cont.resume(throwing: error) }
+                case .cancelled:
+                    deadline.cancel()
+                    once.fire { cont.resume(throwing: MailError.connectionClosed) }
+                case .waiting(let error):
+                    // NWConnection does NOT fail on an unreachable host — a bad
+                    // DNS name or a dead route parks it here and it retries
+                    // forever. Left unhandled, the UI just says "Connecting…"
+                    // with nothing to report. Log the reason; the deadline above
+                    // turns it into a real error.
+                    MailLog.log("[Mail] connect to \(host):\(port) waiting — \(error)")
+                default:
+                    break
                 }
             }
             conn.start(queue: queue)

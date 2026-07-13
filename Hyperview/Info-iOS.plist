@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- iOS-only Info.plist additions. GENERATE_INFOPLIST_FILE stays YES and Xcode
+	     merges its generated keys into this file, so only the extras live here.
+
+	     remote-notification: CloudKit delivers record changes by silent push.
+	     Without this background mode CoreData/CloudKit logs "BUG IN CLIENT OF
+	     CLOUDKIT: CloudKit push notifications require the 'remote-notification'
+	     background mode" and notes/tags only sync when the app is foregrounded,
+	     instead of live. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+</dict>
+</plist>
