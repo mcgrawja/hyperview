@@ -119,7 +119,11 @@ actor SocketConnection {
             let once = Once()
             // Timer and receive callback both run on the serial `queue`, so the
             // Once guard needs no additional synchronization.
-            let timer = DispatchWorkItem { once.fire { cont.resume(throwing: MailError.timeout) } }
+            // DispatchWorkItem isn't Sendable, but timer + receive callback both
+            // run on the same serial `queue` and `Once` guards the resume.
+            nonisolated(unsafe) let timer = DispatchWorkItem {
+                once.fire { cont.resume(throwing: MailError.timeout) }
+            }
             queue.asyncAfter(deadline: .now() + timeout, execute: timer)
             conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, isComplete, error in
                 timer.cancel()

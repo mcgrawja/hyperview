@@ -58,7 +58,8 @@ actor MCPHTTPServer {
     // MARK: - Connection handling
 
     private func handle(_ connection: NWConnection) async {
-        nonisolated(unsafe) let conn = connection
+        // NWConnection is Sendable — no nonisolated(unsafe) needed.
+        let conn = connection
         conn.start(queue: DispatchQueue(label: "com.mcgraw.Hyperview.mcp.conn"))
 
         var buffer = Data()

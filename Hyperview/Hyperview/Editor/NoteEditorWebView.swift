@@ -149,45 +149,46 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     // MARK: JS -> Swift
 
-    nonisolated func userContentController(
+    /// WebKit delivers script messages on the main actor (and WKScriptMessage's
+    /// properties are main-actor isolated), so this stays MainActor-isolated
+    /// with the class — no `nonisolated` + assumeIsolated dance needed.
+    func userContentController(
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
         guard let body = message.body as? [String: Any],
               let type = body["type"] as? String else { return }
 
-        MainActor.assumeIsolated {
-            switch type {
-            case "ready":
-                isReady = true
-                if let note { loadDocument(for: note) }
+        switch type {
+        case "ready":
+            isReady = true
+            if let note { loadDocument(for: note) }
 
-            case "documentChanged":
-                guard let note,
-                      let docObject = body["doc"],
-                      let data = try? JSONSerialization.data(withJSONObject: docObject) else { return }
-                let document = BlockSerializer.decodeDocument(data)
-                store.save(document, to: note)
-                try? store.context.save()
+        case "documentChanged":
+            guard let note,
+                  let docObject = body["doc"],
+                  let data = try? JSONSerialization.data(withJSONObject: docObject) else { return }
+            let document = BlockSerializer.decodeDocument(data)
+            store.save(document, to: note)
+            try? store.context.save()
 
-            case "blockAction":
-                // Persisted via the following documentChanged; logged here for the
-                // future in-app audit view (§7 safety defaults).
-                break
+        case "blockAction":
+            // Persisted via the following documentChanged; logged here for the
+            // future in-app audit view (§7 safety defaults).
+            break
 
-            case "requestNoteLink":
-                // The picker lives in NotesView (it has the note list).
-                NotificationCenter.default.post(name: .hyperviewRequestNoteLink, object: nil)
+        case "requestNoteLink":
+            // The picker lives in NotesView (it has the note list).
+            NotificationCenter.default.post(name: .hyperviewRequestNoteLink, object: nil)
 
-            case "requestFileLink":
-                pickFileLink()
+        case "requestFileLink":
+            pickFileLink()
 
-            case "openLink":
-                if let href = body["href"] as? String { openLink(href) }
+        case "openLink":
+            if let href = body["href"] as? String { openLink(href) }
 
-            default:
-                break
-            }
+        default:
+            break
         }
     }
 

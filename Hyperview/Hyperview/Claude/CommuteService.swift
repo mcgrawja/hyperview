@@ -20,8 +20,8 @@ nonisolated enum CommuteService {
               let destination = await geocode(target.location) else { return nil }
 
         let request = MKDirections.Request()
-        request.source = MKMapItem(placemark: MKPlacemark(coordinate: home))
-        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: destination))
+        request.source = home
+        request.destination = destination
         request.transportType = .automobile
 
         guard let eta = try? await MKDirections(request: request).calculateETA() else { return nil }
@@ -52,10 +52,11 @@ nonisolated enum CommuteService {
         return nil
     }
 
-    private static func geocode(_ query: String) async -> CLLocationCoordinate2D? {
-        let geocoder = CLGeocoder()
-        guard let placemark = try? await geocoder.geocodeAddressString(query).first,
-              let location = placemark.location else { return nil }
-        return location.coordinate
+    /// MKGeocodingRequest (macOS 26) — replaces the deprecated CLGeocoder. The
+    /// resulting MKMapItem is what MKDirections wants anyway, so no
+    /// coordinate/placemark round-trip is needed.
+    private static func geocode(_ query: String) async -> MKMapItem? {
+        guard let request = MKGeocodingRequest(addressString: query) else { return nil }
+        return (try? await request.mapItems)?.first
     }
 }

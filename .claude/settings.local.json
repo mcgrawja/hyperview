@@ -83,7 +83,9 @@
       "Bash(ssh-add -l)",
       "Bash(getent passwd *)",
       "Bash(dscl . -read /Users/mcgrawja RecordName)",
-      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=8 -T git@github.com)"
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=8 -T git@github.com)",
+      "Bash(xcrun --show-sdk-path --sdk macosx)",
+      "Bash(grep -nE 'initWithLocation|@property.*location|@property.*address|MKAddress \\\\*' __TRACKED_VAR__/MKMapItem.h)"
     ]
   }
 }

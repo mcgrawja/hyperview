@@ -10,6 +10,7 @@
 
 import SwiftUI
 import CoreLocation
+import MapKit
 
 struct RemindersView: View {
     @Environment(\.brokers) private var brokers
@@ -190,8 +191,10 @@ struct RemindersView: View {
             let changed = locationText != (original.locationTitle ?? "")
                 || draft.locationProximity != (original.locationProximity ?? "enter")
             if changed {
-                if let placemark = try? await CLGeocoder().geocodeAddressString(locationText).first,
-                   let coordinate = placemark.location?.coordinate {
+                // MKGeocodingRequest (macOS 26) — CLGeocoder is deprecated.
+                if let request = MKGeocodingRequest(addressString: locationText),
+                   let item = (try? await request.mapItems)?.first {
+                    let coordinate = item.location.coordinate
                     location = ReminderLocation(
                         title: locationText,
                         latitude: coordinate.latitude,

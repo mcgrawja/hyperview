@@ -9,6 +9,7 @@
 
 import Foundation
 import CoreLocation
+import MapKit
 
 nonisolated struct WeatherSlot: Sendable, Identifiable {
     let id: Int            // hour offset from today 00:00 (6, 9, … 24)
@@ -44,13 +45,14 @@ nonisolated enum WeatherService {
     // MARK: - Open-Meteo calls
 
     /// Apple's geocoder handles "City, ST" natively and requires no location
-    /// permission (it's a network lookup, not device location).
+    /// permission (it's a network lookup, not device location). Uses
+    /// MKGeocodingRequest (macOS 26); CLGeocoder is deprecated.
     private static func geocode(_ query: String) async -> (Double, Double, String)? {
-        let geocoder = CLGeocoder()
-        guard let placemark = try? await geocoder.geocodeAddressString(query).first,
-              let location = placemark.location else { return nil }
-        let name = placemark.locality ?? placemark.name ?? query
-        return (location.coordinate.latitude, location.coordinate.longitude, name)
+        guard let request = MKGeocodingRequest(addressString: query),
+              let item = (try? await request.mapItems)?.first else { return nil }
+        let coordinate = item.location.coordinate
+        let name = item.name ?? query
+        return (coordinate.latitude, coordinate.longitude, name)
     }
 
     private static func forecast(lat: Double, lon: Double, name: String) async throws -> DayWeather? {

@@ -181,7 +181,7 @@ final class BriefingService {
             throw ClaudeChatError.transport
         }
         if let usage = parsed["usage"] as? [String: Any] {
-            await UsageLedger.record(
+            UsageLedger.record(
                 model: model,
                 input: (usage["input_tokens"] as? Int) ?? 0,
                 output: (usage["output_tokens"] as? Int) ?? 0,
