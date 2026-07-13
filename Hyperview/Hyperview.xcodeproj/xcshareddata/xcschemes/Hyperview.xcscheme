@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "B23E825E2FFDC475008090C6"
-               BuildableName = "Hyperview.app"
+               BuildableName = "Unifyr.app"
                BlueprintName = "Hyperview"
                ReferencedContainer = "container:Hyperview.xcodeproj">
             </BuildableReference>
@@ -70,7 +70,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "B23E825E2FFDC475008090C6"
-            BuildableName = "Hyperview.app"
+            BuildableName = "Unifyr.app"
             BlueprintName = "Hyperview"
             ReferencedContainer = "container:Hyperview.xcodeproj">
          </BuildableReference>
@@ -87,7 +87,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "B23E825E2FFDC475008090C6"
-            BuildableName = "Hyperview.app"
+            BuildableName = "Unifyr.app"
             BlueprintName = "Hyperview"
             ReferencedContainer = "container:Hyperview.xcodeproj">
          </BuildableReference>
