@@ -542,7 +542,7 @@ private struct ReminderDetailPanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     Toggle("Completed", isOn: $draft.isCompleted)
-                        .toggleStyle(.checkbox)
+                        .platformCheckbox()
 
                     VStack(alignment: .leading, spacing: 4) {
                         fieldLabel("Title")
@@ -562,7 +562,7 @@ private struct ReminderDetailPanel: View {
 
                     VStack(alignment: .leading, spacing: 4) {
                         Toggle("Due Date", isOn: $draft.hasDueDate)
-                            .toggleStyle(.checkbox)
+                            .platformCheckbox()
                         if draft.hasDueDate {
                             DatePicker("", selection: $draft.dueDate)
                                 .labelsHidden()
@@ -599,7 +599,7 @@ private struct ReminderDetailPanel: View {
 
                     VStack(alignment: .leading, spacing: 4) {
                         Toggle("Location", isOn: $draft.hasLocation)
-                            .toggleStyle(.checkbox)
+                            .platformCheckbox()
                         if draft.hasLocation {
                             TextField("Address or place", text: $draft.locationText)
                                 .textFieldStyle(.roundedBorder)

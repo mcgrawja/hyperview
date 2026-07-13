@@ -1,3 +1,4 @@
+#if os(macOS)
 //
 //  DriveLocations.swift
 //  Unifyr
@@ -89,3 +90,5 @@ final class DriveLocations {
         }
     }
 }
+
+#endif

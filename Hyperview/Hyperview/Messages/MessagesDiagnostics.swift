@@ -1,3 +1,4 @@
+#if os(macOS)
 //
 //  MessagesDiagnostics.swift
 //  Hyperview
@@ -61,3 +62,5 @@ nonisolated enum MessagesDiagnostics {
         }
     }
 }
+
+#endif

@@ -899,7 +899,7 @@ struct EventEditorView: View {
             TextField("Title", text: $title).textFieldStyle(.roundedBorder)
             TextField("Location", text: $location).textFieldStyle(.roundedBorder)
 
-            Toggle("All-day", isOn: $isAllDay).toggleStyle(.checkbox)
+            Toggle("All-day", isOn: $isAllDay).platformCheckbox()
             DatePicker(
                 "Starts",
                 selection: $start,

@@ -1,3 +1,4 @@
+#if os(macOS)
 //
 //  DriveView.swift
 //  Hyperview
@@ -669,3 +670,5 @@ private struct DriveRow: View {
         .contentShape(Rectangle())
     }
 }
+
+#endif

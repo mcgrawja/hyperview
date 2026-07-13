@@ -378,7 +378,7 @@ private struct AlarmEditor: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
             Text("Alarm").font(Theme.Font.cardTitle)
             DatePicker("Time", selection: timeBinding, displayedComponents: .hourAndMinute)
-                .datePickerStyle(.field)
+                .platformFieldDatePicker()
             TextField("Label", text: $alarm.label).textFieldStyle(.roundedBorder)
             Toggle("Repeat daily", isOn: $alarm.repeatsDaily)
             HStack {

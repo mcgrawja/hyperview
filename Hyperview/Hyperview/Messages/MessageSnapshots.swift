@@ -1,3 +1,4 @@
+#if os(macOS)
 //
 //  MessageSnapshots.swift
 //  Hyperview
@@ -72,3 +73,5 @@ nonisolated struct MessageSnapshot: Identifiable, Sendable, Hashable, Codable {
 
     var isSMS: Bool { service.caseInsensitiveCompare("SMS") == .orderedSame }
 }
+
+#endif

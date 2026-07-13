@@ -152,13 +152,22 @@ struct LimitedAccessHint: View {
             Text("\(moduleName) access is limited to selected items.")
                 .font(Theme.Font.cardCaption)
             Button("Grant Full Access…") {
+                // macOS opens the exact Privacy pane; iOS can only open Settings.
                 #if os(macOS)
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(settingsAnchor)") {
-                    NSWorkspace.shared.open(url)
+                    PlatformKit.open(url)
+                }
+                #else
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    PlatformKit.open(url)
                 }
                 #endif
             }
+            #if os(macOS)
             .buttonStyle(.link)
+            #else
+            .buttonStyle(.plain)
+            #endif
             .font(Theme.Font.cardCaption)
             Spacer(minLength: 0)
         }

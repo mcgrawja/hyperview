@@ -142,7 +142,7 @@ private struct MailModuleContent: View {
         // Default proportions: mailbox list ~20%, message list ~30%, reading
         // pane the remainder (~50%). Panes stay user-draggable within minimums.
         GeometryReader { geometry in
-            HSplitView {
+            PlatformHSplit {
                 mailboxPane
                     .frame(minWidth: 105, idealWidth: geometry.size.width * 0.049, maxWidth: 300)
                 messageListPane
@@ -378,10 +378,13 @@ private struct MailModuleContent: View {
                 }
             }
             .listStyle(.inset)
+            // Delete key — macOS only (iOS uses swipe-to-delete, Phase 2).
+            #if os(macOS)
             .onDeleteCommand {
                 guard let message = selectedMessage else { return }
                 Task { await deleteMessage(message) }
             }
+            #endif
         }
         .background(Theme.Palette.surface)
     }

@@ -40,7 +40,7 @@ struct ContactsView: View {
             case .blocked:
                 CenteredMessage { BlockedPrompt(moduleName: "Contacts") }
             case .ready:
-                HSplitView {
+                PlatformHSplit {
                     groupsPane
                         .frame(minWidth: 160, idealWidth: 190, maxWidth: 260)
                     list

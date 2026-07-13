@@ -43,7 +43,7 @@ struct NotesView: View {
     }
 
     var body: some View {
-        HSplitView {
+        PlatformHSplit {
             listPane
                 .frame(minWidth: 240, idealWidth: 280, maxWidth: 360)
             editorPane

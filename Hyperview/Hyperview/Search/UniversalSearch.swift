@@ -11,7 +11,6 @@
 
 import SwiftUI
 import SwiftData
-import AppKit
 
 extension Notification.Name {
     static let hyperviewOpenMailMessage = Notification.Name("hyperview.openMailMessage")
@@ -41,7 +40,10 @@ struct UniversalSearchView: View {
     @Environment(\.modelContext) private var notesContext
     @Environment(\.mailContainer) private var mailContainer
     @Environment(\.brokers) private var brokers
+    // Messages + Drive are Mac-only, so their search paths are too.
+    #if os(macOS)
     @Environment(\.messagesDB) private var messagesDB
+    #endif
 
     @State private var query = ""
     @State private var hits: [SearchHit] = []
@@ -147,8 +149,10 @@ struct UniversalSearchView: View {
         results += await searchEvents(text)
         results += await searchReminders(text)
         results += await searchContacts(text)
+        #if os(macOS)
         results += await searchChats(text)
         results += await searchFiles(text)
+        #endif
         guard !Task.isCancelled else { return }
         hits = results
     }
@@ -250,6 +254,7 @@ struct UniversalSearchView: View {
         }
     }
 
+    #if os(macOS)
     private func searchChats(_ text: String) async -> [SearchHit] {
         guard let messagesDB, await messagesDB.hasAccess() else { return [] }
         let chats = await messagesDB.chats()
@@ -325,4 +330,5 @@ struct UniversalSearchView: View {
             )
         }
     }
+    #endif
 }

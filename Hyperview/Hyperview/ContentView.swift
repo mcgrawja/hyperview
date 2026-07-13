@@ -9,12 +9,15 @@
 //
 
 import SwiftUI
-import AppKit
 
 struct ContentView: View {
-    @State private var selection: SidebarItem = .dashboard
+    // Optional: iOS's List/NavigationSplitView require an optional selection
+    // binding (macOS tolerates a non-optional one).
+    @State private var selection: SidebarItem? = .dashboard
     @Environment(\.mailService) private var mailService
+    #if os(macOS)
     @Environment(\.messagesDB) private var messagesDB
+    #endif
     @Environment(\.notificationCoordinator) private var notificationCoordinator
     @State private var messagesUnread = 0
     @State private var showingSearch = false
@@ -25,7 +28,7 @@ struct ContentView: View {
     /// (its onReceive registers on appear).
     private func handleSearchHit(_ hit: SearchHit) {
         if let revealURL = hit.revealURL {
-            NSWorkspace.shared.activateFileViewerSelecting([revealURL])
+            PlatformKit.reveal(revealURL)
             return
         }
         selection = hit.module
@@ -79,9 +82,11 @@ struct ContentView: View {
             // silently 0 until Full Disk Access is granted.
             .task {
                 while !Task.isCancelled {
+                    #if os(macOS)
                     messagesUnread = await messagesDB?.unreadCount() ?? 0
+                    #endif
                     // Drive the notification hub from the same tick: message
-                    // arrivals, reminder/event scheduling, Dock badge.
+                    // arrivals, reminder/event scheduling, app badge.
                     if let coordinator = notificationCoordinator {
                         coordinator.cachedMessagesUnread = messagesUnread
                         await coordinator.tick()
@@ -137,7 +142,9 @@ struct ContentView: View {
                 TagManagerView()
             }
         } detail: {
-            switch selection {
+            // nil (nothing selected, possible on iPhone's stacked nav) shows
+            // the Dashboard.
+            switch selection ?? .dashboard {
             case .dashboard:
                 DashboardView()
             case .calendar:
@@ -147,13 +154,23 @@ struct ContentView: View {
             case .notes:
                 NotesView()
             case .drive:
+                // Deferred on iOS (no Finder / Finder tags) — Phase 5.
+                #if os(macOS)
                 DriveView()
+                #else
+                EmptyView()
+                #endif
             case .contacts:
                 ContactsView()
             case .mail:
                 MailView()
             case .messages:
+                // Mac-only (chat.db + Messages automation don't exist on iOS).
+                #if os(macOS)
                 MessagesView()
+                #else
+                EmptyView()
+                #endif
             case .clock:
                 ClockView()
             case .photos:
@@ -213,11 +230,11 @@ enum SidebarItem: String, Identifiable, CaseIterable {
         }
     }
 
-    // iOS/iPadOS drops Messages (Mac-only) and shows Clock in its place;
-    // macOS keeps both.
+    // iOS/iPadOS drops Messages (Mac-only; Clock takes its place) and Drive
+    // (no Finder — deferred); macOS keeps everything.
     static var available: [SidebarItem] {
         #if os(iOS)
-        [.dashboard, .mail, .clock, .reminders, .calendar, .notes, .drive, .photos, .contacts, .claude]
+        [.dashboard, .mail, .clock, .reminders, .calendar, .notes, .photos, .contacts, .claude]
         #else
         [.dashboard, .mail, .messages, .clock, .reminders, .calendar, .notes, .drive, .photos, .contacts, .claude]
         #endif

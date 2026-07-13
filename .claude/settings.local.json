@@ -85,7 +85,9 @@
       "Bash(dscl . -read /Users/mcgrawja RecordName)",
       "Bash(ssh -o BatchMode=yes -o ConnectTimeout=8 -T git@github.com)",
       "Bash(xcrun --show-sdk-path --sdk macosx)",
-      "Bash(grep -nE 'initWithLocation|@property.*location|@property.*address|MKAddress \\\\*' __TRACKED_VAR__/MKMapItem.h)"
+      "Bash(grep -nE 'initWithLocation|@property.*location|@property.*address|MKAddress \\\\*' __TRACKED_VAR__/MKMapItem.h)",
+      "Bash(xcrun simctl *)",
+      "Bash(xargs sed -i '' 's/\\\\.toggleStyle\\(\\\\.checkbox\\)/.platformCheckbox\\(\\)/g')"
     ]
   }
 }

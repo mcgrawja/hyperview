@@ -221,11 +221,14 @@ struct ClaudeChatView: View {
                                 .buttonStyle(.borderedProminent)
                                 .tint(Theme.Palette.claude)
                             Button("Get a key at console.anthropic.com") {
-                                #if os(macOS)
-                                NSWorkspace.shared.open(URL(string: "https://console.anthropic.com/settings/keys")!)
-                                #endif
+                                PlatformKit.open(URL(string: "https://console.anthropic.com/settings/keys")!)
                             }
+                            #if os(macOS)
                             .buttonStyle(.link)
+                            #else
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Theme.Palette.primary)
+                            #endif
                         }
                     }
                 }
@@ -282,7 +285,12 @@ struct ClaudeSettingsView: View {
                     }
                 }
                 .labelsHidden()
+                // radioGroup is macOS-only; iOS gets an inline list.
+                #if os(macOS)
                 .pickerStyle(.radioGroup)
+                #else
+                .pickerStyle(.inline)
+                #endif
             }
 
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {

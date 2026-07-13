@@ -20,7 +20,9 @@ struct HyperviewApp: App {
     private let mailService: MailService
     private let mcp: MCPController
     private let claudeChat: ClaudeChatController
+    #if os(macOS)
     private let messagesDB = MessagesDatabase()
+    #endif
     private let tagsStore: TagsStore
     private let notificationCoordinator: NotificationCoordinator
 
@@ -37,7 +39,9 @@ struct HyperviewApp: App {
         CloudKitSchemaSeeder.initializeIfNeeded()
 
         // TEMPORARY: Messages module bring-up probe (see MessagesDiagnostics).
+        #if os(macOS)
         MessagesDiagnostics.run()
+        #endif
 
         // Unify Mail's old tag data into the universal system, then stand up
         // the shared tags window (Mail + rules use it; other modules @Query).
@@ -60,11 +64,18 @@ struct HyperviewApp: App {
         service.startAutoRefresh()
         mailService = service
 
+        #if os(macOS)
         notificationCoordinator = NotificationCoordinator(
             brokers: brokers,
             messagesDB: messagesDB,
             mailService: service
         )
+        #else
+        notificationCoordinator = NotificationCoordinator(
+            brokers: brokers,
+            mailService: service
+        )
+        #endif
 
         mcp = MCPController(
             brokers: brokers,
@@ -88,7 +99,9 @@ struct HyperviewApp: App {
                 .environment(\.mcp, mcp)
                 .environment(\.automationContainer, automationContainer)
                 .environment(\.claudeChat, claudeChat)
+                #if os(macOS)
                 .environment(\.messagesDB, messagesDB)
+                #endif
                 .environment(\.tagsStore, tagsStore)
                 .environment(\.notificationCoordinator, notificationCoordinator)
         }

@@ -1,3 +1,4 @@
+#if os(macOS)
 //
 //  MessagesView.swift
 //  Unifyr
@@ -883,3 +884,5 @@ private struct NewMessageSheet: View {
         }
     }
 }
+
+#endif

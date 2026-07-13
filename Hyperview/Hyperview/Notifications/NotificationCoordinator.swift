@@ -17,7 +17,9 @@ import SwiftUI
 @Observable
 final class NotificationCoordinator {
     private let brokers: Brokers
+    #if os(macOS)
     private let messagesDB: MessagesDatabase?
+    #endif
     private weak var mailService: MailService?
 
     /// High-water ROWID for new-message detection (0 = not yet baselined).
@@ -31,11 +33,18 @@ final class NotificationCoordinator {
 
     private(set) var remindersDue = 0
 
+    #if os(macOS)
     init(brokers: Brokers, messagesDB: MessagesDatabase?, mailService: MailService?) {
         self.brokers = brokers
         self.messagesDB = messagesDB
         self.mailService = mailService
     }
+    #else
+    init(brokers: Brokers, mailService: MailService?) {
+        self.brokers = brokers
+        self.mailService = mailService
+    }
+    #endif
 
     /// One poll tick. Called ~every 30s from the app shell.
     func tick() async {
@@ -106,6 +115,7 @@ final class NotificationCoordinator {
     // MARK: New messages → immediate notifications
 
     private func checkMessages() async {
+        #if os(macOS)
         guard let messagesDB else { return }
         let result = await messagesDB.newIncoming(afterRowID: lastMessageRowID)
         let firstBaseline = lastMessageRowID == 0
@@ -120,6 +130,7 @@ final class NotificationCoordinator {
                 threadKey: ping.handle
             )
         }
+        #endif
     }
 
     private func loadNameIndexIfNeeded() async {

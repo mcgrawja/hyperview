@@ -1,3 +1,4 @@
+#if os(macOS)
 //
 //  MessagesDatabase.swift
 //  Hyperview
@@ -570,3 +571,5 @@ nonisolated enum TypedStreamText {
         return nil
     }
 }
+
+#endif

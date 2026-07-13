@@ -184,7 +184,7 @@ struct ContactEditorView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             sectionLabel("BIRTHDAY")
             HStack(spacing: Theme.Spacing.sm) {
-                Toggle("Has birthday", isOn: $hasBirthday).toggleStyle(.checkbox)
+                Toggle("Has birthday", isOn: $hasBirthday).platformCheckbox()
                 if hasBirthday {
                     DatePicker("", selection: $birthday, displayedComponents: .date).labelsHidden()
                 }

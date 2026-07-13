@@ -1,3 +1,4 @@
+#if os(macOS)
 //
 //  MessagesSender.swift
 //  Unifyr
@@ -121,3 +122,5 @@ enum MessagesSender {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 }
+
+#endif

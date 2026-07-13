@@ -18,8 +18,12 @@
 
 import Foundation
 import UserNotifications
-import AppKit
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// The kinds of thing Hyperview notifies about. `symbol`/`tint` drive the
 /// trailing icon; `module` drives tap-to-open routing.
@@ -188,36 +192,51 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         return try? UNNotificationAttachment(identifier: "icon-\(kind.rawValue)", url: copy, options: nil)
     }
 
+    /// Draws the white SF Symbol on a rounded tinted tile. Same artwork on both
+    /// platforms — only the drawing API differs (AppKit vs UIKit).
     private func renderIcon(for kind: NotificationKind) -> URL? {
         let side: CGFloat = 128
         let hex = kind.tintHex
-        let tint = NSColor(
-            srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+        let tint = PlatformColor(
+            red: CGFloat((hex >> 16) & 0xFF) / 255,
             green: CGFloat((hex >> 8) & 0xFF) / 255,
             blue: CGFloat(hex & 0xFF) / 255,
             alpha: 1
         )
+        let symbolConfig = PlatformImage.SymbolConfiguration(pointSize: 68, weight: .semibold)
+        let png: Data?
+
+        #if os(macOS)
         let image = NSImage(size: NSSize(width: side, height: side))
         image.lockFocus()
-        // Rounded tinted tile.
-        let rect = NSRect(x: 0, y: 0, width: side, height: side)
-        let tile = NSBezierPath(roundedRect: rect, xRadius: 28, yRadius: 28)
         tint.setFill()
-        tile.fill()
-        // White SF Symbol centered.
-        let config = NSImage.SymbolConfiguration(pointSize: 68, weight: .semibold)
-            .applying(.init(paletteColors: [.white]))
+        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: side, height: side), xRadius: 28, yRadius: 28).fill()
         if let symbol = NSImage(systemSymbolName: kind.symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(config) {
-            let s = symbol.size
-            let origin = NSPoint(x: (side - s.width) / 2, y: (side - s.height) / 2)
-            symbol.draw(at: origin, from: .zero, operation: .sourceOver, fraction: 1)
+            .withSymbolConfiguration(symbolConfig.applying(.init(paletteColors: [.white]))) {
+            let size = symbol.size
+            symbol.draw(
+                at: NSPoint(x: (side - size.width) / 2, y: (side - size.height) / 2),
+                from: .zero, operation: .sourceOver, fraction: 1
+            )
         }
         image.unlockFocus()
+        png = image.pngData
+        #else
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
+        let image = renderer.image { _ in
+            let rect = CGRect(x: 0, y: 0, width: side, height: side)
+            tint.setFill()
+            UIBezierPath(roundedRect: rect, cornerRadius: 28).fill()
+            if let symbol = UIImage(systemName: kind.symbol, withConfiguration: symbolConfig)?
+                .withTintColor(.white, renderingMode: .alwaysOriginal) {
+                let size = symbol.size
+                symbol.draw(at: CGPoint(x: (side - size.width) / 2, y: (side - size.height) / 2))
+            }
+        }
+        png = image.pngData
+        #endif
 
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        guard let png else { return nil }
         let dir = FileManager.default.temporaryDirectory.appending(path: "hv-notif-icons", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appending(path: "\(kind.rawValue).png")
@@ -245,7 +264,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         let module = response.notification.request.content.userInfo["module"] as? String
         completionHandler()
         Task { @MainActor in
-            NSApp.activate(ignoringOtherApps: true)
+            PlatformKit.activateApp()
             if let module {
                 NotificationCenter.default.post(name: .hyperviewOpenModule, object: nil, userInfo: ["module": module])
             }

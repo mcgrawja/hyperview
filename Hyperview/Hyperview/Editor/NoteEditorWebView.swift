@@ -17,17 +17,6 @@ import SwiftData
 import WebKit
 import AppKit
 
-/// Bridge ↔ NotesView signals. One editor exists at a time (the host is
-/// re-created per selected note), so app-wide notifications are unambiguous.
-extension Notification.Name {
-    /// JS asked for the note picker (slash command "Link to note").
-    static let hyperviewRequestNoteLink = Notification.Name("hyperview.requestNoteLink")
-    /// NotesView picked a note; userInfo: ["href": String, "text": String].
-    static let hyperviewInsertNoteLink = Notification.Name("hyperview.insertNoteLink")
-    /// A hyperview://note/<uuid> link was clicked; userInfo: ["id": UUID].
-    static let hyperviewOpenNote = Notification.Name("hyperview.openNote")
-}
-
 /// Security-scoped bookmarks for "Link to file" — the sandbox forgets
 /// NSOpenPanel grants at quit; a stored bookmark restores access on click.
 @MainActor

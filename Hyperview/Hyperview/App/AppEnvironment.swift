@@ -52,8 +52,10 @@ extension EnvironmentValues {
     @Entry var claudeChat: ClaudeChatController? = nil
 
     /// Shared read-only Messages database connection (Messages module + the
-    /// app-sidebar unread badge).
+    /// app-sidebar unread badge). macOS only — iOS has no chat.db.
+    #if os(macOS)
     @Entry var messagesDB: MessagesDatabase? = nil
+    #endif
 
     /// Universal tags for consumers outside the main container's view subtree
     /// (the Mail module overrides \.modelContext with the mail cache).

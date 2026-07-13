@@ -1,3 +1,4 @@
+#if os(macOS)
 //
 //  FinderTagStore.swift
 //  Hyperview
@@ -111,3 +112,5 @@ final class FinderTagStore {
         return result
     }
 }
+
+#endif
