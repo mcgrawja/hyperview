@@ -1,25 +1,22 @@
 //
 //  MailBodyWebView.swift
-//  Hyperview
+//  Unifyr
 //
 //  Renders an email body (HTML or plaintext) in a WKWebView. JavaScript is
-//  disabled — email HTML must never execute script. A responsive, theme-aware
-//  wrapper is injected so messages read well in light and dark.
-//
-//  macOS-first; iOS gets a plaintext fallback until its editor/mail hardening.
+//  disabled — email HTML must never execute script. A responsive wrapper is
+//  injected so messages read well on any screen. The same wrapper and the same
+//  web view serve both platforms; only the hosting shell differs.
 //
 
 import SwiftUI
-
-#if os(macOS)
 import WebKit
 
-struct MailBodyWebView: NSViewRepresentable {
+struct MailBodyWebView {
     /// Raw message HTML, or nil to render `plainText`.
     let html: String?
     let plainText: String?
 
-    func makeNSView(context: Context) -> WKWebView {
+    fileprivate func makeWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = false
         let webView = WKWebView(frame: .zero, configuration: config)
@@ -29,11 +26,7 @@ struct MailBodyWebView: NSViewRepresentable {
         return webView
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {
-        webView.loadHTMLString(document, baseURL: nil)
-    }
-
-    private var document: String {
+    fileprivate var document: String {
         let inner: String
         if let html, !html.isEmpty {
             inner = html
@@ -74,18 +67,20 @@ struct MailBodyWebView: NSViewRepresentable {
     }
 }
 
-#else
+#if os(macOS)
+extension MailBodyWebView: NSViewRepresentable {
+    func makeNSView(context: Context) -> WKWebView { makeWebView() }
 
-struct MailBodyWebView: View {
-    let html: String?
-    let plainText: String?
-    var body: some View {
-        ScrollView {
-            Text(plainText ?? MailText.strip(html ?? ""))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-        }
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        webView.loadHTMLString(document, baseURL: nil)
+    }
+}
+#else
+extension MailBodyWebView: UIViewRepresentable {
+    func makeUIView(context: Context) -> WKWebView { makeWebView() }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        webView.loadHTMLString(document, baseURL: nil)
     }
 }
 #endif

@@ -28,6 +28,12 @@ extension Notification.Name {
     static let hyperviewInsertNoteLink = Notification.Name("hyperview.insertNoteLink")
     /// A hyperview://note/<uuid> link was clicked; userInfo: ["id": UUID].
     static let hyperviewOpenNote = Notification.Name("hyperview.openNote")
+    /// iOS: the editor asked for a file link — NotesView shows the document
+    /// picker (macOS uses an NSOpenPanel inside the bridge instead).
+    static let hyperviewRequestFileLink = Notification.Name("hyperview.requestFileLink")
+    /// iOS: a file:// link was clicked; userInfo: ["href": String]. NotesView
+    /// previews it with Quick Look.
+    static let hyperviewOpenFileLink = Notification.Name("hyperview.openFileLink")
 }
 
 @MainActor

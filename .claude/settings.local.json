@@ -89,7 +89,10 @@
       "Bash(xcrun simctl *)",
       "Bash(xargs sed -i '' 's/\\\\.toggleStyle\\(\\\\.checkbox\\)/.platformCheckbox\\(\\)/g')",
       "Bash(xargs sed -i '' 's/\\\\.navigationBarTitleDisplayMode\\(\\\\.inline\\)/.inlineNavigationTitle\\(\\)/g')",
-      "Bash(xcodebuild -project Hyperview.xcodeproj -scheme Hyperview -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build)"
+      "Bash(xcodebuild -project Hyperview.xcodeproj -scheme Hyperview -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build)",
+      "Bash(grep -n \"\\\\.sheet\\\\|\\\\.alert\\\\|^    }$\" Mail/ComposeView.swift)",
+      "Bash(sed -i '' 's/@State private var selection: SidebarItem? = .notes/@State private var selection: SidebarItem? = .dashboard/' ContentView.swift)",
+      "Bash(sed -i '' '/TEMP-VERIFY/d' Notes/NotesView.swift)"
     ]
   }
 }

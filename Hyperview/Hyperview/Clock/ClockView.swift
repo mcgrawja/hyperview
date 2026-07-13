@@ -11,21 +11,23 @@
 import SwiftUI
 
 struct ClockView: View {
+    /// Order reflects actual use: Alarm and Timer are the daily tools;
+    /// Stopwatch is the occasional one.
     private enum Tab: String, CaseIterable, Identifiable {
-        case stopwatch = "Stopwatch"
-        case timer = "Timer"
         case alarm = "Alarm"
+        case timer = "Timer"
+        case stopwatch = "Stopwatch"
         var id: String { rawValue }
         var symbol: String {
             switch self {
-            case .stopwatch: return "stopwatch"
-            case .timer: return "timer"
             case .alarm: return "alarm"
+            case .timer: return "timer"
+            case .stopwatch: return "stopwatch"
             }
         }
     }
 
-    @State private var tab: Tab = .stopwatch
+    @State private var tab: Tab = .alarm
 
     var body: some View {
         VStack(spacing: 0) {

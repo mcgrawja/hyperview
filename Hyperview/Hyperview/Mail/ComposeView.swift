@@ -40,6 +40,9 @@ struct ComposeView: View {
     @State private var sending = false
     @State private var errorText: String?
     @State private var attachments: [OutgoingAttachment] = []
+    /// iOS has no NSOpenPanel — attachments come from the document picker.
+    @State private var showingAttachImporter = false
+    @Environment(\.isCompactLayout) private var isCompact
 
     private let inReplyTo: String?
     private let showCC: Bool
@@ -174,13 +177,27 @@ struct ComposeView: View {
                     .padding(.bottom, Theme.Spacing.sm)
             }
         }
-        .frame(width: 560, height: 480)
+        // A fixed 560×480 sheet is right on a Mac window and wrong on a phone —
+        // let compact layouts fill the screen.
+        .frame(
+            width: isCompact ? nil : 560,
+            height: isCompact ? nil : 480
+        )
+        .frame(maxWidth: isCompact ? .infinity : nil, maxHeight: isCompact ? .infinity : nil)
         .background(Theme.Palette.background)
         .confirmationDialog("Send this message?", isPresented: $confirming, titleVisibility: .visible) {
             Button("Send") { Task { await performSend() } }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("To: \(to)")
+        }
+        .fileImporter(
+            isPresented: $showingAttachImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            guard case .success(let urls) = result else { return }
+            for url in urls { attach(url) }
         }
     }
 
@@ -241,16 +258,26 @@ struct ComposeView: View {
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK else { return }
         for url in panel.urls {
-            guard let data = try? Data(contentsOf: url) else { continue }
-            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-                ?? "application/octet-stream"
-            attachments.append(OutgoingAttachment(
-                filename: url.lastPathComponent,
-                mimeType: mime,
-                data: data
-            ))
+            attach(url)
         }
+        #else
+        showingAttachImporter = true
         #endif
+    }
+
+    /// Read a picked file into an outgoing attachment. Document-picker URLs on
+    /// iOS are security-scoped, so access has to be opened around the read.
+    private func attach(_ url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else { return }
+        let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+            ?? "application/octet-stream"
+        attachments.append(OutgoingAttachment(
+            filename: url.lastPathComponent,
+            mimeType: mime,
+            data: data
+        ))
     }
 
     private func performSend() async {

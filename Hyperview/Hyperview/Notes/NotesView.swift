@@ -9,6 +9,8 @@
 
 import SwiftUI
 import SwiftData
+import QuickLook
+import UniformTypeIdentifiers
 
 struct NotesView: View {
     @Environment(\.modelContext) private var context
@@ -25,6 +27,10 @@ struct NotesView: View {
     @State private var renamingFolder: Folder?
     @State private var renameText = ""
     @Environment(\.isCompactLayout) private var isCompact
+    // iOS file links: the editor can't open a modal panel, so this view owns
+    // the document picker and the Quick Look preview.
+    @State private var showingFileImporter = false
+    @State private var previewURL: URL?
 
     private var store: NotesStore { NotesStore(context: context) }
 
@@ -108,6 +114,25 @@ struct NotesView: View {
                 )
             }
         }
+        // iOS "Link to file": the editor asks, we present the document picker.
+        .onReceive(NotificationCenter.default.publisher(for: .hyperviewRequestFileLink)) { _ in
+            showingFileImporter = true
+        }
+        .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: [.item]) { result in
+            guard case .success(let url) = result else { return }
+            FileLinkBookmarks.save(url)
+            NotificationCenter.default.post(
+                name: .hyperviewInsertNoteLink,
+                object: nil,
+                userInfo: ["href": url.absoluteString, "text": url.lastPathComponent]
+            )
+        }
+        // iOS: a clicked file link previews with Quick Look.
+        .onReceive(NotificationCenter.default.publisher(for: .hyperviewOpenFileLink)) { notification in
+            guard let href = notification.userInfo?["href"] as? String else { return }
+            previewURL = FileLinkBookmarks.resolve(href)
+        }
+        .quickLookPreview($previewURL)
     }
 
     // MARK: List pane
