@@ -182,6 +182,23 @@ final class MailService {
     /// doesn't fire a notification for every historical message.
     @ObservationIgnored private var syncedMailboxes: Set<String> = []
 
+    /// Per-RULE failures (rule id → message). Kept separate from
+    /// `accountErrors`: a rule pointed at a mailbox the server won't accept is
+    /// a config problem, not a broken account, and it shouldn't make the whole
+    /// account look like it's failing to connect.
+    var ruleErrors: [UUID: String] = [:]
+
+    private func recordRuleFailure(_ rule: MailRule, destination: String, error: Error) {
+        let reason: String
+        if case MailError.commandFailed = error {
+            reason = "the server rejected it — that mailbox may not accept messages"
+        } else {
+            reason = describe(error)
+        }
+        ruleErrors[rule.id] = "Rule “\(rule.name)” couldn’t move mail to “\(destination)” — \(reason)."
+        MailLog.log("[Rules] '\(rule.name)' move to \(destination) failed: \(error)")
+    }
+
     /// On a network error, drop that account's connection so the next action
     /// reconnects.
     private func failed(_ account: MailAccount, _ error: Error) {
@@ -276,15 +293,26 @@ final class MailService {
     }
 
     func move(_ message: MailMessage, account: MailAccount, to destination: String) async {
-        guard destination != message.mailboxPath else { return }
-        guard let context, let imap = await ensureConnected(account) else { return }
         do {
-            try await imap.move(path: message.mailboxPath, uid: message.uid, to: destination)
-            // UID is mailbox-scoped, so the cached row is stale after a move;
-            // drop it and let the destination's next sync re-cache it.
-            context.delete(message)
-            try? context.save()
-        } catch { failed(account, error) }
+            try await moveThrowing(message, account: account, to: destination)
+        } catch {
+            failed(account, error)
+        }
+    }
+
+    /// The move itself. Throws so callers can decide how to report a failure —
+    /// a rule's bad destination must not make the whole ACCOUNT look broken
+    /// (see `applyRules`), which is what a raw `failed()` would do.
+    private func moveThrowing(_ message: MailMessage, account: MailAccount, to destination: String) async throws {
+        guard destination != message.mailboxPath else { return }
+        guard let context, let imap = await ensureConnected(account) else {
+            throw MailError.notConnected
+        }
+        try await imap.move(path: message.mailboxPath, uid: message.uid, to: destination)
+        // UID is mailbox-scoped, so the cached row is stale after a move;
+        // drop it and let the destination's next sync re-cache it.
+        context.delete(message)
+        try? context.save()
     }
 
     /// Best-effort trash mailbox for an account ("Deleted Messages" on iCloud,
@@ -424,14 +452,25 @@ final class MailService {
                     // the app wires this closure to TagsStore.link.
                     universalTagLink?(tagID, header)
                 }
+                // Terminal actions. A failure here is the RULE's problem (bad
+                // destination), so it's reported against the rule and the
+                // message simply stays in the inbox — the account keeps working.
                 if action.moveToTrash {
-                    await delete(message, account: account)
-                    delivered = false
-                    break // message left this mailbox; stop processing it
+                    do {
+                        try await moveThrowing(message, account: account, to: trashPath(for: account))
+                        delivered = false
+                    } catch {
+                        recordRuleFailure(rule, destination: trashPath(for: account), error: error)
+                    }
+                    break // this rule was terminal either way
                 }
                 if !action.moveToMailboxPath.isEmpty {
-                    await move(message, account: account, to: action.moveToMailboxPath)
-                    delivered = false
+                    do {
+                        try await moveThrowing(message, account: account, to: action.moveToMailboxPath)
+                        delivered = false
+                    } catch {
+                        recordRuleFailure(rule, destination: action.moveToMailboxPath, error: error)
+                    }
                     break
                 }
             }

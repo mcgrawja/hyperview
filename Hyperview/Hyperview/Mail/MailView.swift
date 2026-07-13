@@ -74,6 +74,7 @@ private struct MailModuleContent: View {
     @Environment(\.tagsStore) private var tagsStore
     @Query(sort: \SmartMailbox.sortIndex) private var smartMailboxes: [SmartMailbox]
     @Query(sort: \BlockedSender.address) private var blockedSenders: [BlockedSender]
+    @Query(sort: \MailRule.sortIndex) private var rules: [MailRule]
 
     /// Shared, app-level service (also used by the MCP tools) — connections
     /// survive tab switches.
@@ -423,7 +424,13 @@ private struct MailModuleContent: View {
 
     @ViewBuilder
     private var statusBanner: some View {
-        // Persistent per-account failures first — these survive other accounts'
+        // A misconfigured RULE (e.g. moving mail into a mailbox the server
+        // won't accept) is a config problem, not a broken account — it gets
+        // its own actionable banner naming the rule.
+        ForEach(rules.filter { service.ruleErrors[$0.id] != nil }) { rule in
+            ruleBanner(rule)
+        }
+        // Persistent per-account failures — these survive other accounts'
         // successes (a login error must not be masked by a healthy sync).
         ForEach(accounts.filter { service.accountErrors[$0.id] != nil }) { account in
             banner(
@@ -444,6 +451,37 @@ private struct MailModuleContent: View {
         case .idle, .connected:
             EmptyView()
         }
+    }
+
+    /// Names the broken rule and offers the two fixes inline: disable it, or
+    /// open Manage Rules to repoint it.
+    private func ruleBanner(_ rule: MailRule) -> some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: "exclamationmark.triangle")
+            Text(service.ruleErrors[rule.id] ?? "")
+                .font(Theme.Font.cardCaption)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button("Disable Rule") {
+                rule.isEnabled = false
+                try? context.save()
+                service.ruleErrors[rule.id] = nil
+            }
+            Button("Edit Rules…") {
+                showingRules = true
+                service.ruleErrors[rule.id] = nil
+            }
+            Button {
+                service.ruleErrors[rule.id] = nil
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+        }
+        .foregroundStyle(Theme.Palette.warning)
+        .padding(Theme.Spacing.sm)
+        .background(Theme.Palette.warning.opacity(0.12))
     }
 
     private func banner(_ text: String, systemImage: String, tint: Color) -> some View {

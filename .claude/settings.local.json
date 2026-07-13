@@ -77,7 +77,13 @@
       "Bash(killall Dock)",
       "Bash(killall -HUP iconservicesagent)",
       "Bash(killall -HUP iconservicesd)",
-      "Bash(xcodebuild -project Hyperview.xcodeproj -scheme Hyperview -configuration Release build)"
+      "Bash(xcodebuild -project Hyperview.xcodeproj -scheme Hyperview -configuration Release build)",
+      "Bash(ssh -T git@github.com)",
+      "Bash(git -C /Users/mcgrawja/Projects/hyperview remote -v)",
+      "Bash(ssh-add -l)",
+      "Bash(getent passwd *)",
+      "Bash(dscl . -read /Users/mcgrawja RecordName)",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=8 -T git@github.com)"
     ]
   }
 }
