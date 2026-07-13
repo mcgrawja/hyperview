@@ -37,7 +37,12 @@ final class MailService {
     func connect(_ account: MailAccount) async {
         guard clients[account.id] == nil else { return }
         guard var password = MailKeychain.password(for: account.id) else {
-            status = .error("No saved password for \(account.emailAddress).")
+            // On a device that just pulled this account from iCloud, the config
+            // can land before iCloud Keychain hands over the password — say so,
+            // rather than implying the account is broken.
+            let message = "No password yet for \(account.emailAddress). If you just added it on another device, check that iCloud Keychain is on; otherwise re-enter it in the account's settings."
+            status = .error(message)
+            accountErrors[account.id] = message
             return
         }
         // Heal stored app passwords that were saved with display whitespace
@@ -207,10 +212,13 @@ final class MailService {
         accountErrors[account.id] = "\(account.emailAddress): \(describe(error))"
     }
 
-    /// Remove an account entirely: connection, cached data, keychain secret.
+    /// Remove an account entirely: connection, cached data, keychain secret, and
+    /// the shared config — the tombstone is what stops the other devices from
+    /// syncing it straight back to us.
     func removeAccount(_ account: MailAccount) async {
         await disconnect(account)
         accountErrors[account.id] = nil
+        MailAccountSync.shared.recordDeletion(email: account.emailAddress)
         MailKeychain.deletePassword(for: account.id)
         if let context {
             let accountID = account.id

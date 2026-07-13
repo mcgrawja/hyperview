@@ -28,7 +28,11 @@ struct AccountSettingsView: View {
                     .font(Theme.Font.cardTitle)
                 Spacer()
                 Button("Done") {
+                    // Stamp the edit so MailAccountSync knows this copy is the
+                    // newer one, then publish it to the other devices.
+                    account.updatedAt = Date()
                     try? context.save()
+                    MailAccountSync.shared.push()
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)

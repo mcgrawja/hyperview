@@ -53,6 +53,11 @@ struct HyperviewApp: App {
         // source once Apple's own apps are silenced.
         NotificationService.shared.bootstrap()
 
+        // Mail accounts (settings only — never the cache) ride iCloud's
+        // key-value store, so a second device configures itself; the password
+        // follows through iCloud Keychain, keyed by the shared account id.
+        MailAccountSync.shared.start(context: mailContainer.mainContext)
+
         let service = MailService()
         service.context = mailContainer.mainContext
         service.universalTagLink = { [weak tags] tagID, header in

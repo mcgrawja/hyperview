@@ -35,6 +35,10 @@ final class MailAccount {
     var isExpanded: Bool = false
 
     var createdAt: Date = Date()
+    /// Last edit to the settings above. MailAccountSync resolves cross-device
+    /// conflicts last-write-wins on this, so anything that mutates an account
+    /// must bump it.
+    var updatedAt: Date = Date()
 
     init(
         emailAddress: String = "",
@@ -52,6 +56,7 @@ final class MailAccount {
         self.smtpHost = smtpHost
         self.smtpPort = smtpPort
         self.createdAt = Date()
+        self.updatedAt = Date()
     }
 }
 

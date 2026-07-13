@@ -60,5 +60,19 @@
 	<array>
 		<string>CloudKit</string>
 	</array>
+	<!-- Mail ACCOUNT SETTINGS (not the cache) sync through the iCloud key-value
+	     store, so a second device configures itself — see MailAccountSync. -->
+	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
+	<string>$(TeamIdentifierPrefix)$(CFBundleIdentifier)</string>
+
+	<!-- iCloud Keychain for the mail app passwords and the Anthropic API keys
+	     (SyncedKeychain). On macOS, synchronizable items only exist in the data
+	     protection keychain, and using THAT keychain requires the app be signed
+	     with a keychain access group — this entitlement is what supplies it.
+	     Without it SecItemAdd fails with errSecMissingEntitlement (-34018). -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.mcgraw.Hyperview</string>
+	</array>
 </dict>
 </plist>

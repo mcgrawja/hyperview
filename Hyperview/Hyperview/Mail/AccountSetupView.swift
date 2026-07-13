@@ -83,7 +83,7 @@ struct AccountSetupView: View {
                 .foregroundStyle(Theme.Palette.primary)
             Text("Add a Mail Account")
                 .font(Theme.Font.dashboardTitle)
-            Text("Connect over IMAP/SMTP. Your mail stays on this device and is never synced to iCloud.")
+            Text("Connect over IMAP/SMTP. Your messages stay on this device and are never synced to iCloud — only these settings sync, and the password rides iCloud Keychain, so your other devices set themselves up.")
                 .font(Theme.Font.cardBody)
                 .foregroundStyle(Theme.Palette.textSecondary)
         }
@@ -151,6 +151,9 @@ struct AccountSetupView: View {
         context.insert(account)
         try? context.save()
         MailKeychain.setPassword(cleanedPassword(), for: account.id)
+        // Publish the settings so the other devices pick the account up; the
+        // password rides iCloud Keychain under this same account id.
+        MailAccountSync.shared.push()
         onComplete?()
     }
 }

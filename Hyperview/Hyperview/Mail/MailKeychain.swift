@@ -1,55 +1,36 @@
 //
 //  MailKeychain.swift
-//  Hyperview
+//  Unifyr
 //
 //  App passwords never touch SwiftData/CloudKit (D9) or logs — they live in the
-//  Keychain, keyed by account UUID. Uses the app's default keychain access group
-//  (works under the App Sandbox without a keychain-access-groups entitlement).
+//  Keychain, keyed by account UUID, and ride iCloud Keychain across devices (see
+//  SyncedKeychain). The account UUID is only shared between devices because
+//  MailAccountSync makes them converge on one; without that, this lookup would
+//  miss on every device but the one where the account was typed.
 //
 
 import Foundation
-import Security
 
 enum MailKeychain {
     private static let service = "com.mcgraw.Hyperview.mail"
 
     static func setPassword(_ password: String, for accountID: UUID) {
-        let account = accountID.uuidString
-        let data = Data(password.utf8)
-
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(query as CFDictionary)
-
-        var add = query
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(add as CFDictionary, nil)
+        SyncedKeychain.set(password, service: service, account: accountID.uuidString)
     }
 
     static func password(for accountID: UUID) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: accountID.uuidString,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        SyncedKeychain.read(service: service, account: accountID.uuidString)
     }
 
     static func deletePassword(for accountID: UUID) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: accountID.uuidString,
-        ]
-        SecItemDelete(query as CFDictionary)
+        SyncedKeychain.delete(service: service, account: accountID.uuidString)
+    }
+
+    /// Move a saved password when an account adopts the shared iCloud identity
+    /// and its UUID changes (MailAccountSync.adopt).
+    static func rekey(from old: UUID, to new: UUID) {
+        guard old != new, let password = password(for: old) else { return }
+        setPassword(password, for: new)
+        deletePassword(for: old)
     }
 }
