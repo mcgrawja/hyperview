@@ -93,6 +93,9 @@ struct HyperviewApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                // Publish the real size class so every module can pick its
+                // layout (iPhone = one pane at a time).
+                .resolveCompactLayout()
                 .environment(\.brokers, brokers)
                 .environment(\.mailContainer, mailContainer)
                 .environment(\.mailService, mailService)

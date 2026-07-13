@@ -63,14 +63,37 @@ enum PlatformKit {
 // MARK: - Layout size
 
 extension EnvironmentValues {
-    /// True when the UI must show ONE pane at a time (iPhone portrait). iPad
-    /// and Mac are always "regular" and keep their multi-pane layouts.
-    var isCompactLayout: Bool {
+    /// True when the UI must show ONE pane at a time (iPhone). iPad and Mac are
+    /// "regular" and keep their multi-pane layouts.
+    ///
+    /// This MUST be a real key-backed entry: a *derived* computed property on
+    /// EnvironmentValues (e.g. `horizontalSizeClass == .compact`) does NOT work
+    /// with `@Environment` — views read the default instead of the live value,
+    /// which silently gave the iPhone the 3-pane desktop layout.
+    /// `resolveCompactLayout()` fills it in from the real size class.
+    @Entry var isCompactLayout: Bool = false
+}
+
+/// Reads the true horizontal size class and publishes it as
+/// `\.isCompactLayout`. Applied once at the app root.
+private struct CompactLayoutResolver: ViewModifier {
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
+
+    func body(content: Content) -> some View {
         #if os(iOS)
-        return horizontalSizeClass == .compact
+        content.environment(\.isCompactLayout, sizeClass == .compact)
         #else
-        return false
+        content.environment(\.isCompactLayout, false)
         #endif
+    }
+}
+
+extension View {
+    /// Publish the real size class as `\.isCompactLayout`. Apply at the root.
+    func resolveCompactLayout() -> some View {
+        modifier(CompactLayoutResolver())
     }
 }
 
@@ -111,8 +134,12 @@ extension View {
 }
 
 /// `HSplitView` (draggable panes) on macOS; a plain `HStack` on iOS, which has
-/// no such control. Phase 2 replaces the iOS side with proper adaptive
-/// navigation (columns on iPad, stacked on iPhone).
+/// no such control.
+///
+/// Only ever use this on REGULAR-width layouts (Mac, iPad). On a phone the
+/// panes' minimum widths exceed the screen, so SwiftUI resolves a negative
+/// width and traps with "Invalid frame dimension". Compact layouts must use
+/// `\.isCompactLayout` and navigate one pane at a time instead.
 struct PlatformHSplit<Content: View>: View {
     @ViewBuilder var content: () -> Content
 

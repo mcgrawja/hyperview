@@ -170,7 +170,11 @@ private struct MailModuleContent: View {
         }
         .task(id: accounts.map(\.id)) {
             service.context = context
-            if selection == nil, let first = accounts.first {
+            // Auto-select a mailbox only where a message list is always
+            // visible. On iPhone, selection PUSHES a screen — auto-selecting
+            // would drop the user straight into a mailbox with no way back to
+            // the list they never saw.
+            if !isCompact, selection == nil, let first = accounts.first {
                 selection = accounts.count > 1
                     ? .unified(.inbox)
                     : .mailbox(MailboxSelection(accountID: first.id, path: "INBOX"))
