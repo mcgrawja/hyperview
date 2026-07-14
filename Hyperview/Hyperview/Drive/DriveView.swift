@@ -692,12 +692,35 @@ private struct DriveFileList: View {
 
     private func reload() {
         errorText = nil
+
+        // Hold the security scope on the OWNING ROOT for the duration of the
+        // read. DriveLocations starts the scope when the location is added, but
+        // that ambient grant is easy to lose — and for a network share, if it
+        // never took, the read just returns an empty array with no error, which
+        // is exactly the "folder looks empty" symptom. Re-establishing it here,
+        // scoped to the read, is belt-and-suspenders and cheap.
+        let owningRoot = roots.first { root in
+            folder == root || folder.path.hasPrefix(root.path + "/")
+        }
+        let scoped = owningRoot?.startAccessingSecurityScopedResource() ?? false
+        defer { if scoped { owningRoot?.stopAccessingSecurityScopedResource() } }
+
         do {
             let urls = try Self.directoryContents(of: folder)
             items = urls.map(DriveItem.init(url:))
+            // An empty read from a real location is suspicious — distinguish the
+            // two ways a network share fails, so a screenshot tells us which:
+            //  · no grant  → security scope never took (permission).
+            //  · grant, still nothing → the File Provider didn't materialize the
+            //    listing even under coordination (the share is asleep/offline).
+            if urls.isEmpty, owningRoot != nil {
+                errorText = scoped
+                    ? "This location returned no files. If it's a network server, it may be offline or asleep — open it once in the Files app to wake it, then pull to refresh."
+                    : "Couldn't get access to this location. If it's a network server, open it once in the Files app (⋯ → Connect to Server), then remove and re-add it here."
+            }
         } catch {
             items = []
-            errorText = "Couldn't read this folder."
+            errorText = "Couldn't read this folder: \(error.localizedDescription)"
         }
     }
 
