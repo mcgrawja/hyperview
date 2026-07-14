@@ -693,16 +693,45 @@ private struct DriveFileList: View {
     private func reload() {
         errorText = nil
         do {
-            let urls = try FileManager.default.contentsOfDirectory(
-                at: folder,
-                includingPropertiesForKeys: DriveItem.resourceKeys,
-                options: [.skipsHiddenFiles]
-            )
+            let urls = try Self.directoryContents(of: folder)
             items = urls.map(DriveItem.init(url:))
         } catch {
             items = []
             errorText = "Couldn't read this folder."
         }
+    }
+
+    /// List a folder's contents.
+    ///
+    /// On iOS a network share (an SMB volume connected in the Files app) or any
+    /// third-party cloud provider is vended by a File Provider extension, and its
+    /// contents are enumerated LAZILY: a plain `contentsOfDirectory` returns an
+    /// empty array because the provider hasn't materialized the listing yet.
+    /// (iCloud "works" only because its placeholders are already present.) A
+    /// COORDINATED read asks the provider to populate the directory first, then
+    /// reads it — the standard fix for "picked folder shows empty".
+    private static func directoryContents(of folder: URL) throws -> [URL] {
+        #if os(iOS)
+        var coordinatorError: NSError?
+        var readResult: Result<[URL], Error>?
+        NSFileCoordinator().coordinate(readingItemAt: folder, options: [], error: &coordinatorError) { url in
+            readResult = Result {
+                try FileManager.default.contentsOfDirectory(
+                    at: url,
+                    includingPropertiesForKeys: DriveItem.resourceKeys,
+                    options: [.skipsHiddenFiles]
+                )
+            }
+        }
+        if let coordinatorError { throw coordinatorError }
+        return try readResult?.get() ?? []
+        #else
+        return try FileManager.default.contentsOfDirectory(
+            at: folder,
+            includingPropertiesForKeys: DriveItem.resourceKeys,
+            options: [.skipsHiddenFiles]
+        )
+        #endif
     }
 
     private func rename(_ item: DriveItem, to newName: String) {
