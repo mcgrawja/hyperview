@@ -110,9 +110,17 @@ final class MailAccountSync {
         }
 
         // 1. Deletions from another device — but only if we haven't edited the
-        //    account since it was deleted there.
+        //    account since it was deleted there, and only if it hasn't since been
+        //    RE-ADDED there. Delete-then-re-add (how you'd fix a wrong server
+        //    before the settings were editable) must land as "exists", not
+        //    "deleted": otherwise the tombstone would nuke a perfectly good
+        //    account — and its whole cache — on every other device.
         for tombstone in payload.tombstones {
             let key = Self.normalize(tombstone.email)
+            let readdedSince = payload.accounts.contains {
+                Self.normalize($0.email) == key && $0.updatedAt > tombstone.deletedAt
+            }
+            guard !readdedSince else { continue }
             guard let local = byEmail[key], local.updatedAt <= tombstone.deletedAt else { continue }
             purge(local, in: context)
             byEmail[key] = nil

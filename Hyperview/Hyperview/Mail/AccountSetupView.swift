@@ -26,6 +26,15 @@ struct AccountSetupView: View {
     @State private var smtpHost = ""
     @State private var smtpPort = 587
     @State private var showAdvanced = false
+    /// DNS-backed server detection for the address being typed.
+    @State private var detection: MailProvider.Detection?
+    @State private var isDetecting = false
+    /// What we last filled in ourselves. If the fields still match it, the user
+    /// hasn't touched them and detection may overwrite; if they've diverged,
+    /// they're hand-edited and we leave them alone. (Comparing beats an onChange
+    /// flag, which can't tell our own programmatic fill from a real edit.)
+    @State private var lastApplied: MailProvider.Settings?
+    @State private var detectTask: Task<Void, Never>?
 
     var body: some View {
         ScrollView {
@@ -40,6 +49,8 @@ struct AccountSetupView: View {
                 Text("Use an app-specific password, not your login password. Gmail/iCloud/Outlook require one when two-factor auth is on.")
                     .font(Theme.Font.cardCaption)
                     .foregroundStyle(Theme.Palette.textSecondary)
+
+                detectionStatus
 
                 DisclosureGroup("Server settings", isExpanded: $showAdvanced) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
@@ -112,17 +123,87 @@ struct AccountSetupView: View {
     private func serverRow(_ label: String, host: Binding<String>, port: Binding<Int>) -> some View {
         HStack(spacing: Theme.Spacing.sm) {
             Text(label).font(Theme.Font.cardCaption).frame(width: 44, alignment: .leading)
-            TextField("host", text: host).textFieldStyle(.roundedBorder)
+            TextField("host", text: host)
+                .textFieldStyle(.roundedBorder)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                #endif
             TextField("port", value: port, format: .number).textFieldStyle(.roundedBorder).frame(width: 72)
         }
     }
 
+    /// What detection found — or that the guessed server doesn't exist, which is
+    /// the trap this whole path is here to close.
+    @ViewBuilder
+    private var detectionStatus: some View {
+        if isDetecting {
+            Label("Looking up \(domainOf(email))…", systemImage: "magnifyingglass")
+                .font(Theme.Font.cardCaption)
+                .foregroundStyle(Theme.Palette.textSecondary)
+        } else if let warning = detection?.warning {
+            Label(warning, systemImage: "exclamationmark.triangle")
+                .font(Theme.Font.cardCaption)
+                .foregroundStyle(Theme.Palette.danger)
+        } else if let summary = detection?.summary {
+            Label(summary, systemImage: "checkmark.circle")
+                .font(Theme.Font.cardCaption)
+                .foregroundStyle(Theme.Palette.primary)
+        }
+    }
+
+    private func domainOf(_ email: String) -> String {
+        email.split(separator: "@").last.map(String.init) ?? "your domain"
+    }
+
+    /// Fill the servers from the address: the instant table guess first, then a
+    /// DNS check of who actually hosts the domain's mail. A domain like mcgraw.cc
+    /// is an iCloud custom domain — imap.mcgraw.cc doesn't exist, and only its MX
+    /// records reveal that the mailbox really lives at imap.mail.me.com.
     private func applyProvider(for email: String) {
-        let s = MailProvider.settings(for: email)
-        imapHost = s.imapHost
-        imapPort = s.imapPort
-        smtpHost = s.smtpHost
-        smtpPort = s.smtpPort
+        detectTask?.cancel()
+        detection = nil
+
+        if serversUntouched { apply(MailProvider.settings(for: email)) }
+
+        // Wait for a plausible address before hitting DNS on every keystroke.
+        let domain = domainOf(email)
+        guard email.contains("@"), domain.contains(".") else {
+            isDetecting = false
+            return
+        }
+
+        isDetecting = true
+        detectTask = Task {
+            // Debounce: the address is probably still being typed.
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+
+            let result = await MailProvider.detect(for: email)
+            guard !Task.isCancelled else { return }
+
+            isDetecting = false
+            detection = result
+            guard serversUntouched else { return }
+            apply(result.settings)
+            // Open the fields when they need a human — i.e. the guessed server
+            // doesn't exist and we have nothing better to offer.
+            if result.warning != nil { showAdvanced = true }
+        }
+    }
+
+    private var serversUntouched: Bool {
+        guard let lastApplied else { return true }
+        return imapHost == lastApplied.imapHost && imapPort == lastApplied.imapPort
+            && smtpHost == lastApplied.smtpHost && smtpPort == lastApplied.smtpPort
+    }
+
+    private func apply(_ settings: MailProvider.Settings) {
+        imapHost = settings.imapHost
+        imapPort = settings.imapPort
+        smtpHost = settings.smtpHost
+        smtpPort = settings.smtpPort
+        lastApplied = settings
     }
 
     /// Google displays app passwords as "xxxx xxxx xxxx xxxx"; copying keeps the
@@ -158,23 +239,3 @@ struct AccountSetupView: View {
     }
 }
 
-/// Common-provider IMAP/SMTP autodetection from the email domain.
-enum MailProvider {
-    static func settings(for email: String) -> (imapHost: String, imapPort: Int, smtpHost: String, smtpPort: Int) {
-        let domain = email.split(separator: "@").last.map(String.init)?.lowercased() ?? ""
-        switch domain {
-        case "gmail.com", "googlemail.com":
-            return ("imap.gmail.com", 993, "smtp.gmail.com", 587)
-        case "icloud.com", "me.com", "mac.com":
-            return ("imap.mail.me.com", 993, "smtp.mail.me.com", 587)
-        case "outlook.com", "hotmail.com", "live.com", "msn.com":
-            return ("outlook.office365.com", 993, "smtp.office365.com", 587)
-        case "yahoo.com":
-            return ("imap.mail.yahoo.com", 993, "smtp.mail.yahoo.com", 587)
-        case "aol.com":
-            return ("imap.aol.com", 993, "smtp.aol.com", 587)
-        default:
-            return ("imap.\(domain)", 993, "smtp.\(domain)", 587)
-        }
-    }
-}
