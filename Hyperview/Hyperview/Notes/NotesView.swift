@@ -25,6 +25,8 @@ struct NotesView: View {
     @State private var selectedNote: Note?
     /// Recently Deleted is a mode, not a folder — a trashed note has no folder.
     @State private var showingTrash = false
+    /// Collapsed folder ids, comma-separated (see the Folder collapse section).
+    @AppStorage("notes.collapsedFolders") private var collapsedFoldersRaw = ""
     @State private var showingNoteLinkPicker = false
     @State private var renamingFolder: Folder?
     @State private var renameText = ""
@@ -243,16 +245,48 @@ struct NotesView: View {
         return selectedFolder?.name ?? "All Notes"
     }
 
-    /// The folder tree flattened depth-first (indentation = depth).
+    // MARK: Folder collapse
+    //
+    // Kept in UserDefaults, not on the Folder model: which folders YOU have
+    // twisted open is a per-device view preference, and putting it on the model
+    // would mean another CloudKit field, another schema deploy, and your Mac
+    // collapsing folders on your phone.
+
+    private var collapsedFolders: Set<UUID> {
+        Set(collapsedFoldersRaw.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
+    }
+
+    private func isCollapsed(_ folder: Folder) -> Bool {
+        collapsedFolders.contains(folder.id)
+    }
+
+    private func hasChildren(_ folder: Folder) -> Bool {
+        folders.contains { $0.parentFolderID == folder.id }
+    }
+
+    private func toggleCollapsed(_ folder: Folder) {
+        var collapsed = collapsedFolders
+        if collapsed.contains(folder.id) {
+            collapsed.remove(folder.id)
+        } else {
+            collapsed.insert(folder.id)
+        }
+        collapsedFoldersRaw = collapsed.map(\.uuidString).joined(separator: ",")
+    }
+
+    /// The folder tree flattened depth-first (indentation = depth). A collapsed
+    /// folder still shows — its descendants don't.
     private var flattenedFolders: [(folder: Folder, depth: Int)] {
         func children(of parentID: UUID?) -> [Folder] {
             folders.filter { $0.parentFolderID == parentID }
         }
+        let collapsed = collapsedFolders
         var result: [(Folder, Int)] = []
         func walk(_ parentID: UUID?, depth: Int) {
             guard depth < 8 else { return } // cycle guard
             for folder in children(of: parentID) {
                 result.append((folder, depth))
+                guard !collapsed.contains(folder.id) else { continue }
                 walk(folder.id, depth: depth + 1)
             }
         }
@@ -279,18 +313,38 @@ struct NotesView: View {
     }
 
     private func folderRow(_ folder: Folder?, label: String, systemImage: String, emoji: String? = nil) -> some View {
-        Button {
-            selectedFolder = folder
-            showingTrash = false
-        } label: {
-            HStack(spacing: Theme.Spacing.sm) {
-                if let emoji { Text(emoji) } else { Image(systemName: systemImage) }
-                Text(label).lineLimit(1)
-                Spacer()
+        HStack(spacing: Theme.Spacing.xs) {
+            // The twist-down sits OUTSIDE the row's button: a button nested in
+            // another button's label doesn't reliably get the click.
+            if let folder, hasChildren(folder) {
+                Button {
+                    toggleCollapsed(folder)
+                } label: {
+                    Image(systemName: isCollapsed(folder) ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .frame(width: 12, height: 12)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                // Keeps childless folders' names aligned with their siblings'.
+                Color.clear.frame(width: 12, height: 12)
             }
-            .contentShape(Rectangle())
+
+            Button {
+                selectedFolder = folder
+                showingTrash = false
+            } label: {
+                HStack(spacing: Theme.Spacing.sm) {
+                    if let emoji { Text(emoji) } else { Image(systemName: systemImage) }
+                    Text(label).lineLimit(1)
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
         .listRowBackground(
             (!showingTrash && selectedFolder?.id == folder?.id)
                 ? Theme.Palette.primary.opacity(0.12)
@@ -305,6 +359,9 @@ struct NotesView: View {
                 Button("New Subfolder") {
                     let child = store.createFolder(parent: folder)
                     try? context.save()
+                    // Twist the parent open, or the folder you just made is
+                    // invisible and it looks like nothing happened.
+                    if isCollapsed(folder) { toggleCollapsed(folder) }
                     selectedFolder = child
                 }
                 Menu("Move To") {
