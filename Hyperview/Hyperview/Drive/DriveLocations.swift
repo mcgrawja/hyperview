@@ -1,21 +1,32 @@
-#if os(macOS)
 //
 //  DriveLocations.swift
 //  Unifyr
 //
-//  The Drive module's roots. The app is sandboxed, so it can only browse
-//  folders the user explicitly adds (NSOpenPanel). Each grant is persisted as
-//  a security-scoped bookmark and re-resolved at launch, so locations survive
-//  restarts like Finder sidebar favorites.
+//  The Drive module's roots. The app is sandboxed on both platforms, so it can
+//  only browse folders the user explicitly adds — NSOpenPanel on macOS, the
+//  document picker (`.fileImporter`) on iOS. Each grant is persisted as a
+//  bookmark and re-resolved at launch, so locations survive restarts like
+//  Finder sidebar favorites.
+//
+//  The bookmark options differ per platform (same split as `FileLinkBookmarks`
+//  in the notes editor): macOS needs `.withSecurityScope`, iOS bookmarks the
+//  picked URL plainly and starts access on the resolved one.
 //
 
 import Foundation
-import AppKit
 
 @MainActor
 @Observable
 final class DriveLocations {
     private static let key = "drive.locationBookmarks"
+
+    #if os(macOS)
+    private static let creationOptions: URL.BookmarkCreationOptions = .withSecurityScope
+    private static let resolutionOptions: URL.BookmarkResolutionOptions = .withSecurityScope
+    #else
+    private static let creationOptions: URL.BookmarkCreationOptions = []
+    private static let resolutionOptions: URL.BookmarkResolutionOptions = []
+    #endif
 
     private(set) var roots: [URL] = []
 
@@ -23,16 +34,15 @@ final class DriveLocations {
         restore()
     }
 
-    /// Ask the user for a folder and remember it.
+    /// Ask the user for a folder and remember it. macOS runs the open panel
+    /// inline; on iOS there is no such panel, so DriveView presents
+    /// `.fileImporter` and calls `add(_:)` with what comes back.
     func addLocation() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = true
-        panel.message = "Choose folders to browse in Unifyr"
-        panel.prompt = "Add"
-        guard panel.runModal() == .OK else { return }
-        for url in panel.urls {
+        guard let urls = PlatformKit.pickFolders(
+            message: "Choose folders to browse in Unifyr",
+            prompt: "Add"
+        ) else { return }
+        for url in urls {
             add(url)
         }
     }
@@ -40,7 +50,7 @@ final class DriveLocations {
     func add(_ url: URL) {
         guard !roots.contains(url) else { return }
         guard let bookmark = try? url.bookmarkData(
-            options: .withSecurityScope,
+            options: Self.creationOptions,
             includingResourceValuesForKeys: nil,
             relativeTo: nil
         ) else { return }
@@ -57,7 +67,11 @@ final class DriveLocations {
         url.stopAccessingSecurityScopedResource()
         // Rebuild the persisted list from the still-valid roots.
         let bookmarks = roots.compactMap {
-            try? $0.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            try? $0.bookmarkData(
+                options: Self.creationOptions,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
         }
         UserDefaults.standard.set(bookmarks, forKey: Self.key)
     }
@@ -70,14 +84,14 @@ final class DriveLocations {
             var stale = false
             guard let url = try? URL(
                 resolvingBookmarkData: data,
-                options: .withSecurityScope,
+                options: Self.resolutionOptions,
                 relativeTo: nil,
                 bookmarkDataIsStale: &stale
             ) else { continue }
             _ = url.startAccessingSecurityScopedResource()
             resolved.append(url)
             if stale, let fresh = try? url.bookmarkData(
-                options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil
+                options: Self.creationOptions, includingResourceValuesForKeys: nil, relativeTo: nil
             ) {
                 validBookmarks.append(fresh)
             } else {
@@ -90,5 +104,3 @@ final class DriveLocations {
         }
     }
 }
-
-#endif

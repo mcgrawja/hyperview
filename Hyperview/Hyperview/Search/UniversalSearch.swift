@@ -40,7 +40,7 @@ struct UniversalSearchView: View {
     @Environment(\.modelContext) private var notesContext
     @Environment(\.mailContainer) private var mailContainer
     @Environment(\.brokers) private var brokers
-    // Messages + Drive are Mac-only, so their search paths are too.
+    // Messages is Mac-only, so its search path is too (Drive is on both).
     #if os(macOS)
     @Environment(\.messagesDB) private var messagesDB
     #endif
@@ -151,14 +151,17 @@ struct UniversalSearchView: View {
         results += await searchContacts(text)
         #if os(macOS)
         results += await searchChats(text)
-        results += await searchFiles(text)
         #endif
+        results += await searchFiles(text)
         guard !Task.isCancelled else { return }
         hits = results
     }
 
     private func searchNotes(_ text: String) -> [SearchHit] {
-        let notes = ((try? notesContext.fetch(FetchDescriptor<Note>())) ?? []).filter { !$0.isArchived }
+        // Trashed notes are not results — a deleted note turning up in search
+        // would undo the whole point of deleting it.
+        let notes = ((try? notesContext.fetch(FetchDescriptor<Note>())) ?? [])
+            .filter { !$0.isArchived && !$0.isTrashed }
         let blocks = (try? notesContext.fetch(FetchDescriptor<Block>())) ?? []
         // Block text lives in contentJSON — a byte scan is crude but catches
         // any inline text without decoding every document.
@@ -275,16 +278,25 @@ struct UniversalSearchView: View {
                 )
             }
     }
+    #endif
 
+    /// Drive files. Both platforms — only the bookmark options differ (macOS
+    /// security-scoped, iOS plain; the same split DriveLocations writes them
+    /// with).
     private func searchFiles(_ text: String) async -> [SearchHit] {
         // Resolve the Drive bookmarks read-only for the scan.
         let bookmarks = (UserDefaults.standard.array(forKey: "drive.locationBookmarks") as? [Data]) ?? []
+        #if os(macOS)
+        let options: URL.BookmarkResolutionOptions = .withSecurityScope
+        #else
+        let options: URL.BookmarkResolutionOptions = []
+        #endif
         var roots: [URL] = []
         for data in bookmarks {
             var stale = false
             if let url = try? URL(
                 resolvingBookmarkData: data,
-                options: .withSecurityScope,
+                options: options,
                 relativeTo: nil,
                 bookmarkDataIsStale: &stale
             ) {
@@ -330,5 +342,4 @@ struct UniversalSearchView: View {
             )
         }
     }
-    #endif
 }

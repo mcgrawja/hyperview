@@ -1,55 +1,143 @@
-#if os(macOS)
 //
 //  DriveView.swift
 //  Hyperview
 //
 //  Finder-lite file manager: user-added locations in a sidebar (security-
-//  scoped, persistent), breadcrumb navigation, a file list with icons/size/
-//  date, and the everyday Finder verbs — open, reveal, rename, new folder,
-//  duplicate, move to trash. Finder tags on files are read and shown as color
-//  dots (they're real Finder tags, visible in Apple's apps).
+//  scoped, persistent), breadcrumb navigation, a sortable file list with
+//  icons/kind/size/date, and the everyday Finder verbs — open, reveal, rename,
+//  new folder, duplicate, move to trash.
+//
+//  Both platforms. Mac and iPad get the desktop layout (locations | files |
+//  preview); the iPhone is compact, so it PUSHES one screen at a time
+//  (locations → folder → file preview) — PlatformHSplit would trap there.
+//
+//  Finder tags stay macOS-only: `URLResourceKey.tagNames` simply doesn't exist
+//  on iOS, and the app's universal tags are deliberately NOT substituted here
+//  (owner decision — see removeUniversalFileLinksIfNeeded).
 //
 
 import SwiftUI
 import SwiftData
-import AppKit
 import UniformTypeIdentifiers
 import QuickLookThumbnailing
 
+// MARK: - Sorting
+
+/// The column the file list sorts by. Raw value is what @AppStorage persists.
+nonisolated enum DriveSortField: String, CaseIterable, Identifiable {
+    case name
+    case kind
+    case modified
+    case size
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .name: return "Name"
+        case .kind: return "Kind"
+        case .modified: return "Date Modified"
+        case .size: return "Size"
+        }
+    }
+}
+
+/// The list's ordering rule. Directories ALWAYS group first (Finder does this
+/// regardless of the sort column and direction); the chosen field orders each
+/// group, with the name as a stable tie-break.
+nonisolated enum DriveSort {
+    static func apply(_ items: [DriveItem], field: DriveSortField, ascending: Bool) -> [DriveItem] {
+        items.sorted { lhs, rhs in
+            if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
+            switch compare(lhs, rhs, by: field) {
+            case .orderedAscending: return ascending
+            case .orderedDescending: return !ascending
+            case .orderedSame:
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+        }
+    }
+
+    private static func compare(_ lhs: DriveItem, _ rhs: DriveItem, by field: DriveSortField) -> ComparisonResult {
+        switch field {
+        case .name:
+            return lhs.name.localizedStandardCompare(rhs.name)
+        case .kind:
+            return lhs.kind.localizedStandardCompare(rhs.kind)
+        case .modified:
+            return order(lhs.modified ?? .distantPast, rhs.modified ?? .distantPast)
+        case .size:
+            // Folders report no size; -1 keeps them ordered among themselves.
+            return order(lhs.size ?? -1, rhs.size ?? -1)
+        }
+    }
+
+    private static func order<T: Comparable>(_ lhs: T, _ rhs: T) -> ComparisonResult {
+        if lhs == rhs { return .orderedSame }
+        return lhs < rhs ? .orderedAscending : .orderedDescending
+    }
+}
+
+/// One screen on the iPhone's navigation stack. A single Hashable type keeps
+/// the stack's path homogeneous ([DriveRoute]) with one destination handler.
+nonisolated enum DriveRoute: Hashable {
+    case folder(URL)
+    case file(URL)
+}
+
+// MARK: - Module root
+
 struct DriveView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.isCompactLayout) private var isCompact
     @State private var locations = DriveLocations()
+    /// Regular layout only — the folder the middle pane is showing.
     @State private var currentFolder: URL?
-    @State private var items: [DriveItem] = []
+    /// Compact layout only — the pushed screens.
+    @State private var path: [DriveRoute] = []
     @State private var selection: URL?
-    @State private var renamingItem: DriveItem?
-    @State private var renameText = ""
-    @State private var creatingFolder = false
-    @State private var newFolderName = ""
-    @State private var errorText: String?
-    @State private var tagStore = FinderTagStore()
-    @State private var newTagTarget: DriveItem?
-    @State private var newTagName = ""
+    /// iOS folder picker (macOS uses NSOpenPanel via DriveLocations).
+    @State private var addingLocation = false
     @AppStorage("drive.showPreview") private var showPreview = true
     @AppStorage("drive.previewWidth") private var previewWidth = 300.0
     @State private var previewDragBase: Double?
 
     var body: some View {
+        Group {
+            if isCompact {
+                compactPanes
+            } else {
+                regularPanes
+            }
+        }
+        .background(Theme.Palette.background)
+        .navigationTitle("Drive")
+        .task {
+            removeUniversalFileLinksIfNeeded()
+        }
+    }
+
+    // MARK: Panes
+
+    /// Mac / iPad: locations + browser side by side. The preview is a SIBLING
+    /// of the split (not a pane of it) so toggling it is instant, and its width
+    /// comes from the drag handle rather than the splitter.
+    private var regularPanes: some View {
         HStack(spacing: 0) {
-            HSplitView {
-                sidebar
+            PlatformHSplit {
+                locationsPane
                     .frame(minWidth: 180, idealWidth: 210, maxWidth: 280)
                 browser
-                    .frame(minWidth: 420)
+                    .frame(minWidth: 320)
             }
-            // Sibling pane (not an HSplitView child): appears/disappears
-            // immediately when toggled; width adjustable via the drag handle.
             if showPreview {
                 previewResizeHandle
                 Group {
-                    if let selection, let item = items.first(where: { $0.url == selection }) {
-                        DrivePreviewPane(item: item, onOpen: { open(item) })
-                            .id(item.url)
+                    if let selection {
+                        DrivePreviewPane(item: DriveItem(url: selection)) {
+                            open(DriveItem(url: selection))
+                        }
+                        .id(selection)
                     } else {
                         VStack(spacing: Theme.Spacing.sm) {
                             Image(systemName: "eye")
@@ -66,82 +154,34 @@ struct DriveView: View {
                 .frame(width: previewWidth)
             }
         }
-        .background(Theme.Palette.background)
-        .navigationTitle("Drive")
-        .task {
-            removeUniversalFileLinksIfNeeded()
-            tagStore.refresh(locations: locations.roots)
-        }
-        .onChange(of: locations.roots) { _, roots in
-            tagStore.refresh(locations: roots)
-        }
-        .toolbar {
-            ToolbarItem {
-                Button {
-                    locations.addLocation()
-                } label: {
-                    Label("Add Location", systemImage: "folder.badge.plus")
+    }
+
+    /// iPhone: one screen at a time — locations → folder → file preview. Each
+    /// pushed folder screen loads its OWN listing, so popping back reveals the
+    /// parent's files with nothing stale in between.
+    private var compactPanes: some View {
+        NavigationStack(path: $path) {
+            locationsPane
+                .navigationTitle("Drive")
+                .navigationDestination(for: DriveRoute.self) { route in
+                    switch route {
+                    case .folder(let folder):
+                        DriveFileList(
+                            folder: folder,
+                            roots: locations.roots,
+                            selection: $selection,
+                            onOpen: open
+                        )
+                        .navigationTitle(folder.lastPathComponent)
+                        .inlineNavigationTitle()
+                    case .file(let file):
+                        DrivePreviewPane(item: DriveItem(url: file)) {
+                            PlatformKit.open(file)
+                        }
+                        .navigationTitle(file.lastPathComponent)
+                        .inlineNavigationTitle()
+                    }
                 }
-                .help("Add a folder to browse")
-            }
-            ToolbarItem {
-                Button {
-                    reload()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .help("Refresh")
-                .disabled(currentFolder == nil)
-            }
-            ToolbarItem {
-                Button {
-                    newFolderName = ""
-                    creatingFolder = true
-                } label: {
-                    Image(systemName: "folder.badge.plus.fill")
-                }
-                .help("New Folder here")
-                .disabled(currentFolder == nil)
-            }
-            ToolbarItem {
-                Toggle(isOn: $showPreview) {
-                    Image(systemName: "sidebar.right")
-                }
-                .help(showPreview ? "Hide Preview" : "Show Preview")
-            }
-        }
-        .alert("Rename", isPresented: .init(
-            get: { renamingItem != nil },
-            set: { if !$0 { renamingItem = nil } }
-        )) {
-            TextField("Name", text: $renameText)
-            Button("Rename") {
-                if let renamingItem { rename(renamingItem, to: renameText) }
-                renamingItem = nil
-            }
-            Button("Cancel", role: .cancel) { renamingItem = nil }
-        }
-        .alert("New Tag", isPresented: .init(
-            get: { newTagTarget != nil },
-            set: { if !$0 { newTagTarget = nil } }
-        )) {
-            TextField("Tag name", text: $newTagName)
-            Button("Create & Apply") {
-                let name = newTagName.trimmingCharacters(in: .whitespaces)
-                if !name.isEmpty, let target = newTagTarget {
-                    tagStore.addCustom(name)
-                    toggleFinderTag(target, name)
-                }
-                newTagTarget = nil
-            }
-            Button("Cancel", role: .cancel) { newTagTarget = nil }
-        } message: {
-            Text("Creates a Finder tag and applies it to “\(newTagTarget?.name ?? "")”. It becomes available everywhere Finder tags are used.")
-        }
-        .alert("New Folder", isPresented: $creatingFolder) {
-            TextField("Folder name", text: $newFolderName)
-            Button("Create") { createFolder(named: newFolderName) }
-            Button("Cancel", role: .cancel) {}
         }
     }
 
@@ -163,19 +203,17 @@ struct DriveView: View {
                             }
                             .onEnded { _ in previewDragBase = nil }
                     )
-                    .onHover { hovering in
-                        if hovering {
-                            NSCursor.resizeLeftRight.push()
-                        } else {
-                            NSCursor.pop()
-                        }
-                    }
+                    .platformResizeCursor()
             )
     }
 
-    // MARK: Sidebar
+    // MARK: Locations
 
-    private var sidebar: some View {
+    /// The locations list. It carries the module-level toolbar (Add Location,
+    /// preview toggle) so those buttons land on the right bar on every layout:
+    /// the window toolbar on Mac, the detail bar on iPad, and the root screen's
+    /// bar inside the iPhone's navigation stack.
+    private var locationsPane: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("LOCATIONS")
                 .font(Theme.Font.cardCaption.weight(.semibold))
@@ -186,7 +224,7 @@ struct DriveView: View {
                     Text("No locations yet.")
                         .font(Theme.Font.cardBody)
                         .foregroundStyle(Theme.Palette.textSecondary)
-                    Button("Add Location…") { locations.addLocation() }
+                    Button("Add Location…") { requestLocation() }
                         .buttonStyle(.borderedProminent)
                         .tint(Theme.Palette.primary)
                 }
@@ -195,7 +233,7 @@ struct DriveView: View {
             List {
                 ForEach(locations.roots, id: \.self) { root in
                     Button {
-                        navigate(to: root)
+                        openLocation(root)
                     } label: {
                         HStack(spacing: Theme.Spacing.sm) {
                             Image(systemName: "folder.fill")
@@ -208,18 +246,16 @@ struct DriveView: View {
                     }
                     .buttonStyle(.plain)
                     .listRowBackground(
-                        isInside(root) ? Theme.Palette.primary.opacity(0.12) : Color.clear
+                        isInside(root) ? Theme.Palette.primary.softFill(0.12) : Color.clear
                     )
                     .contextMenu {
+                        #if os(macOS)
                         Button("Reveal in Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([root])
+                            PlatformKit.reveal(root)
                         }
+                        #endif
                         Button("Remove from Drive", role: .destructive) {
-                            if isInside(root) {
-                                currentFolder = nil
-                                items = []
-                            }
-                            locations.remove(root)
+                            removeLocation(root)
                         }
                     }
                 }
@@ -227,14 +263,50 @@ struct DriveView: View {
             .listStyle(.sidebar)
         }
         .background(Theme.Palette.surface)
+        .toolbar {
+            ToolbarItem {
+                Button {
+                    requestLocation()
+                } label: {
+                    Label("Add Location", systemImage: "folder.badge.plus")
+                }
+                .help("Add a folder to browse")
+            }
+            if !isCompact {
+                ToolbarItem {
+                    Toggle(isOn: $showPreview) {
+                        Image(systemName: "sidebar.right")
+                    }
+                    .help(showPreview ? "Hide Preview" : "Show Preview")
+                }
+            }
+        }
+        // iOS has no NSOpenPanel — the document picker grants the same
+        // sandbox access, and DriveLocations bookmarks whatever comes back.
+        .fileImporter(
+            isPresented: $addingLocation,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: true
+        ) { result in
+            guard case .success(let urls) = result else { return }
+            for url in urls { locations.add(url) }
+        }
     }
 
     private func isInside(_ root: URL) -> Bool {
-        guard let currentFolder else { return false }
-        return currentFolder.path == root.path || currentFolder.path.hasPrefix(root.path + "/")
+        guard let folder = isCompact ? compactFolder : currentFolder else { return false }
+        return folder.path == root.path || folder.path.hasPrefix(root.path + "/")
     }
 
-    // MARK: Browser
+    /// The folder the compact stack is currently showing (nil at the root).
+    private var compactFolder: URL? {
+        for route in path.reversed() {
+            if case .folder(let url) = route { return url }
+        }
+        return nil
+    }
+
+    // MARK: Browser (regular layout)
 
     @ViewBuilder
     private var browser: some View {
@@ -242,18 +314,12 @@ struct DriveView: View {
             VStack(spacing: 0) {
                 breadcrumbs(for: currentFolder)
                 Divider().overlay(Theme.Palette.separator)
-                if let errorText {
-                    Text(errorText)
-                        .font(Theme.Font.cardCaption)
-                        .foregroundStyle(Theme.Palette.danger)
-                        .padding(Theme.Spacing.sm)
-                }
-                if items.isEmpty {
-                    EmptyStateLine(text: "Empty folder.")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    fileList
-                }
+                DriveFileList(
+                    folder: currentFolder,
+                    roots: locations.roots,
+                    selection: $selection,
+                    onOpen: open
+                )
             }
         } else {
             VStack(spacing: Theme.Spacing.md) {
@@ -306,42 +372,296 @@ struct DriveView: View {
         }
     }
 
-    private var fileList: some View {
-        List(selection: $selection) {
-            ForEach(items) { item in
-                DriveRow(item: item)
+    // MARK: Actions
+
+    private func requestLocation() {
+        #if os(macOS)
+        locations.addLocation()
+        #else
+        addingLocation = true
+        #endif
+    }
+
+    private func removeLocation(_ root: URL) {
+        if isInside(root) {
+            currentFolder = nil
+            path = []
+            selection = nil
+        }
+        locations.remove(root)
+    }
+
+    private func openLocation(_ root: URL) {
+        selection = nil
+        if isCompact {
+            path = [.folder(root)]
+        } else {
+            navigate(to: root)
+        }
+    }
+
+    private func navigate(to folder: URL) {
+        currentFolder = folder
+        selection = nil
+    }
+
+    /// Row activation. On the phone every open PUSHES a screen (folders drill
+    /// in, files show their preview); elsewhere folders navigate the middle
+    /// pane in place and files hand off to the system.
+    private func open(_ item: DriveItem) {
+        if isCompact {
+            path.append(item.isDirectory ? .folder(item.url) : .file(item.url))
+        } else if item.isDirectory {
+            navigate(to: item.url)
+        } else {
+            PlatformKit.open(item.url)
+        }
+    }
+
+    /// Drive uses REAL Finder tags (owner decision, reaffirmed 2026-07-11
+    /// after trying universal tags here): they live as file metadata, show in
+    /// Finder/Apple apps, and iCloud Drive syncs them with the file itself.
+    /// This one-time cleanup removes the experimental universal file links.
+    private func removeUniversalFileLinksIfNeeded() {
+        let flag = "tags.fileLinksRemoved"
+        guard !UserDefaults.standard.bool(forKey: flag) else { return }
+        let links = (try? modelContext.fetch(FetchDescriptor<HVTagLink>())) ?? []
+        var changed = false
+        for link in links where link.itemKind == "file" {
+            modelContext.delete(link)
+            changed = true
+        }
+        if changed {
+            try? modelContext.save()
+            NotificationCenter.default.post(name: .hyperviewTagsChanged, object: nil)
+        }
+        UserDefaults.standard.set(true, forKey: flag)
+    }
+}
+
+// MARK: - File list
+
+/// One folder's contents plus everything you can do to them. Self-contained on
+/// purpose: the regular layout hosts one of these in the middle pane, and the
+/// compact layout pushes a fresh one per folder, each owning its own listing.
+private struct DriveFileList: View {
+    let folder: URL
+    /// The Drive roots — the Finder-tag vocabulary is scanned from them.
+    let roots: [URL]
+    @Binding var selection: URL?
+    let onOpen: (DriveItem) -> Void
+
+    @Environment(\.isCompactLayout) private var isCompact
+    @State private var items: [DriveItem] = []
+    @State private var errorText: String?
+    @State private var renamingItem: DriveItem?
+    @State private var renameText = ""
+    @State private var creatingFolder = false
+    @State private var newFolderName = ""
+    @AppStorage("drive.sortField") private var sortField: DriveSortField = .name
+    @AppStorage("drive.sortAscending") private var sortAscending = true
+    #if os(macOS)
+    @State private var tagStore = FinderTagStore()
+    @State private var newTagTarget: DriveItem?
+    @State private var newTagName = ""
+    #endif
+
+    /// The sort is a VIEW of the listing — changing it never re-reads the disk.
+    private var sortedItems: [DriveItem] {
+        DriveSort.apply(items, field: sortField, ascending: sortAscending)
+    }
+
+    /// The "New Tag…" alert only exists on macOS (Finder tags do), so the body
+    /// wraps the shared `core` rather than threading a `#if` through it.
+    @ViewBuilder
+    var body: some View {
+        #if os(macOS)
+        core
+            .alert("New Tag", isPresented: .init(
+                get: { newTagTarget != nil },
+                set: { if !$0 { newTagTarget = nil } }
+            )) {
+                TextField("Tag name", text: $newTagName)
+                Button("Create & Apply") {
+                    let name = newTagName.trimmingCharacters(in: .whitespaces)
+                    if !name.isEmpty, let target = newTagTarget {
+                        tagStore.addCustom(name)
+                        toggleFinderTag(target, name)
+                    }
+                    newTagTarget = nil
+                }
+                Button("Cancel", role: .cancel) { newTagTarget = nil }
+            } message: {
+                Text("Creates a Finder tag and applies it to “\(newTagTarget?.name ?? "")”. It becomes available everywhere Finder tags are used.")
+            }
+        #else
+        core
+        #endif
+    }
+
+    private var core: some View {
+        VStack(spacing: 0) {
+            if let errorText {
+                Text(errorText)
+                    .font(Theme.Font.cardCaption)
+                    .foregroundStyle(Theme.Palette.danger)
+                    .padding(Theme.Spacing.sm)
+            }
+            if items.isEmpty {
+                EmptyStateLine(text: "Empty folder.")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                list
+            }
+        }
+        .task(id: folder) {
+            reload()
+            #if os(macOS)
+            tagStore.refresh(locations: roots)
+            #endif
+        }
+        .toolbar {
+            ToolbarItem { sortMenu }
+            ToolbarItem {
+                Button {
+                    reload()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("Refresh")
+            }
+            ToolbarItem {
+                Button {
+                    newFolderName = ""
+                    creatingFolder = true
+                } label: {
+                    Image(systemName: "folder.badge.plus.fill")
+                }
+                .help("New Folder here")
+            }
+        }
+        .alert("Rename", isPresented: .init(
+            get: { renamingItem != nil },
+            set: { if !$0 { renamingItem = nil } }
+        )) {
+            TextField("Name", text: $renameText)
+            Button("Rename") {
+                if let renamingItem { rename(renamingItem, to: renameText) }
+                renamingItem = nil
+            }
+            Button("Cancel", role: .cancel) { renamingItem = nil }
+        }
+        .alert("New Folder", isPresented: $creatingFolder) {
+            TextField("Folder name", text: $newFolderName)
+            Button("Create") { createFolder(named: newFolderName) }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    // MARK: List
+
+    @ViewBuilder
+    private var list: some View {
+        if isCompact {
+            // The phone has no hover/right-click and no preview pane: a single
+            // tap opens (pushes), and destructive actions come from swipes.
+            List {
+                ForEach(sortedItems) { item in
+                    DriveRow(item: item)
+                        .contentShape(Rectangle())
+                        .onTapGesture { onOpen(item) }
+                        .contextMenu { rowMenu(item) }
+                        .swipeActions(edge: .trailing) {
+                            Button("Delete", systemImage: "trash", role: .destructive) {
+                                trash(item)
+                            }
+                        }
+                }
+            }
+        } else {
+            selectableList
+        }
+    }
+
+    /// Mac / iPad: click selects (driving the preview pane), double-click opens.
+    @ViewBuilder
+    private var selectableList: some View {
+        let list = List(selection: $selection) {
+            ForEach(sortedItems) { item in
+                row(item)
                     .tag(item.url)
                     .contentShape(Rectangle())
                     // Simultaneous so single-click still selects the row (a
                     // plain double-click gesture swallowed selection clicks).
-                    .simultaneousGesture(TapGesture(count: 2).onEnded { open(item) })
+                    .simultaneousGesture(TapGesture(count: 2).onEnded { onOpen(item) })
                     .simultaneousGesture(TapGesture().onEnded { selection = item.url })
                     .contextMenu { rowMenu(item) }
             }
         }
         .listStyle(.inset)
-        .onDeleteCommand {
+        #if os(macOS)
+        list.onDeleteCommand {
             if let selection, let item = items.first(where: { $0.url == selection }) {
                 trash(item)
             }
         }
+        #else
+        list
+        #endif
+    }
+
+    @ViewBuilder
+    private func row(_ item: DriveItem) -> some View {
+        #if os(macOS)
+        // The List draws its own selection highlight.
+        DriveRow(item: item)
+        #else
+        // iPadOS only highlights List selection in edit mode, so paint it.
+        DriveRow(item: item)
+            .listRowBackground(
+                selection == item.url ? Theme.Palette.primary.softFill(0.12) : Color.clear
+            )
+        #endif
+    }
+
+    /// Finder-style sort control: the field, then the direction.
+    private var sortMenu: some View {
+        Menu {
+            Picker("Sort By", selection: $sortField) {
+                ForEach(DriveSortField.allCases) { field in
+                    Text(field.title).tag(field)
+                }
+            }
+            Divider()
+            Picker("Order", selection: $sortAscending) {
+                Text("Ascending").tag(true)
+                Text("Descending").tag(false)
+            }
+        } label: {
+            Label("Sort", systemImage: sortAscending ? "arrow.up.arrow.down" : "arrow.down.arrow.up")
+        }
+        .help("Sort by \(sortField.title)")
     }
 
     @ViewBuilder
     private func rowMenu(_ item: DriveItem) -> some View {
-        Button(item.isDirectory ? "Open" : "Open with Default App") { open(item) }
+        Button(item.isDirectory ? "Open" : "Open with Default App") { onOpen(item) }
+        #if os(macOS)
         Button("Reveal in Finder") {
-            NSWorkspace.shared.activateFileViewerSelecting([item.url])
+            PlatformKit.reveal(item.url)
         }
+        #endif
         Divider()
         Button("Rename…") {
             renameText = item.name
             renamingItem = item
         }
         Button("Duplicate") { duplicate(item) }
+        #if os(macOS)
         // Real Finder tags — file metadata, visible in Finder/Apple apps,
         // synced with the file by iCloud Drive. The full vocabulary comes
         // from FinderTagStore (favorites + in-use + standard + user-created).
+        // iOS has no `.tagNamesKey`, so this whole menu is Mac-only.
         Menu("Finder Tags") {
             ForEach(tagStore.allTags, id: \.self) { name in
                 Button {
@@ -360,9 +680,9 @@ struct DriveView: View {
                 newTagTarget = item
             }
         }
+        #endif
         Button("Copy Path") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(item.url.path, forType: .string)
+            PlatformKit.copyToClipboard(item.url.path)
         }
         Divider()
         Button("Move to Trash", role: .destructive) { trash(item) }
@@ -370,36 +690,18 @@ struct DriveView: View {
 
     // MARK: Actions
 
-    private func navigate(to folder: URL) {
-        currentFolder = folder
-        selection = nil
-        reload()
-    }
-
     private func reload() {
         errorText = nil
-        guard let currentFolder else { return }
         do {
             let urls = try FileManager.default.contentsOfDirectory(
-                at: currentFolder,
-                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .tagNamesKey],
+                at: folder,
+                includingPropertiesForKeys: DriveItem.resourceKeys,
                 options: [.skipsHiddenFiles]
             )
-            items = urls.map(DriveItem.init(url:)).sorted { a, b in
-                if a.isDirectory != b.isDirectory { return a.isDirectory }
-                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-            }
+            items = urls.map(DriveItem.init(url:))
         } catch {
             items = []
             errorText = "Couldn't read this folder."
-        }
-    }
-
-    private func open(_ item: DriveItem) {
-        if item.isDirectory {
-            navigate(to: item.url)
-        } else {
-            NSWorkspace.shared.open(item.url)
         }
     }
 
@@ -446,6 +748,19 @@ struct DriveView: View {
         }
     }
 
+    private func createFolder(named name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        let newFolder = folder.appendingPathComponent(trimmed)
+        do {
+            try FileManager.default.createDirectory(at: newFolder, withIntermediateDirectories: false)
+            reload()
+        } catch {
+            errorText = "Couldn't create the folder."
+        }
+    }
+
+    #if os(macOS)
     private func toggleFinderTag(_ item: DriveItem, _ name: String) {
         var tags = item.finderTags
         if let index = tags.firstIndex(of: name) {
@@ -460,74 +775,140 @@ struct DriveView: View {
             errorText = "Couldn't change the Finder tags for “\(item.name)”."
         }
     }
-
-    /// Drive uses REAL Finder tags (owner decision, reaffirmed 2026-07-11
-    /// after trying universal tags here): they live as file metadata, show in
-    /// Finder/Apple apps, and iCloud Drive syncs them with the file itself.
-    /// This one-time cleanup removes the experimental universal file links.
-    private func removeUniversalFileLinksIfNeeded() {
-        let flag = "tags.fileLinksRemoved"
-        guard !UserDefaults.standard.bool(forKey: flag) else { return }
-        let links = (try? modelContext.fetch(FetchDescriptor<HVTagLink>())) ?? []
-        var changed = false
-        for link in links where link.itemKind == "file" {
-            modelContext.delete(link)
-            changed = true
-        }
-        if changed {
-            try? modelContext.save()
-            NotificationCenter.default.post(name: .hyperviewTagsChanged, object: nil)
-        }
-        UserDefaults.standard.set(true, forKey: flag)
-    }
-
-    private func createFolder(named name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, let currentFolder else { return }
-        let folder = currentFolder.appendingPathComponent(trimmed)
-        do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
-            reload()
-        } catch {
-            errorText = "Couldn't create the folder."
-        }
-    }
+    #endif
 }
 
 // MARK: - Items & rows
 
-/// One directory entry with the metadata the list shows.
-struct DriveItem: Identifiable {
+/// One directory entry with the metadata the list shows and sorts on.
+nonisolated struct DriveItem: Identifiable {
     let url: URL
     let name: String
     let isDirectory: Bool
     let size: Int?
     let modified: Date?
-    /// Finder tags (real ones — visible in Finder and Apple apps).
+    /// The file's UTI — what the "Kind" sort and the preview pane read.
+    let contentType: UTType?
+    /// Finder tags (real ones — visible in Finder and Apple apps). Always empty
+    /// on iOS: `URLResourceKey.tagNames` is macOS-only.
     let finderTags: [String]
 
     var id: URL { url }
 
+    /// The keys a listing must prefetch so building items doesn't re-stat.
+    static var resourceKeys: [URLResourceKey] {
+        #if os(macOS)
+        [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .contentTypeKey, .tagNamesKey]
+        #else
+        [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .contentTypeKey]
+        #endif
+    }
+
     init(url: URL) {
         self.url = url
         self.name = url.lastPathComponent
-        let values = try? url.resourceValues(forKeys: [
-            .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .tagNamesKey,
-        ])
+        let values = try? url.resourceValues(forKeys: Set(Self.resourceKeys))
         self.isDirectory = values?.isDirectory ?? false
         self.size = values?.fileSize
         self.modified = values?.contentModificationDate
+        self.contentType = values?.contentType
+        #if os(macOS)
         self.finderTags = values?.tagNames ?? []
+        #else
+        self.finderTags = []
+        #endif
+    }
+
+    /// Human-readable type — the "Kind" column's sort key and the preview's
+    /// subtitle ("PNG image", "Folder"…).
+    var kind: String {
+        if isDirectory { return "Folder" }
+        if let description = contentType?.localizedDescription { return description }
+        return url.pathExtension.isEmpty ? "File" : url.pathExtension.uppercased()
+    }
+
+    /// SF Symbol for the type. macOS shows the real NSWorkspace icon; iOS has
+    /// no such API, so this is what a row draws until (or unless) Quick Look
+    /// returns a thumbnail.
+    var symbolName: String {
+        if isDirectory { return "folder.fill" }
+        guard let contentType else { return "doc" }
+        if contentType.conforms(to: .image) { return "photo" }
+        if contentType.conforms(to: .movie) { return "film" }
+        if contentType.conforms(to: .audio) { return "music.note" }
+        if contentType.conforms(to: .pdf) { return "doc.richtext" }
+        if contentType.conforms(to: .archive) { return "doc.zipper" }
+        if contentType.conforms(to: .sourceCode) { return "chevron.left.forwardslash.chevron.right" }
+        if contentType.conforms(to: .text) { return "doc.text" }
+        return "doc"
     }
 }
 
-/// Right-side preview: Quick Look rendering (works for images, PDFs, video
-/// frames, documents…), inline text for plain-text files, plus metadata.
+/// Quick Look renderings, bridged to the platform image type (QL returns a
+/// CGImage on both platforms, so one path serves Mac and iOS).
+enum DriveThumbnail {
+    static func generate(
+        for url: URL,
+        size: CGSize,
+        representations: QLThumbnailGenerator.Request.RepresentationTypes
+    ) async -> PlatformImage? {
+        let request = QLThumbnailGenerator.Request(
+            fileAt: url,
+            size: size,
+            scale: 2,
+            representationTypes: representations
+        )
+        guard let representation = try? await QLThumbnailGenerator.shared
+            .generateBestRepresentation(for: request) else { return nil }
+        return PlatformImage.fromCGImage(representation.cgImage)
+    }
+}
+
+/// A file's icon. macOS asks NSWorkspace (instant, always right); iOS has no
+/// equivalent, so it asks Quick Look for an icon representation and shows the
+/// UTType's SF Symbol until one arrives — or forever, if none does.
+private struct DriveIcon: View {
+    let item: DriveItem
+    let size: CGFloat
+
+    @State private var icon: PlatformImage?
+
+    var body: some View {
+        Group {
+            if let icon {
+                Image(platformImage: icon)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: item.symbolName)
+                    .font(.system(size: size * 0.75))
+                    .foregroundStyle(Theme.Palette.primary)
+            }
+        }
+        .frame(width: size, height: size)
+        .task(id: item.url) {
+            if let systemIcon = PlatformKit.fileIcon(for: item.url) {
+                icon = systemIcon
+                return
+            }
+            guard !item.isDirectory else { return }
+            icon = await DriveThumbnail.generate(
+                for: item.url,
+                size: CGSize(width: size, height: size),
+                representations: .icon
+            )
+        }
+    }
+}
+
+/// Right-side (or, on the phone, pushed) preview: Quick Look rendering — works
+/// for images, PDFs, video frames, documents — inline text for plain-text
+/// files, plus the metadata.
 private struct DrivePreviewPane: View {
     let item: DriveItem
     let onOpen: () -> Void
 
-    @State private var thumbnail: NSImage?
+    @State private var thumbnail: PlatformImage?
     @State private var textPreview: String?
 
     var body: some View {
@@ -540,7 +921,7 @@ private struct DrivePreviewPane: View {
                             .font(Theme.Font.cardBody.weight(.semibold))
                             .multilineTextAlignment(.center)
                             .lineLimit(3)
-                        Text(kindDescription)
+                        Text(item.kind)
                             .font(Theme.Font.cardCaption)
                             .foregroundStyle(Theme.Palette.textSecondary)
                         if !item.isDirectory, let size = item.size {
@@ -563,17 +944,32 @@ private struct DrivePreviewPane: View {
                 .padding(Theme.Spacing.md)
                 .frame(maxWidth: .infinity)
             }
-            HStack {
-                Button("Open", action: onOpen)
-                Button("Reveal in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([item.url])
-                }
-            }
-            .padding(.bottom, Theme.Spacing.md)
+            actions
+                .padding(.bottom, Theme.Spacing.md)
         }
         .frame(maxHeight: .infinity)
         .background(Theme.Palette.surface)
         .task { await loadPreview() }
+    }
+
+    /// The Mac opens files in their default app and reveals them in Finder;
+    /// iOS has neither verb — the share sheet is how a file leaves the app.
+    @ViewBuilder
+    private var actions: some View {
+        #if os(macOS)
+        HStack {
+            Button("Open", action: onOpen)
+            Button("Reveal in Finder") {
+                PlatformKit.reveal(item.url)
+            }
+        }
+        #else
+        if !item.isDirectory {
+            ShareLink(item: item.url) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+        }
+        #endif
     }
 
     @ViewBuilder
@@ -586,28 +982,20 @@ private struct DrivePreviewPane: View {
                 .padding(Theme.Spacing.sm)
                 .background(Theme.Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
         } else if let thumbnail {
-            Image(nsImage: thumbnail)
+            Image(platformImage: thumbnail)
                 .resizable()
                 .scaledToFit()
                 .frame(maxHeight: 280)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
         } else {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
-                .resizable()
-                .frame(width: 96, height: 96)
+            DriveIcon(item: item, size: 96)
         }
-    }
-
-    private var kindDescription: String {
-        if item.isDirectory { return "Folder" }
-        let type = UTType(filenameExtension: item.url.pathExtension)
-        return type?.localizedDescription ?? (item.url.pathExtension.isEmpty ? "File" : item.url.pathExtension.uppercased())
     }
 
     private func loadPreview() async {
         guard !item.isDirectory else { return }
         // Small plain-text files render as text; everything else via Quick Look.
-        if let type = UTType(filenameExtension: item.url.pathExtension),
+        if let type = item.contentType,
            type.conforms(to: .text) || type.conforms(to: .sourceCode),
            let size = item.size, size < 200_000,
            let data = try? Data(contentsOf: item.url),
@@ -615,22 +1003,19 @@ private struct DrivePreviewPane: View {
             textPreview = String(string.prefix(4000))
             return
         }
-        let request = QLThumbnailGenerator.Request(
-            fileAt: item.url,
+        thumbnail = await DriveThumbnail.generate(
+            for: item.url,
             size: CGSize(width: 512, height: 512),
-            scale: 2,
-            representationTypes: .thumbnail
+            representations: .thumbnail
         )
-        if let representation = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) {
-            thumbnail = representation.nsImage
-        }
     }
 }
 
 private struct DriveRow: View {
     let item: DriveItem
 
-    /// Finder's standard tag-name → color mapping.
+    /// Finder's standard tag-name → color mapping (macOS only; `finderTags` is
+    /// always empty on iOS, so the dots simply never render there).
     private static let tagColors: [String: Color] = [
         "Red": .red, "Orange": .orange, "Yellow": .yellow,
         "Green": .green, "Blue": .blue, "Purple": .purple, "Gray": .gray,
@@ -638,9 +1023,7 @@ private struct DriveRow: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
-                .resizable()
-                .frame(width: 18, height: 18)
+            DriveIcon(item: item, size: 18)
             Text(item.name)
                 .font(Theme.Font.cardBody)
                 .lineLimit(1)
@@ -670,5 +1053,3 @@ private struct DriveRow: View {
         .contentShape(Rectangle())
     }
 }
-
-#endif

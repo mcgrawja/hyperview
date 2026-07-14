@@ -25,6 +25,22 @@ final class Note {
     /// Fractional/lexicographic ordering within the folder (§4.1). Never reindex.
     var sortKey: String = ""
 
+    // MARK: Trash
+    //
+    // Deleting a note SOFT-deletes it: `context.delete` was unrecoverable, and a
+    // note is the kind of thing you delete at 1am and want back at 9am. Trashed
+    // notes are excluded from every list and hidden from search; "Recently
+    // Deleted" is the one place they surface.
+
+    /// When the note was trashed. `nil` for a live note.
+    var deletedAt: Date? = nil
+    /// The folder it was in when trashed, so Restore puts it BACK rather than
+    /// dumping it at the top level. (An id, not a relationship: the folder may
+    /// itself be deleted while the note sits in the trash.)
+    var trashedFromFolderID: UUID? = nil
+
+    var isTrashed: Bool { deletedAt != nil }
+
     @Relationship(deleteRule: .cascade, inverse: \Block.note)
     var blocks: [Block]? = []
 

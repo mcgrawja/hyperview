@@ -114,8 +114,34 @@ struct NotesStore {
 
     // MARK: Delete / archive
 
+    /// SOFT-delete: move the note to the trash. Everything that lists notes
+    /// filters `isTrashed` out, so this reads as a delete — but it's reversible,
+    /// which the old `context.delete` (cascading straight through the blocks)
+    /// was not.
     func delete(_ note: Note) {
+        note.trashedFromFolderID = note.folder?.id
+        note.deletedAt = Date()
+        note.folder = nil
+        note.modifiedAt = Date()
+    }
+
+    /// Put a trashed note back where it came from, if that folder still exists.
+    func restore(_ note: Note, folders: [Folder]) {
+        note.folder = folders.first { $0.id == note.trashedFromFolderID }
+        note.deletedAt = nil
+        note.trashedFromFolderID = nil
+        note.modifiedAt = Date()
+    }
+
+    /// The real, irreversible delete — only ever reached from the trash.
+    func deletePermanently(_ note: Note) {
         context.delete(note) // cascades to blocks (§4 delete rule)
+    }
+
+    func emptyTrash(_ notes: [Note]) {
+        for note in notes where note.isTrashed {
+            context.delete(note)
+        }
     }
 
     func archive(_ note: Note, _ archived: Bool = true) {

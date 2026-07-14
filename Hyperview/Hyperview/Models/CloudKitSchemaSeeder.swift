@@ -22,7 +22,10 @@ import SwiftData
 nonisolated enum CloudKitSchemaSeeder {
     // v3: HVTag/HVTagLink added — re-run so the new record types register in
     // the CloudKit development schema (then deploy to production in Console).
-    private static let flag = "cloudkit.schemaInitialized.v3"
+    // v4: Note.deletedAt / Note.trashedFromFolderID (the Notes trash). New
+    // FIELDS on an existing record type still need re-seeding, and still need a
+    // production deploy before an archived build will sync them.
+    private static let flag = "cloudkit.schemaInitialized.v4"
 
     /// One-shot, off the main thread (the upload can take a little while).
     static func initializeIfNeeded() {

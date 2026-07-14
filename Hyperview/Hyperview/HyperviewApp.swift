@@ -25,6 +25,7 @@ struct HyperviewApp: App {
     #endif
     private let tagsStore: TagsStore
     private let notificationCoordinator: NotificationCoordinator
+    private let contactPhotos = ContactPhotoStore()
 
     init() {
         // Flush stdout immediately so diagnostic logs appear in real time even
@@ -112,6 +113,7 @@ struct HyperviewApp: App {
                 #endif
                 .environment(\.tagsStore, tagsStore)
                 .environment(\.notificationCoordinator, notificationCoordinator)
+                .environment(\.contactPhotos, contactPhotos)
         }
         .modelContainer(modelContainer)
     }

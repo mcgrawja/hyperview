@@ -21,6 +21,7 @@ struct MessagesView: View {
     }
 
     @Environment(\.brokers) private var brokers
+    @Environment(\.contactPhotos) private var contactPhotos
     @Environment(\.messagesDB) private var sharedDatabase
 
     @State private var fallbackDatabase = MessagesDatabase()
@@ -501,6 +502,10 @@ struct MessagesView: View {
 
     /// Handles are phone numbers / emails; borrow Contacts for display names.
     private func buildNameIndex() async {
+        // Same address book, one pass — the photo store indexes faces while we
+        // index names, so chat avatars have something to draw.
+        if let contactPhotos { await contactPhotos.loadIfNeeded(brokers) }
+
         guard brokers.contacts.authorization == .authorized || brokers.contacts.authorization == .limited,
               let contacts = try? await brokers.contacts.fetch(BrokerQuery(limit: 3000)) else { return }
         var index: [String: String] = [:]
@@ -545,6 +550,8 @@ private struct ChatRow: View {
     let title: String
     var isPinned: Bool = false
 
+    @Environment(\.contactPhotos) private var contactPhotos
+
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
             if isPinned {
@@ -552,19 +559,23 @@ private struct ChatRow: View {
                     .font(.system(size: 9))
                     .foregroundStyle(Theme.Palette.textSecondary)
             }
-            ZStack {
-                Circle()
-                    .fill(Theme.Palette.primary.opacity(0.25))
-                    .frame(width: 34, height: 34)
-                if chat.isGroup {
+            if chat.isGroup {
+                ZStack {
+                    Circle()
+                        .fill(Theme.Palette.primary.opacity(0.15))
+                        .frame(width: 34, height: 34)
                     Image(systemName: "person.2.fill")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.Palette.primary)
-                } else {
-                    Text(initials)
-                        .font(Theme.Font.cardCaption.weight(.semibold))
-                        .foregroundStyle(Theme.Palette.primary)
                 }
+            } else {
+                // The contact's photo when we have one (handles are phone
+                // numbers or emails; the store indexes both), initials otherwise.
+                ContactAvatar(
+                    data: contactPhotos?.photo(handle: chat.identifier),
+                    name: title,
+                    size: 34
+                )
             }
             VStack(alignment: .leading, spacing: 1) {
                 HStack(alignment: .firstTextBaseline) {

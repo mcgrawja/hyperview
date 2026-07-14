@@ -100,7 +100,8 @@ struct RemindersView: View {
                             showCompleted: showCompleted,
                             selectedID: $selectedID,
                             onToggle: { reminder in Task { await toggle(reminder) } },
-                            onAdd: { title in Task { await add(title, to: list) } }
+                            onAdd: { title in Task { await add(title, to: list) } },
+                            onRefresh: { await load() }
                         )
                     }
                     if lists.isEmpty {
@@ -275,6 +276,9 @@ private struct ReminderListColumn: View {
     @Binding var selectedID: String?
     let onToggle: (ReminderSnapshot) -> Void
     let onAdd: (String) -> Void
+    /// Pull-to-refresh lives on the COLUMN, not the board: the board scrolls
+    /// horizontally, and `.refreshable` only arms a vertical scroll.
+    var onRefresh: () async -> Void = {}
 
     @State private var newTitle = ""
     /// Per-list sort, persisted under "reminders.sort.<listID>".
@@ -286,7 +290,8 @@ private struct ReminderListColumn: View {
         showCompleted: Bool,
         selectedID: Binding<String?>,
         onToggle: @escaping (ReminderSnapshot) -> Void,
-        onAdd: @escaping (String) -> Void
+        onAdd: @escaping (String) -> Void,
+        onRefresh: @escaping () async -> Void = {}
     ) {
         self.list = list
         self.reminders = reminders
@@ -294,6 +299,7 @@ private struct ReminderListColumn: View {
         _selectedID = selectedID
         self.onToggle = onToggle
         self.onAdd = onAdd
+        self.onRefresh = onRefresh
         _sortMode = State(initialValue: UserDefaults.standard.string(forKey: "reminders.sort.\(list.id)") ?? "due")
     }
 
@@ -392,6 +398,7 @@ private struct ReminderListColumn: View {
                     }
                 }
             }
+            .refreshable { await onRefresh() }
 
             HStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: "plus")

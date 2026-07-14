@@ -157,12 +157,7 @@ struct ContentView: View {
             case .notes:
                 NotesView()
             case .drive:
-                // Deferred on iOS (no Finder / Finder tags) — Phase 5.
-                #if os(macOS)
                 DriveView()
-                #else
-                EmptyView()
-                #endif
             case .contacts:
                 ContactsView()
             case .mail:
@@ -233,11 +228,12 @@ enum SidebarItem: String, Identifiable, CaseIterable {
         }
     }
 
-    // iOS/iPadOS drops Messages (Mac-only; Clock takes its place) and Drive
-    // (no Finder — deferred); macOS keeps everything.
+    // iOS/iPadOS drops Messages (Mac-only; Clock takes its place); macOS keeps
+    // everything. Drive ships on both — its Finder-tag half is simply absent
+    // on iOS.
     static var available: [SidebarItem] {
         #if os(iOS)
-        [.dashboard, .mail, .clock, .reminders, .calendar, .notes, .photos, .contacts, .claude]
+        [.dashboard, .mail, .clock, .reminders, .calendar, .notes, .drive, .photos, .contacts, .claude]
         #else
         [.dashboard, .mail, .messages, .clock, .reminders, .calendar, .notes, .drive, .photos, .contacts, .claude]
         #endif

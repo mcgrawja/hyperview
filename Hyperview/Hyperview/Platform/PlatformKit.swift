@@ -58,6 +58,37 @@ enum PlatformKit {
         NSApp.activate(ignoringOtherApps: true)
         #endif
     }
+
+    /// Ask the user for folders. macOS has a synchronous panel (NSOpenPanel);
+    /// iOS has none — callers there present SwiftUI's `.fileImporter` instead,
+    /// so this returns nil to mean "no panel on this platform" (an empty array
+    /// means the user cancelled).
+    @MainActor
+    static func pickFolders(message: String, prompt: String) -> [URL]? {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.message = message
+        panel.prompt = prompt
+        guard panel.runModal() == .OK else { return [] }
+        return panel.urls
+        #else
+        return nil
+        #endif
+    }
+
+    /// The system's icon for a file. macOS only — iOS has no equivalent API, so
+    /// callers there fall back to Quick Look (or an SF Symbol for the type).
+    @MainActor
+    static func fileIcon(for url: URL) -> PlatformImage? {
+        #if os(macOS)
+        return NSWorkspace.shared.icon(forFile: url.path)
+        #else
+        return nil
+        #endif
+    }
 }
 
 // MARK: - Layout size
@@ -131,6 +162,23 @@ extension View {
         self.datePickerStyle(.compact)
         #endif
     }
+
+    /// Show the horizontal-resize cursor while the pointer is over this view
+    /// (macOS). iOS has no cursor, so it's a no-op there.
+    @ViewBuilder
+    func platformResizeCursor() -> some View {
+        #if os(macOS)
+        self.onHover { hovering in
+            if hovering {
+                NSCursor.resizeLeftRight.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        #else
+        self
+        #endif
+    }
 }
 
 /// `HSplitView` (draggable panes) on macOS; a plain `HStack` on iOS, which has
@@ -166,6 +214,16 @@ extension Image {
 }
 
 extension PlatformImage {
+    /// Wrap a CGImage — Quick Look hands its thumbnails back as CGImages on
+    /// both platforms, so this is the one bridge a caller needs.
+    static func fromCGImage(_ image: CGImage) -> PlatformImage {
+        #if os(macOS)
+        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        #else
+        return UIImage(cgImage: image)
+        #endif
+    }
+
     /// Load an image from a file path (nil if it isn't a readable image).
     static func fromFile(_ path: String) -> PlatformImage? {
         #if os(macOS)

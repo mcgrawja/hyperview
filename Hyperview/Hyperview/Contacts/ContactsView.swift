@@ -237,6 +237,11 @@ struct ContactsView: View {
         }
         .searchable(text: $searchText, placement: .toolbar, prompt: "Search people")
         .onChange(of: searchText) { _, _ in Task { await load() } }
+        // Pull to refresh (iOS); a no-op gesture on macOS.
+        .refreshable {
+            await load()
+            await loadGroups()
+        }
     }
 
     private func start() async {
@@ -364,40 +369,17 @@ private struct ContactRow: View {
     }
 }
 
+/// Thin wrapper over the shared `ContactAvatar` (Contacts/ContactPhotos.swift),
+/// which Mail and Messages draw with too.
 private struct Avatar: View {
     let contact: ContactSnapshot
 
     var body: some View {
-        Group {
-            if let data = contact.thumbnail, let image = platformImage(data) {
-                image.resizable().scaledToFill()
-            } else {
-                ZStack {
-                    Circle().fill(Theme.Palette.primary.opacity(0.15))
-                    Text(initials)
-                        .font(Theme.Font.cardBody.weight(.semibold))
-                        .foregroundStyle(Theme.Palette.primary)
-                }
-            }
-        }
-        .frame(width: 36, height: 36)
-        .clipShape(Circle())
-    }
-
-    private var initials: String {
-        let first = contact.givenName.first.map(String.init) ?? ""
-        let last = contact.familyName.first.map(String.init) ?? ""
-        let combined = first + last
-        return combined.isEmpty ? "?" : combined.uppercased()
-    }
-
-    private func platformImage(_ data: Data) -> Image? {
-        #if os(macOS)
-        guard let nsImage = NSImage(data: data) else { return nil }
-        return Image(nsImage: nsImage)
-        #else
-        guard let uiImage = UIImage(data: data) else { return nil }
-        return Image(uiImage: uiImage)
-        #endif
+        ContactAvatar(
+            data: contact.thumbnail,
+            name: [contact.givenName, contact.familyName]
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+        )
     }
 }

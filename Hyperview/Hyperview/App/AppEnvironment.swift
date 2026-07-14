@@ -63,4 +63,9 @@ extension EnvironmentValues {
 
     /// Drives Hyperview's notification hub (scheduling + Dock badge).
     @Entry var notificationCoordinator: NotificationCoordinator? = nil
+
+    /// Contact photos, indexed once by email and phone. Shared so a face can
+    /// appear on a mail sender or a message thread, not just in Contacts —
+    /// and so nobody hits CNContactStore once per visible row.
+    @Entry var contactPhotos: ContactPhotoStore? = nil
 }

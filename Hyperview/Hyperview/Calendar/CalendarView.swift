@@ -35,6 +35,8 @@ struct CalendarView: View {
     @AppStorage("calendar.viewMode") private var modeRaw = CalendarViewMode.month.rawValue
     @State private var anchor = Date()
     @State private var events: [EventSnapshot] = []
+    /// Due reminders for the visible range — rendered in the all-day band.
+    @State private var reminders: [ReminderSnapshot] = []
     @State private var calendars: [CalendarSnapshot] = []
     @State private var hiddenCalendarIDs: Set<String> = Set(
         UserDefaults.standard.stringArray(forKey: "calendar.hiddenCalendarIDs") ?? []
@@ -148,6 +150,8 @@ struct CalendarView: View {
         TimeGridView(
             days: days,
             events: visibleEvents,
+            reminders: reminders,
+            onToggleReminder: { toggleReminder($0) },
             onCreate: { start in composer = ComposerTarget(start: start, precise: true) },
             onEditEvent: { editingEvent = $0 },
             onDuplicateEvent: { event in Task { await duplicate(event) } },
@@ -249,46 +253,82 @@ struct CalendarView: View {
         }
     }
 
+    /// One row on a Mac; two on a phone. Seven controls will not fit across ~390
+    /// points, and cramming them in clipped the mode picker and shrank the nav
+    /// buttons below a thumb's worth of target.
+    @ViewBuilder
     private var header: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            Button {
-                if isCompact {
-                    showingCalendarsSheet = true
-                } else {
+        if isCompact {
+            VStack(spacing: Theme.Spacing.sm) {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Button { showingCalendarsSheet = true } label: { Image(systemName: "sidebar.left") }
+                    Text(headerTitle)
+                        .font(Theme.Font.cardTitle)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer()
+                    Button {
+                        composer = ComposerTarget(start: calendar.startOfDay(for: anchor), precise: false)
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.Palette.primary)
+                }
+                HStack(spacing: Theme.Spacing.sm) {
+                    modePicker
+                    Spacer(minLength: Theme.Spacing.sm)
+                    navigationButtons
+                }
+            }
+            .padding(Theme.Spacing.sm)
+        } else {
+            HStack(spacing: Theme.Spacing.md) {
+                Button {
                     withAnimation(.easeInOut(duration: 0.15)) { sidebarCollapsed.toggle() }
+                } label: {
+                    Image(systemName: "sidebar.left")
                 }
-            } label: {
-                Image(systemName: "sidebar.left")
-            }
-            .help(sidebarCollapsed ? "Show Calendars" : "Hide Calendars")
-            Text(headerTitle)
-                .font(Theme.Font.dashboardTitle)
-                .lineLimit(1)
-            Spacer()
-            Picker("", selection: $modeRaw) {
-                ForEach(CalendarViewMode.allCases) { mode in
-                    Text(mode.title).tag(mode.rawValue)
+                .help(sidebarCollapsed ? "Show Calendars" : "Hide Calendars")
+                Text(headerTitle)
+                    .font(Theme.Font.dashboardTitle)
+                    .lineLimit(1)
+                Spacer()
+                modePicker
+                    .frame(width: 220)
+                navigationButtons
+                Button {
+                    composer = ComposerTarget(start: calendar.startOfDay(for: anchor), precise: false)
+                } label: {
+                    Label("New Event", systemImage: "plus")
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.Palette.primary)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 220)
-            .onChange(of: modeRaw) { _, _ in Task { await load() } }
+            .padding(Theme.Spacing.md)
+        }
+    }
+
+    private var modePicker: some View {
+        Picker("", selection: $modeRaw) {
+            ForEach(CalendarViewMode.allCases) { mode in
+                Text(mode.title).tag(mode.rawValue)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .onChange(of: modeRaw) { _, _ in Task { await load() } }
+    }
+
+    private var navigationButtons: some View {
+        HStack(spacing: Theme.Spacing.xs) {
             Button { shift(-1) } label: { Image(systemName: "chevron.left") }
             Button("Today") {
                 anchor = Date()
                 Task { await load() }
             }
             Button { shift(1) } label: { Image(systemName: "chevron.right") }
-            Button {
-                composer = ComposerTarget(start: calendar.startOfDay(for: anchor), precise: false)
-            } label: {
-                Label("New Event", systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.Palette.primary)
         }
-        .padding(Theme.Spacing.md)
     }
 
     private var headerTitle: String {
@@ -345,6 +385,33 @@ struct CalendarView: View {
         let start = interval.start.addingTimeInterval(-7 * 86_400)
         let end = interval.end.addingTimeInterval(7 * 86_400)
         events = (try? await brokers.eventKit.fetch(BrokerQuery(dateRange: start...end))) ?? []
+        await loadReminders(start...end)
+    }
+
+    /// Reminders are a SEPARATE TCC permission from calendars — a user can grant
+    /// one and not the other — so this is asked for lazily and failing it just
+    /// means no reminder chips, never a broken calendar.
+    private func loadReminders(_ range: ClosedRange<Date>) async {
+        if brokers.eventKit.remindersAuthorization == .notDetermined {
+            try? await brokers.eventKit.requestRemindersAccess()
+        }
+        let authorization = brokers.eventKit.remindersAuthorization
+        guard authorization == .authorized || authorization == .limited else {
+            reminders = []
+            return
+        }
+        reminders = (try? await brokers.eventKit.fetchReminders(BrokerQuery(dateRange: range))) ?? []
+    }
+
+    private func toggleReminder(_ reminder: ReminderSnapshot) {
+        Task {
+            if reminder.isCompleted {
+                try? await brokers.eventKit.uncompleteReminder(id: reminder.id)
+            } else {
+                try? await brokers.eventKit.completeReminder(id: reminder.id)
+            }
+            await load()
+        }
     }
 
     private func shift(_ delta: Int) {
@@ -539,6 +606,10 @@ private struct MonthEventChip: View {
 private struct TimeGridView: View {
     let days: [Date]
     let events: [EventSnapshot]
+    /// Reminders due on the visible days — shown as circled items in the all-day
+    /// band, the way Apple Calendar surfaces them. Tapping the circle completes.
+    var reminders: [ReminderSnapshot] = []
+    var onToggleReminder: (ReminderSnapshot) -> Void = { _ in }
     let onCreate: (Date) -> Void
     let onEditEvent: (EventSnapshot) -> Void
     let onDuplicateEvent: (EventSnapshot) -> Void
@@ -546,9 +617,15 @@ private struct TimeGridView: View {
     /// Drag-to-move: (event, minuteDelta snapped to 15, dayDelta).
     let onMoveEvent: (EventSnapshot, Int, Int) -> Void
 
+    @Environment(\.isCompactLayout) private var isCompact
+
     private let calendar = Calendar.current
-    private let hourHeight: CGFloat = 46
-    private let gutterWidth: CGFloat = 54
+
+    /// A phone needs taller hours (a 30-minute event has to stay tappable — 44pt
+    /// is Apple's minimum target) and a narrower time gutter (every point stolen
+    /// from the gutter is a point the day columns don't have).
+    private var hourHeight: CGFloat { isCompact ? 60 : 46 }
+    private var gutterWidth: CGFloat { isCompact ? 42 : 54 }
 
     /// Live drag translations keyed by event id (visual offset until release).
     @State private var dragOffsets: [String: CGSize] = [:]
@@ -592,7 +669,7 @@ private struct TimeGridView: View {
 
     @ViewBuilder
     private var allDayRow: some View {
-        let anyAllDay = days.contains { !allDayEvents(on: $0).isEmpty }
+        let anyAllDay = days.contains { !allDayEvents(on: $0).isEmpty || !reminders(on: $0).isEmpty }
         if anyAllDay {
             HStack(alignment: .top, spacing: 0) {
                 Text("all-day")
@@ -605,12 +682,22 @@ private struct TimeGridView: View {
                             AllDayChip(event: event)
                                 .onTapGesture { onEditEvent(event) }
                         }
+                        ForEach(reminders(on: day)) { reminder in
+                            ReminderChip(reminder: reminder) { onToggleReminder(reminder) }
+                        }
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, 2)
                 }
             }
             .padding(.vertical, 3)
+        }
+    }
+
+    private func reminders(on day: Date) -> [ReminderSnapshot] {
+        reminders.filter { reminder in
+            guard let due = reminder.dueDate else { return false }
+            return calendar.isDate(due, inSameDayAs: day)
         }
     }
 
@@ -675,8 +762,9 @@ private struct TimeGridView: View {
                 ForEach(layout(timedEvents(on: day), day: day)) { laid in
                     let width = geometry.size.width / CGFloat(laid.cols)
                     let dragOffset = dragOffsets[laid.event.id] ?? .zero
-                    EventBlock(event: laid.event)
-                        .frame(width: max(width - 3, 20), height: max(laid.height, 22))
+                    let blockHeight = max(laid.height, 22)
+                    EventBlock(event: laid.event, height: blockHeight)
+                        .frame(width: max(width - 3, 20), height: blockHeight)
                         .offset(
                             x: CGFloat(laid.col) * width + 1.5 + dragOffset.width,
                             y: laid.y + dragOffset.height
@@ -815,27 +903,54 @@ private struct TimeGridView: View {
     }
 }
 
+/// An event in the time grid.
+///
+/// Detail is BUDGETED BY HEIGHT, the way Apple Calendar does it: a 30-minute
+/// block has room for a title and nothing else, while a 5-hour block can carry
+/// the location and a full time range. Rendering every field unconditionally
+/// would just clip — which is why the old block showed title + start time only,
+/// and why it read as so much thinner than Apple's.
 private struct EventBlock: View {
     let event: EventSnapshot
+    /// Laid-out height in points — the space we actually have to fill.
+    var height: CGFloat = 22
 
     private var color: Color {
         event.calendarColorHex.flatMap { Color(hexString: $0) } ?? Theme.Palette.primary
     }
+
+    private var location: String? {
+        guard let location = event.location, !location.isEmpty else { return nil }
+        return location
+    }
+
+    private var showsTime: Bool { height >= 30 }
+    private var showsLocation: Bool { height >= 46 && location != nil }
+    private var titleLines: Int { height >= 58 ? 2 : 1 }
 
     var body: some View {
         HStack(spacing: 0) {
             RoundedRectangle(cornerRadius: 1.5)
                 .fill(color)
                 .frame(width: 3)
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(event.title)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.Palette.textPrimary)
-                    .lineLimit(2)
-                Text(event.start.formatted(date: .omitted, time: .shortened))
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(Theme.Palette.textSecondary)
-                    .lineLimit(1)
+                    .lineLimit(titleLines)
+
+                if showsLocation, let location {
+                    Label(location, systemImage: "mappin.and.ellipse")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .lineLimit(1)
+                }
+                if showsTime {
+                    Text(CalendarFormat.range(event.start, event.end))
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .lineLimit(1)
+                }
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
@@ -844,6 +959,51 @@ private struct EventBlock: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background(color.opacity(0.22), in: RoundedRectangle(cornerRadius: 4))
         .contentShape(Rectangle())
+    }
+}
+
+/// Times the way a calendar writes them: "8AM", not "8:00 AM" — the ":00" is
+/// noise, and these labels live in blocks a few dozen points wide.
+nonisolated enum CalendarFormat {
+    static func time(_ date: Date) -> String {
+        let minute = Calendar.current.component(.minute, from: date)
+        return minute == 0
+            ? date.formatted(.dateTime.hour(.defaultDigits(amPM: .abbreviated)))
+            : date.formatted(.dateTime.hour(.defaultDigits(amPM: .abbreviated)).minute())
+    }
+
+    static func range(_ start: Date, _ end: Date) -> String {
+        "\(time(start)) – \(time(end))"
+    }
+}
+
+/// A due reminder, in the all-day band. Apple Calendar shows reminders here as
+/// a circle you can tick off without leaving the calendar; so do we — the whole
+/// point of a unified app is not having to go somewhere else to check it off.
+private struct ReminderChip: View {
+    let reminder: ReminderSnapshot
+    let onToggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Button(action: onToggle) {
+                Image(systemName: reminder.isCompleted ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.Palette.claude)
+            }
+            .buttonStyle(.plain)
+            .help(reminder.isCompleted ? "Mark as not completed" : "Mark as completed")
+
+            Text(reminder.title)
+                .font(.system(size: 10.5))
+                .foregroundStyle(Theme.Palette.textPrimary)
+                .strikethrough(reminder.isCompleted, color: Theme.Palette.textSecondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .background(Theme.Palette.claude.opacity(0.12), in: RoundedRectangle(cornerRadius: 3))
     }
 }
 
@@ -875,6 +1035,7 @@ struct EventEditorView: View {
     var onSaved: () -> Void = {}
 
     @Environment(\.brokers) private var brokers
+    @Environment(\.isCompactLayout) private var isCompact
     @Environment(\.dismiss) private var dismiss
 
     @State private var title: String
@@ -976,7 +1137,9 @@ struct EventEditorView: View {
             }
         }
         .padding(Theme.Spacing.lg)
-        .frame(width: 420)
+        // A fixed width is right on a Mac and wrong on a phone, where 420pt is
+        // wider than the screen.
+        .frame(maxWidth: isCompact ? .infinity : 420)
         .background(Theme.Palette.background)
         .task {
             calendars = (try? await brokers.eventKit.eventCalendars()) ?? []
@@ -1035,6 +1198,7 @@ struct EventComposerView: View {
     var preciseStart: Date?
     var onSaved: () -> Void = {}
 
+    @Environment(\.isCompactLayout) private var isCompact
     @Environment(\.brokers) private var brokers
     @Environment(\.dismiss) private var dismiss
 
@@ -1092,7 +1256,7 @@ struct EventComposerView: View {
             }
         }
         .padding(Theme.Spacing.lg)
-        .frame(width: 380)
+        .frame(maxWidth: isCompact ? .infinity : 380)
         .background(Theme.Palette.background)
         .task {
             calendars = (try? await brokers.eventKit.eventCalendars()) ?? []

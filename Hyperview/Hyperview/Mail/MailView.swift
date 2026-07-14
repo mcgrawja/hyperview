@@ -72,6 +72,8 @@ private struct MailModuleContent: View {
     // Universal tags (main CloudKit container) — this subtree's \.modelContext
     // is the mail cache, so tags come through the app-level TagsStore.
     @Environment(\.tagsStore) private var tagsStore
+    @Environment(\.brokers) private var brokers
+    @Environment(\.contactPhotos) private var contactPhotos
     @Query(sort: \SmartMailbox.sortIndex) private var smartMailboxes: [SmartMailbox]
     @Query(sort: \BlockedSender.address) private var blockedSenders: [BlockedSender]
     @Query(sort: \MailRule.sortIndex) private var rules: [MailRule]
@@ -170,6 +172,9 @@ private struct MailModuleContent: View {
         }
         .task(id: accounts.map(\.id)) {
             service.context = context
+            // Index contact photos once; sender avatars read from it (never
+            // hitting CNContactStore per row).
+            if let contactPhotos { await contactPhotos.loadIfNeeded(brokers) }
             // Auto-select a mailbox only where a message list is always
             // visible. On iPhone, selection PUSHES a screen — auto-selecting
             // would drop the user straight into a mailbox with no way back to
@@ -196,11 +201,7 @@ private struct MailModuleContent: View {
                 ToolbarItem {
                     Button { composeSheet = ComposeSheet(mode: .new) } label: { Image(systemName: "square.and.pencil") }
                 }
-                ToolbarItem {
-                    Button {
-                        Task { await syncSelection(quiet: false) }
-                    } label: { Image(systemName: "arrow.clockwise") }
-                }
+                ToolbarItem { refreshButton }
                 ToolbarItem {
                     Menu {
                         Button("Add Account…") { addingAccount = true }
@@ -218,10 +219,7 @@ private struct MailModuleContent: View {
                         .help("Compose")
                 }
                 ToolbarItem {
-                    Button {
-                        Task { await syncSelection(quiet: false) }
-                    } label: { Image(systemName: "arrow.clockwise") }
-                    .help("Refresh")
+                    refreshButton
                 }
                 ToolbarItem {
                     Button {
@@ -453,6 +451,11 @@ private struct MailModuleContent: View {
                 Task { await deleteMessage(message) }
             }
             #endif
+            // Pull to refresh. No-op on macOS (no pull gesture), where the
+            // toolbar button is the way.
+            .refreshable {
+                await syncSelection(quiet: false)
+            }
         }
         .background(Theme.Palette.surface)
     }
@@ -511,17 +514,37 @@ private struct MailModuleContent: View {
             )
         }
         switch service.status {
-        case .connecting:
-            banner("Connecting…", systemImage: "antenna.radiowaves.left.and.right", tint: Theme.Palette.primary)
-        case .syncing:
-            banner("Syncing…", systemImage: "arrow.triangle.2.circlepath", tint: Theme.Palette.primary)
         case .error(let message):
             if !service.accountErrors.values.contains(message) {
                 banner(message, systemImage: "exclamationmark.triangle", tint: Theme.Palette.danger)
             }
-        case .idle, .connected:
+        // Progress is NOT a banner. "Connecting…"/"Syncing…" used to slide into
+        // the layout on every poll and vanish a second later, shoving the message
+        // list around — the flashing Jason called jarring. It's a spinner on the
+        // Refresh button now (see refreshButton); only failures interrupt.
+        case .idle, .connecting, .connected, .syncing:
             EmptyView()
         }
+    }
+
+    /// Refresh — or a spinner in its place while the server is being talked to,
+    /// so progress is visible without moving anything on screen.
+    private var refreshButton: some View {
+        Button {
+            Task { await syncSelection(quiet: false) }
+        } label: {
+            if service.isBusy {
+                ProgressView()
+                    .controlSize(.small)
+                    // Keep the footprint identical to the icon so swapping the
+                    // two can't nudge the toolbar.
+                    .frame(width: 16, height: 16)
+            } else {
+                Image(systemName: "arrow.clockwise")
+            }
+        }
+        .disabled(service.isBusy)
+        .help("Refresh")
     }
 
     /// Names the broken rule and offers the two fixes inline: disable it, or
@@ -772,12 +795,23 @@ private struct MessageRow: View {
     /// Colors of the message's tags, shown as small dots.
     var tagColors: [Color] = []
 
+    @Environment(\.contactPhotos) private var contactPhotos
+
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
             Circle()
                 .fill(message.isSeen ? Color.clear : Theme.Palette.primary)
                 .frame(width: 8, height: 8)
                 .padding(.top, 6)
+            // The sender's face when they're in Contacts WITH a photo; their
+            // initials otherwise. Most senders have no photo the Contacts
+            // framework will surface, so initials are the common case, not a
+            // failure state.
+            ContactAvatar(
+                data: contactPhotos?.photo(email: message.fromAddress),
+                name: message.fromName.isEmpty ? message.fromAddress : message.fromName,
+                size: 32
+            )
             VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                 HStack {
                     Text(message.fromName.isEmpty ? message.fromAddress : message.fromName)

@@ -23,6 +23,8 @@ struct NotesView: View {
 
     @State private var selectedFolder: Folder?
     @State private var selectedNote: Note?
+    /// Recently Deleted is a mode, not a folder — a trashed note has no folder.
+    @State private var showingTrash = false
     @State private var showingNoteLinkPicker = false
     @State private var renamingFolder: Folder?
     @State private var renameText = ""
@@ -34,9 +36,19 @@ struct NotesView: View {
 
     private var store: NotesStore { NotesStore(context: context) }
 
+    /// Notes in the trash, newest first — shown only in Recently Deleted.
+    private var trashedNotes: [Note] {
+        notes.filter(\.isTrashed).sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
+    }
+
     private var visibleNotes: [Note] {
+        if showingTrash { return trashedNotes }
+
         var result = notes.filter { note in
-            !note.isArchived && (selectedFolder == nil || note.folder?.id == selectedFolder?.id)
+            // A trashed note is invisible everywhere but the trash.
+            !note.isTrashed
+                && !note.isArchived
+                && (selectedFolder == nil || note.folder?.id == selectedFolder?.id)
         }
         if let selectedTagID {
             let keys = Set(
@@ -103,7 +115,7 @@ struct NotesView: View {
             Button("Cancel", role: .cancel) { renamingFolder = nil }
         }
         .sheet(isPresented: $showingNoteLinkPicker) {
-            NoteLinkPicker(notes: notes.filter { !$0.isArchived && $0.id != selectedNote?.id }) { note in
+            NoteLinkPicker(notes: notes.filter { !$0.isArchived && !$0.isTrashed && $0.id != selectedNote?.id }) { note in
                 NotificationCenter.default.post(
                     name: .hyperviewInsertNoteLink,
                     object: nil,
@@ -179,15 +191,56 @@ struct NotesView: View {
                         }
                     }
                 }
-                Section(selectedFolder?.name ?? "All Notes") {
+                if !trashedNotes.isEmpty {
+                    Section {
+                        Button {
+                            showingTrash.toggle()
+                            if showingTrash { selectedFolder = nil; selectedTagID = nil }
+                        } label: {
+                            HStack(spacing: Theme.Spacing.sm) {
+                                Image(systemName: "trash")
+                                Text("Recently Deleted")
+                                Spacer()
+                                Text("\(trashedNotes.count)")
+                                    .font(Theme.Font.cardCaption)
+                                    .foregroundStyle(Theme.Palette.textSecondary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(showingTrash ? Theme.Palette.primary.softFill(0.12) : Color.clear)
+                    }
+                }
+                Section {
                     ForEach(visibleNotes) { note in
                         noteRow(note).tag(note)
+                    }
+                } header: {
+                    HStack {
+                        Text(sectionTitle)
+                        if showingTrash {
+                            Spacer()
+                            Button("Empty") {
+                                if selectedNote?.isTrashed == true { selectedNote = nil }
+                                store.emptyTrash(trashedNotes)
+                                try? context.save()
+                                showingTrash = false
+                            }
+                            .buttonStyle(.plain)
+                            .font(Theme.Font.cardCaption)
+                            .foregroundStyle(Theme.Palette.danger)
+                        }
                     }
                 }
             }
             .listStyle(.sidebar)
         }
         .background(Theme.Palette.surface)
+    }
+
+    private var sectionTitle: String {
+        if showingTrash { return "Recently Deleted" }
+        return selectedFolder?.name ?? "All Notes"
     }
 
     /// The folder tree flattened depth-first (indentation = depth).
@@ -228,6 +281,7 @@ struct NotesView: View {
     private func folderRow(_ folder: Folder?, label: String, systemImage: String, emoji: String? = nil) -> some View {
         Button {
             selectedFolder = folder
+            showingTrash = false
         } label: {
             HStack(spacing: Theme.Spacing.sm) {
                 if let emoji { Text(emoji) } else { Image(systemName: systemImage) }
@@ -238,7 +292,9 @@ struct NotesView: View {
         }
         .buttonStyle(.plain)
         .listRowBackground(
-            selectedFolder?.id == folder?.id ? Theme.Palette.primary.opacity(0.12) : Color.clear
+            (!showingTrash && selectedFolder?.id == folder?.id)
+                ? Theme.Palette.primary.opacity(0.12)
+                : Color.clear
         )
         .contextMenu {
             if let folder {
@@ -294,19 +350,44 @@ struct NotesView: View {
                         .lineLimit(1)
                     TagDots(kind: TagKind.note, key: note.id.uuidString)
                 }
-                Text(note.modifiedAt.formatted(date: .abbreviated, time: .shortened))
+                Text(subtitle(for: note))
                     .font(Theme.Font.cardCaption)
                     .foregroundStyle(Theme.Palette.textSecondary)
             }
         }
         .contextMenu {
-            TagMenu(kind: TagKind.note, key: note.id.uuidString)
-            Button(PinStore.isPinned(note: note.id) ? "Unpin from Dashboard" : "Pin to Dashboard") {
-                PinStore.toggle(note: note.id)
+            if note.isTrashed {
+                Button("Put Back") { restore(note) }
+                Divider()
+                Button("Delete Permanently", role: .destructive) { deleteForever(note) }
+            } else {
+                TagMenu(kind: TagKind.note, key: note.id.uuidString)
+                Button(PinStore.isPinned(note: note.id) ? "Unpin from Dashboard" : "Pin to Dashboard") {
+                    PinStore.toggle(note: note.id)
+                }
+                Divider()
+                Button("Delete", role: .destructive) { delete(note) }
             }
-            Divider()
-            Button("Delete", role: .destructive) { delete(note) }
         }
+        // Swipe is the phone idiom; a context menu is a long-press away.
+        .swipeActions(edge: .trailing) {
+            if note.isTrashed {
+                Button("Delete", role: .destructive) { deleteForever(note) }
+                Button("Put Back") { restore(note) }
+                    .tint(Theme.Palette.primary)
+            } else {
+                Button("Delete", role: .destructive) { delete(note) }
+            }
+        }
+    }
+
+    /// Trashed notes say WHEN they were deleted — that's the thing you're
+    /// looking for in a trash, not when you last edited them.
+    private func subtitle(for note: Note) -> String {
+        if let deletedAt = note.deletedAt {
+            return "Deleted \(deletedAt.formatted(date: .abbreviated, time: .shortened))"
+        }
+        return note.modifiedAt.formatted(date: .abbreviated, time: .shortened)
     }
 
     // MARK: Editor pane
@@ -346,10 +427,24 @@ struct NotesView: View {
         selectedFolder = folder
     }
 
+    /// Move to Recently Deleted (reversible).
     private func delete(_ note: Note) {
         if selectedNote?.id == note.id { selectedNote = nil }
         store.delete(note)
         try? context.save()
+    }
+
+    private func restore(_ note: Note) {
+        store.restore(note, folders: folders)
+        try? context.save()
+        if trashedNotes.isEmpty { showingTrash = false }
+    }
+
+    private func deleteForever(_ note: Note) {
+        if selectedNote?.id == note.id { selectedNote = nil }
+        store.deletePermanently(note)
+        try? context.save()
+        if trashedNotes.isEmpty { showingTrash = false }
     }
 }
 

@@ -81,6 +81,8 @@ struct PhotosView: View {
                 }
             }
         }
+        // Pull to refresh (iOS); a no-op gesture on macOS.
+        .refreshable { await load() }
     }
 
     private func start() async {

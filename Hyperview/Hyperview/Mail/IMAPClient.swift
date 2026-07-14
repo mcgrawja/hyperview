@@ -315,9 +315,20 @@ actor IMAPClient {
             }
         }
 
+        // A server may send an UNSOLICITED FETCH at any time — "* 12 FETCH
+        // (FLAGS (\Seen))" when a flag changes elsewhere. Those carry no UID and
+        // no ENVELOPE, and treating one as a message summary invented a phantom:
+        // uid 0, "(No Subject)", no sender, undeletable (the server has no uid 0
+        // to act on). Requiring both fields keeps summaries to real FETCH
+        // responses; flag changes are picked up by the next full fetch anyway.
+        //
+        // The ENVELOPE check matters on its own: a UID-bearing FETCH without one
+        // would otherwise blank out a real message's subject and sender below.
+        guard uid > 0, let envelope, !envelope.isEmpty else { return nil }
+
         // ENVELOPE (RFC 3501): date subject from sender reply-to to cc bcc
         // in-reply-to message-id
-        let env = envelope ?? []
+        let env = envelope
         let subject = env.count > 1 ? MIMEHeader.decode(env[1].stringValue ?? "") : ""
         let fromList = env.count > 2 ? addresses(env[2]) : []
         let toList = env.count > 5 ? addresses(env[5]) : []

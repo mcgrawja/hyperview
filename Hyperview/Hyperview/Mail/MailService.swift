@@ -23,6 +23,14 @@ final class MailService {
 
     var status: Status = .idle
 
+    /// Talking to the server right now. Drives a quiet spinner on the Refresh
+    /// button — the old approach pushed a "Connecting…"/"Syncing…" BANNER into
+    /// the layout on every poll, which shoved the list down and snapped it back
+    /// seconds later. Progress should be ambient; only failures deserve a banner.
+    var isBusy: Bool {
+        status == .connecting || status == .syncing
+    }
+
     /// Persistent per-account failures (e.g. bad credentials). Unlike `status`,
     /// these are NOT overwritten by another account's success — they stay until
     /// the failing account connects.
@@ -461,8 +469,14 @@ final class MailService {
             .filter { $0.accountID == accountID && $0.mailboxPath == mailboxPath }
 
         for message in cached {
-            if let floor, message.uid < floor { continue }
-            if live.contains(message.uid) { continue }
+            // uid 0 is not a real IMAP uid — it's a phantom from a malformed
+            // summary (see IMAPClient.parseSummary). Nothing on the server can
+            // ever match it, so it would sit below `floor` and survive forever.
+            // Always sweep it.
+            if message.uid > 0 {
+                if let floor, message.uid < floor { continue }
+                if live.contains(message.uid) { continue }
+            }
             MailLog.log("[Mail] pruning vanished uid \(message.uid) from \(mailboxPath) — \(message.subject)")
             let messageID = message.id
             let attachments = (try? context.fetch(FetchDescriptor<MailAttachment>())) ?? []
