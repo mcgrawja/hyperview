@@ -124,6 +124,7 @@ final class MailService {
             let summaries = try await imap.fetchSummaries(path: mailboxPath, limit: limit)
             MailLog.log("[Mail] fetchSummaries \(mailboxPath) -> \(summaries.count) messages")
             let arrived = upsertMessages(summaries, accountID: account.id, mailboxPath: mailboxPath, in: context)
+            pruneVanished(summaries, accountID: account.id, mailboxPath: mailboxPath, in: context)
             let syncKey = "\(account.id.uuidString)|\(mailboxPath)"
             let firstSync = !syncedMailboxes.contains(syncKey)
             syncedMailboxes.insert(syncKey)
@@ -311,10 +312,16 @@ final class MailService {
     }
 
     func move(_ message: MailMessage, account: MailAccount, to destination: String) async {
+        let mailboxPath = message.mailboxPath
         do {
             try await moveThrowing(message, account: account, to: destination)
         } catch {
             failed(account, error)
+            // The move may have failed simply because the server no longer HAS
+            // this message (deleted on another client) — a ghost, which would
+            // otherwise refuse to delete forever. Re-sync the mailbox: the prune
+            // drops it if it's genuinely gone, and leaves it alone if it isn't.
+            await syncMessages(account, mailboxPath: mailboxPath, quiet: true)
         }
     }
 
@@ -431,6 +438,39 @@ final class MailService {
             message.isFlagged = summary.isFlagged
         }
         return inserted
+    }
+
+    /// Drop cached rows for messages the server no longer has — the "ghosts".
+    ///
+    /// Sync only ever UPSERTS what it fetches, so a message deleted or moved on
+    /// another client used to linger in this device's cache forever. Worse, it
+    /// couldn't be deleted by hand either: deletion goes through the server as a
+    /// UID MOVE, and the server has no such UID, so the command fails and the row
+    /// survives. Hence a message that shows on one device, doesn't exist on the
+    /// other, and refuses to go away.
+    ///
+    /// We only fetch the newest `limit` messages, so anything cached BELOW the
+    /// oldest UID we just saw is merely outside that window — not gone. Only a
+    /// row at or above that floor which the server didn't list is genuinely gone.
+    /// Pruning is safe regardless: the cache is server-authoritative, so an
+    /// over-eager prune just re-downloads.
+    private func pruneVanished(_ summaries: [MessageSummary], accountID: UUID, mailboxPath: String, in context: ModelContext) {
+        let live = Set(summaries.map(\.uid))
+        let floor = live.min()
+        let cached = ((try? context.fetch(FetchDescriptor<MailMessage>())) ?? [])
+            .filter { $0.accountID == accountID && $0.mailboxPath == mailboxPath }
+
+        for message in cached {
+            if let floor, message.uid < floor { continue }
+            if live.contains(message.uid) { continue }
+            MailLog.log("[Mail] pruning vanished uid \(message.uid) from \(mailboxPath) — \(message.subject)")
+            let messageID = message.id
+            let attachments = (try? context.fetch(FetchDescriptor<MailAttachment>())) ?? []
+            for attachment in attachments where attachment.messageID == messageID {
+                context.delete(attachment)
+            }
+            context.delete(message)
+        }
     }
 
     // MARK: Rules
