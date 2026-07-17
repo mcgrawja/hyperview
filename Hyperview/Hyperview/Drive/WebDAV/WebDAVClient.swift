@@ -152,6 +152,68 @@ nonisolated struct WebDAVClient: Sendable {
         return destination
     }
 
+    // MARK: Mutations
+
+    /// Create a subfolder (MKCOL).
+    func makeDirectory(named name: String, in folder: URL) async throws {
+        let target = folder.appendingPathComponent(name, isDirectory: true)
+        try await send("MKCOL", url: target, expected: [200, 201])
+    }
+
+    /// Upload a file's bytes (PUT), overwriting if it already exists.
+    func upload(_ data: Data, toFolder folder: URL, as name: String) async throws {
+        let target = folder.appendingPathComponent(name)
+        try await send("PUT", url: target, expected: [200, 201, 204], body: data)
+    }
+
+    /// Delete a file or folder (DELETE). A 404 is treated as success — the goal
+    /// state (gone) is already true.
+    func delete(_ url: URL) async throws {
+        try await send("DELETE", url: url, expected: [200, 204, 404])
+    }
+
+    /// Rename in place (MOVE within the same parent).
+    func rename(_ url: URL, to newName: String) async throws {
+        try await transfer("MOVE", from: url, toName: newName)
+    }
+
+    /// Duplicate (COPY within the same parent).
+    func duplicate(_ url: URL, to newName: String) async throws {
+        try await transfer("COPY", from: url, toName: newName)
+    }
+
+    private func transfer(_ method: String, from url: URL, toName newName: String) async throws {
+        let destination = url.deletingLastPathComponent()
+            .appendingPathComponent(newName, isDirectory: url.hasDirectoryPath)
+        try await send(method, url: url, expected: [200, 201, 204], headers: [
+            "Destination": destination.absoluteString,
+            "Overwrite": "F",   // don't clobber an existing name — surfaces as an error
+        ])
+    }
+
+    /// A one-shot WebDAV verb with no response body to parse. Maps auth and
+    /// transport failures the same way PROPFIND does.
+    private func send(
+        _ method: String, url: URL, expected: Set<Int>,
+        headers: [String: String] = [:], body: Data? = nil
+    ) async throws {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue(authHeader, forHTTPHeaderField: "Authorization")
+        for (field, value) in headers { request.setValue(value, forHTTPHeaderField: field) }
+        request.httpBody = body
+
+        let response: URLResponse
+        do {
+            (_, response) = try await Self.session.data(for: request)
+        } catch {
+            throw Self.mapTransportError(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw WebDAVError.notWebDAV }
+        if http.statusCode == 401 || http.statusCode == 403 { throw WebDAVError.unauthorized }
+        guard expected.contains(http.statusCode) else { throw WebDAVError.http(http.statusCode) }
+    }
+
     // MARK: Plumbing
 
     /// One PROPFIND, with the HTTP status mapped to layer-specific errors so the

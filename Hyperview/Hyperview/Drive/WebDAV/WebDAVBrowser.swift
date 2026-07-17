@@ -13,6 +13,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Where in a server we are: which server, and which folder URL (nil = its root).
 /// Hashable so it works as a navigation value and a `.task(id:)`.
@@ -65,6 +66,13 @@ struct WebDAVBrowser: View {
     @State private var errorText: String?
     /// The entry currently downloading, so its row shows a spinner.
     @State private var downloadingID: URL?
+    /// A write operation (upload, delete, rename…) is in flight.
+    @State private var busy = false
+    @State private var renamingEntry: WebDAVEntry?
+    @State private var renameText = ""
+    @State private var creatingFolder = false
+    @State private var newFolderName = ""
+    @State private var uploading = false
     @AppStorage("drive.sortField") private var sortField: DriveSortField = .name
     @AppStorage("drive.sortAscending") private var sortAscending = true
 
@@ -91,7 +99,50 @@ struct WebDAVBrowser: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .help("Refresh")
+                .disabled(busy)
             }
+            ToolbarItem {
+                Menu {
+                    Button {
+                        uploading = true
+                    } label: {
+                        Label("Upload File…", systemImage: "arrow.up.doc")
+                    }
+                    Button {
+                        newFolderName = ""
+                        creatingFolder = true
+                    } label: {
+                        Label("New Folder…", systemImage: "folder.badge.plus")
+                    }
+                } label: {
+                    Label("Add", systemImage: "plus")
+                }
+                .disabled(busy)
+            }
+        }
+        .fileImporter(
+            isPresented: $uploading,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            guard case .success(let urls) = result else { return }
+            Task { await uploadFiles(urls) }
+        }
+        .alert("New Folder", isPresented: $creatingFolder) {
+            TextField("Folder name", text: $newFolderName)
+            Button("Create") { Task { await createFolder(newFolderName) } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename", isPresented: .init(
+            get: { renamingEntry != nil },
+            set: { if !$0 { renamingEntry = nil } }
+        )) {
+            TextField("Name", text: $renameText)
+            Button("Rename") {
+                if let renamingEntry { Task { await rename(renamingEntry, to: renameText) } }
+                renamingEntry = nil
+            }
+            Button("Cancel", role: .cancel) { renamingEntry = nil }
         }
     }
 
@@ -125,6 +176,12 @@ struct WebDAVBrowser: View {
                     row(entry)
                         .contentShape(Rectangle())
                         .onTapGesture { open(entry) }
+                        .contextMenu { rowMenu(entry) }
+                        .swipeActions(edge: .trailing) {
+                            Button("Delete", systemImage: "trash", role: .destructive) {
+                                Task { await deleteEntry(entry) }
+                            }
+                        }
                 }
             }
             .listStyle(.inset)
@@ -184,6 +241,21 @@ struct WebDAVBrowser: View {
             Label("Sort", systemImage: sortAscending ? "arrow.up.arrow.down" : "arrow.down.arrow.up")
         }
         .help("Sort by \(sortField.title)")
+    }
+
+    @ViewBuilder
+    private func rowMenu(_ entry: WebDAVEntry) -> some View {
+        Button(entry.isDirectory ? "Open" : "Download & Open") { open(entry) }
+        Divider()
+        Button("Rename…") {
+            renameText = entry.name
+            renamingEntry = entry
+        }
+        if !entry.isDirectory {
+            Button("Duplicate") { Task { await duplicate(entry) } }
+        }
+        Divider()
+        Button("Delete", role: .destructive) { Task { await deleteEntry(entry) } }
     }
 
     // MARK: Breadcrumbs
@@ -270,6 +342,80 @@ struct WebDAVBrowser: View {
             onOpenFile(local)
         } catch {
             errorText = "Couldn't download “\(entry.name)”: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: Mutations
+
+    private func createFolder(_ name: String) async {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, let folder = targetURL, let client = servers.client(for: server) else { return }
+        await run("Couldn't create the folder") {
+            try await client.makeDirectory(named: trimmed, in: folder)
+        }
+    }
+
+    private func rename(_ entry: WebDAVEntry, to newName: String) async {
+        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != entry.name, let client = servers.client(for: server) else { return }
+        await run("Couldn't rename “\(entry.name)”") {
+            try await client.rename(entry.url, to: trimmed)
+        }
+    }
+
+    private func duplicate(_ entry: WebDAVEntry) async {
+        guard let client = servers.client(for: server) else { return }
+        // "report.pdf" → "report copy.pdf"; extensionless names just get " copy".
+        let ext = entry.url.pathExtension
+        let base = ext.isEmpty ? entry.name : entry.url.deletingPathExtension().lastPathComponent
+        let copyName = ext.isEmpty ? "\(base) copy" : "\(base) copy.\(ext)"
+        await run("Couldn't duplicate “\(entry.name)”") {
+            try await client.duplicate(entry.url, to: copyName)
+        }
+    }
+
+    private func deleteEntry(_ entry: WebDAVEntry) async {
+        guard let client = servers.client(for: server) else { return }
+        await run("Couldn't delete “\(entry.name)”") {
+            try await client.delete(entry.url)
+        }
+    }
+
+    private func uploadFiles(_ urls: [URL]) async {
+        guard let folder = targetURL, let client = servers.client(for: server) else { return }
+        busy = true
+        errorText = nil
+        defer { busy = false }
+        for url in urls {
+            // Read the picked file's bytes under its security scope, then upload
+            // the in-memory copy so the scope isn't held across the network call.
+            let scoped = url.startAccessingSecurityScopedResource()
+            let data = try? Data(contentsOf: url)
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            guard let data else {
+                errorText = "Couldn't read “\(url.lastPathComponent)”."
+                continue
+            }
+            do {
+                try await client.upload(data, toFolder: folder, as: url.lastPathComponent)
+            } catch {
+                errorText = "Couldn't upload “\(url.lastPathComponent)”: \(error.localizedDescription)"
+            }
+        }
+        await reload()
+    }
+
+    /// Run a write operation, then refresh the listing. `failure` is the prefix
+    /// shown if it throws (the server's own message is appended).
+    private func run(_ failure: String, _ operation: @escaping () async throws -> Void) async {
+        busy = true
+        errorText = nil
+        defer { busy = false }
+        do {
+            try await operation()
+            await reload()
+        } catch {
+            errorText = "\(failure): \(error.localizedDescription)"
         }
     }
 }
