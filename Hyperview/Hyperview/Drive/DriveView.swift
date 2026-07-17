@@ -83,6 +83,8 @@ nonisolated enum DriveSort {
 nonisolated enum DriveRoute: Hashable {
     case folder(URL)
     case file(URL)
+    /// A WebDAV server folder (nil url = the server's root).
+    case server(WebDAVLocation)
 }
 
 // MARK: - Module root
@@ -91,13 +93,19 @@ struct DriveView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.isCompactLayout) private var isCompact
     @State private var locations = DriveLocations()
+    @State private var servers = DriveServers()
     /// Regular layout only — the folder the middle pane is showing.
     @State private var currentFolder: URL?
+    /// Regular layout only — the WebDAV location the middle pane is showing.
+    @State private var currentServer: WebDAVLocation?
     /// Compact layout only — the pushed screens.
     @State private var path: [DriveRoute] = []
     @State private var selection: URL?
     /// iOS folder picker (macOS uses NSOpenPanel via DriveLocations).
     @State private var addingLocation = false
+    /// The "Connect to Server" sheet, and the server it's editing (nil = new).
+    @State private var connectingServer = false
+    @State private var editingServer: DriveServer?
     @AppStorage("drive.showPreview") private var showPreview = true
     @AppStorage("drive.previewWidth") private var previewWidth = 300.0
     @State private var previewDragBase: Double?
@@ -127,7 +135,7 @@ struct DriveView: View {
             PlatformHSplit {
                 locationsPane
                     .frame(minWidth: 180, idealWidth: 210, maxWidth: 280)
-                browser
+                middlePane
                     .frame(minWidth: 320)
             }
             if showPreview {
@@ -180,6 +188,18 @@ struct DriveView: View {
                         }
                         .navigationTitle(file.lastPathComponent)
                         .inlineNavigationTitle()
+                    case .server(let location):
+                        if let server = servers.server(location.serverID) {
+                            WebDAVBrowser(
+                                server: server,
+                                location: location,
+                                servers: servers,
+                                onOpenFolder: { path.append(.server($0)) },
+                                onOpenFile: { path.append(.file($0)) }
+                            )
+                            .navigationTitle(location.url?.lastPathComponent ?? server.title)
+                            .inlineNavigationTitle()
+                        }
                     }
                 }
         }
@@ -259,18 +279,60 @@ struct DriveView: View {
                         }
                     }
                 }
+
+                if !servers.servers.isEmpty {
+                    Section("SERVERS") {
+                        ForEach(servers.servers) { server in
+                            Button {
+                                openServer(server)
+                            } label: {
+                                HStack(spacing: Theme.Spacing.sm) {
+                                    Image(systemName: "externaldrive.connected.to.line.below")
+                                        .foregroundStyle(Theme.Palette.primary)
+                                    Text(server.title)
+                                        .lineLimit(1)
+                                    Spacer()
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(
+                                isServerActive(server) ? Theme.Palette.primary.softFill(0.12) : Color.clear
+                            )
+                            .contextMenu {
+                                Button("Edit…") {
+                                    editingServer = server
+                                    connectingServer = true
+                                }
+                                Button("Remove from Drive", role: .destructive) {
+                                    removeServer(server)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             .listStyle(.sidebar)
         }
         .background(Theme.Palette.surface)
         .toolbar {
             ToolbarItem {
-                Button {
-                    requestLocation()
+                Menu {
+                    Button {
+                        requestLocation()
+                    } label: {
+                        Label("Add Folder…", systemImage: "folder.badge.plus")
+                    }
+                    Button {
+                        editingServer = nil
+                        connectingServer = true
+                    } label: {
+                        Label("Connect to Server…", systemImage: "network")
+                    }
                 } label: {
-                    Label("Add Location", systemImage: "folder.badge.plus")
+                    Label("Add", systemImage: "plus")
                 }
-                .help("Add a folder to browse")
+                .help("Add a folder or connect to a server")
             }
             if !isCompact {
                 ToolbarItem {
@@ -291,6 +353,9 @@ struct DriveView: View {
             guard case .success(let urls) = result else { return }
             for url in urls { locations.add(url) }
         }
+        .sheet(isPresented: $connectingServer) {
+            ConnectServerSheet(servers: servers, editing: editingServer)
+        }
     }
 
     private func isInside(_ root: URL) -> Bool {
@@ -307,6 +372,24 @@ struct DriveView: View {
     }
 
     // MARK: Browser (regular layout)
+
+    /// The regular layout's middle pane: a WebDAV server browser when one is
+    /// selected, otherwise the local file browser.
+    @ViewBuilder
+    private var middlePane: some View {
+        if let currentServer, let server = servers.server(currentServer.serverID) {
+            WebDAVBrowser(
+                server: server,
+                location: currentServer,
+                servers: servers,
+                onOpenFolder: { self.currentServer = $0 },
+                onOpenFile: { selection = $0 }
+            )
+            .id(server.id)
+        } else {
+            browser
+        }
+    }
 
     @ViewBuilder
     private var browser: some View {
@@ -401,8 +484,35 @@ struct DriveView: View {
     }
 
     private func navigate(to folder: URL) {
+        currentServer = nil
         currentFolder = folder
         selection = nil
+    }
+
+    private func openServer(_ server: DriveServer) {
+        selection = nil
+        let location = WebDAVLocation(serverID: server.id, url: nil)
+        if isCompact {
+            path = [.server(location)]
+        } else {
+            currentFolder = nil
+            currentServer = location
+        }
+    }
+
+    private func removeServer(_ server: DriveServer) {
+        if currentServer?.serverID == server.id { currentServer = nil }
+        if isServerActive(server) { path = []; selection = nil }
+        servers.remove(server)
+    }
+
+    /// Whether the given server is the one currently being browsed (either pane).
+    private func isServerActive(_ server: DriveServer) -> Bool {
+        if currentServer?.serverID == server.id { return true }
+        return path.contains { route in
+            if case .server(let location) = route { return location.serverID == server.id }
+            return false
+        }
     }
 
     /// Row activation. On the phone every open PUSHES a screen (folders drill
