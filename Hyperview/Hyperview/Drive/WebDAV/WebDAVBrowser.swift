@@ -73,6 +73,9 @@ struct WebDAVBrowser: View {
     @State private var creatingFolder = false
     @State private var newFolderName = ""
     @State private var uploading = false
+    /// A server delete is permanent (real HTTP DELETE, no trash), so it goes
+    /// through a confirmation rather than firing straight from a tap/swipe.
+    @State private var deletingEntry: WebDAVEntry?
     @AppStorage("drive.sortField") private var sortField: DriveSortField = .name
     @AppStorage("drive.sortAscending") private var sortAscending = true
 
@@ -144,6 +147,19 @@ struct WebDAVBrowser: View {
             }
             Button("Cancel", role: .cancel) { renamingEntry = nil }
         }
+        .alert(
+            "Delete from Server?",
+            isPresented: .init(get: { deletingEntry != nil }, set: { if !$0 { deletingEntry = nil } }),
+            presenting: deletingEntry
+        ) { entry in
+            Button("Delete", role: .destructive) {
+                Task { await deleteEntry(entry) }
+                deletingEntry = nil
+            }
+            Button("Cancel", role: .cancel) { deletingEntry = nil }
+        } message: { entry in
+            Text("“\(entry.name)” will be permanently deleted from the server. This can’t be undone.")
+        }
     }
 
     // MARK: Content
@@ -179,7 +195,7 @@ struct WebDAVBrowser: View {
                         .contextMenu { rowMenu(entry) }
                         .swipeActions(edge: .trailing) {
                             Button("Delete", systemImage: "trash", role: .destructive) {
-                                Task { await deleteEntry(entry) }
+                                deletingEntry = entry
                             }
                         }
                 }
@@ -251,11 +267,9 @@ struct WebDAVBrowser: View {
             renameText = entry.name
             renamingEntry = entry
         }
-        if !entry.isDirectory {
-            Button("Duplicate") { Task { await duplicate(entry) } }
-        }
+        Button("Duplicate") { Task { await duplicate(entry) } }
         Divider()
-        Button("Delete", role: .destructive) { Task { await deleteEntry(entry) } }
+        Button("Delete", role: .destructive) { deletingEntry = entry }
     }
 
     // MARK: Breadcrumbs

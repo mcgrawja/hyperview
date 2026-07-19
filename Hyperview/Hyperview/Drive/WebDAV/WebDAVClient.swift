@@ -177,18 +177,22 @@ nonisolated struct WebDAVClient: Sendable {
         try await transfer("MOVE", from: url, toName: newName)
     }
 
-    /// Duplicate (COPY within the same parent).
+    /// Duplicate (COPY within the same parent). A collection copies its whole
+    /// subtree (Depth: infinity, the RFC default we send explicitly).
     func duplicate(_ url: URL, to newName: String) async throws {
         try await transfer("COPY", from: url, toName: newName)
     }
 
     private func transfer(_ method: String, from url: URL, toName newName: String) async throws {
+        let isDir = url.hasDirectoryPath
         let destination = url.deletingLastPathComponent()
-            .appendingPathComponent(newName, isDirectory: url.hasDirectoryPath)
-        try await send(method, url: url, expected: [200, 201, 204], headers: [
+            .appendingPathComponent(newName, isDirectory: isDir)
+        var headers = [
             "Destination": destination.absoluteString,
             "Overwrite": "F",   // don't clobber an existing name — surfaces as an error
-        ])
+        ]
+        if isDir { headers["Depth"] = "infinity" }
+        try await send(method, url: url, expected: [200, 201, 204], headers: headers)
     }
 
     /// A one-shot WebDAV verb with no response body to parse. Maps auth and

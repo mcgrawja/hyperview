@@ -403,6 +403,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_FILE[sdk=iphoneos*]" = "Info-iOS.plist";
 				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=macosx*]" = "Info-macOS.plist";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Unifyr sends iMessages on your behalf by automating the Messages app.";
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Unifyr shows your calendar on the dashboard and lets Claude create events on your behalf.";
@@ -458,6 +459,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				"INFOPLIST_FILE[sdk=iphoneos*]" = "Info-iOS.plist";
 				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=macosx*]" = "Info-macOS.plist";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Unifyr sends iMessages on your behalf by automating the Messages app.";
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Unifyr shows your calendar on the dashboard and lets Claude create events on your behalf.";

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- macOS-only Info.plist additions. GENERATE_INFOPLIST_FILE stays YES and
+	     Xcode merges its generated keys into this file, so only the extras live
+	     here (mirrors Info-iOS.plist).
+
+	     NSAllowsLocalNetworking: the Drive module can connect to a WebDAV server
+	     on the local network (a home NAS), which commonly runs over plain http on
+	     a private IP or a .local name. App Transport Security blocks that by
+	     default; this exception permits loads to local hosts without requiring
+	     https. Public servers still get normal ATS (use https there). Self-signed
+	     https certificates are handled in WebDAVClient's session delegate. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>
