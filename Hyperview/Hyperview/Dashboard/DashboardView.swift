@@ -30,6 +30,7 @@ struct DashboardView: View {
                     RemindersCard()
                     OverdueRemindersCard()
                     FlaggedMailCard()
+                    HomeAssistantCard()
                     // Render only while something is pinned (context menus in
                     // Notes/Reminders: "Pin to Dashboard").
                     PinnedNotesCard()
