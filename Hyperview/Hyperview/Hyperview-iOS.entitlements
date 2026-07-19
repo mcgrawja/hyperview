@@ -18,6 +18,15 @@
 		<string>CloudKit</string>
 	</array>
 
+	<!-- Push, for LIVE CloudKit sync: NSPersistentCloudKitContainer receives
+	     record-change notifications by silent push, so an edit on another device
+	     lands within seconds instead of only on next launch/foreground. Value
+	     stays "development"; Xcode's signing swaps it to "production" when
+	     archiving for distribution. Pairs with the remote-notification background
+	     mode in Info-iOS.plist. -->
+	<key>aps-environment</key>
+	<string>development</string>
+
 	<!-- Mail ACCOUNT SETTINGS (never the message cache) sync through the iCloud
 	     key-value store — see MailAccountSync. -->
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
