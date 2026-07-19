@@ -43,7 +43,16 @@ final class ClaudeChatController {
         case idle
         case streaming
         case runningTools(String)
+        case awaitingConfirmation
         case error(String)
+    }
+
+    /// A risky tool call paused for the user's Confirm/Cancel.
+    struct PendingToolConfirmation: Identifiable {
+        let id = UUID()
+        let toolName: String
+        let title: String
+        let detail: String
     }
 
     var entries: [ChatEntry] = []
@@ -51,6 +60,18 @@ final class ClaudeChatController {
     var hasKey: Bool = ClaudeAuth.apiKey() != nil
     var inputTokens = 0
     var outputTokens = 0
+    /// Non-nil while the loop waits on a Confirm/Cancel decision.
+    var pendingConfirmation: PendingToolConfirmation?
+
+    /// Tools that leave the app or destroy data — never run without an explicit
+    /// in-chat confirmation. (The MCP-server path doesn't reach these; the gate
+    /// lives here, in the chat loop, where there's a UI to confirm.)
+    private static let confirmationRequired: Set<String> = [
+        "mail_send", "messages_send",
+        "notes_delete", "calendar_delete_event", "reminders_delete",
+    ]
+
+    @ObservationIgnored private var confirmationContinuation: CheckedContinuation<Bool, Never>?
 
     var model: String {
         get { UserDefaults.standard.string(forKey: "claude.model") ?? "claude-sonnet-5" }
@@ -90,6 +111,7 @@ final class ClaudeChatController {
     }
 
     func clearConversation() {
+        cancelPendingConfirmation()
         currentTask?.cancel()
         entries = []
         apiMessages = []
@@ -100,6 +122,7 @@ final class ClaudeChatController {
     }
 
     func stop() {
+        cancelPendingConfirmation()
         currentTask?.cancel()
         phase = .idle
     }
@@ -173,9 +196,25 @@ final class ClaudeChatController {
                 for use in toolUses {
                     guard let name = use["name"] as? String,
                           let id = use["id"] as? String else { continue }
+                    let arguments = (use["input"] as? [String: Any]) ?? [:]
+
+                    // Risky tools pause for an explicit Confirm/Cancel first.
+                    if Self.confirmationRequired.contains(name) {
+                        let approved = await requestConfirmation(name: name, arguments: arguments)
+                        guard approved else {
+                            entries.append(ChatEntry(kind: .notice, text: "Cancelled — \(Self.actionLabel(name)) was not performed."))
+                            results.append([
+                                "type": "tool_result",
+                                "tool_use_id": id,
+                                "content": "The user declined this action. Do not retry it; ask what they'd like to do instead.",
+                                "is_error": false,
+                            ])
+                            continue
+                        }
+                    }
+
                     phase = .runningTools(name)
                     entries.append(ChatEntry(kind: .toolCall(name: name), text: ""))
-                    let arguments = (use["input"] as? [String: Any]) ?? [:]
                     let outcome = await runTool(name: name, arguments: arguments)
                     results.append([
                         "type": "tool_result",
@@ -212,6 +251,65 @@ final class ClaudeChatController {
             return (false, "Unifyr's tool layer is unavailable.")
         }
         return await executor.execute(name: name, arguments: arguments)
+    }
+
+    // MARK: - Confirmation gate
+
+    /// Suspend the loop until the user taps Confirm or Cancel on the card.
+    private func requestConfirmation(name: String, arguments: [String: Any]) async -> Bool {
+        let text = Self.confirmationText(name: name, arguments: arguments)
+        phase = .awaitingConfirmation
+        return await withCheckedContinuation { continuation in
+            confirmationContinuation = continuation
+            pendingConfirmation = PendingToolConfirmation(toolName: name, title: text.title, detail: text.detail)
+        }
+    }
+
+    /// Called by the view when the user decides.
+    func resolveConfirmation(_ approved: Bool) {
+        pendingConfirmation = nil
+        let continuation = confirmationContinuation
+        confirmationContinuation = nil
+        continuation?.resume(returning: approved)
+    }
+
+    /// Resume a pending confirmation as declined (used when the run is stopped
+    /// or the conversation cleared, so the continuation never leaks).
+    private func cancelPendingConfirmation() {
+        pendingConfirmation = nil
+        let continuation = confirmationContinuation
+        confirmationContinuation = nil
+        continuation?.resume(returning: false)
+    }
+
+    private static func confirmationText(name: String, arguments args: [String: Any]) -> (title: String, detail: String) {
+        func arg(_ key: String) -> String { (args[key] as? String) ?? "" }
+        switch name {
+        case "mail_send":
+            let subject = arg("subject")
+            return ("Send this email?", "To \(arg("to").isEmpty ? "—" : arg("to"))" + (subject.isEmpty ? "" : " · “\(subject)”"))
+        case "messages_send":
+            return ("Send this message?", "To \(arg("to").isEmpty ? "—" : arg("to"))")
+        case "calendar_delete_event":
+            return ("Delete this calendar event?", "This can't be undone.")
+        case "reminders_delete":
+            return ("Delete this reminder?", "This can't be undone.")
+        case "notes_delete":
+            return ("Delete this note?", "It moves to Recently Deleted and can be restored.")
+        default:
+            return ("Confirm this action?", name)
+        }
+    }
+
+    private static func actionLabel(_ name: String) -> String {
+        switch name {
+        case "mail_send": return "sending the email"
+        case "messages_send": return "sending the message"
+        case "calendar_delete_event": return "deleting the event"
+        case "reminders_delete": return "deleting the reminder"
+        case "notes_delete": return "deleting the note"
+        default: return "the action"
+        }
     }
 
     // MARK: - One streaming request
@@ -353,12 +451,16 @@ final class ClaudeChatController {
     private var systemPrompt: String {
         """
         You are Claude, embedded inside Unifyr — the user's personal data \
-        app on their Mac. You have tools for their notes, mail (multiple \
-        accounts), calendar, reminders, contacts, and photos. Use them freely \
-        to answer questions and take actions; prefer fetching real data over \
-        guessing. Mail can only be drafted, never sent — the user reviews and \
-        sends in the app. Be concise and lead with the answer. The user's \
-        name is Jason. Conversation started: \(conversationDate).
+        app. You have tools for their notes, mail (multiple accounts), \
+        calendar, reminders, contacts, and photos. Use them freely to answer \
+        questions and take actions; prefer fetching real data over guessing. \
+        You can send mail (mail_send) and iMessages (messages_send), and delete \
+        events/reminders/notes — for all of these the app shows the user a \
+        Confirm/Cancel card before anything actually happens, so don't ask for \
+        permission in text first; just call the tool and let the user confirm. \
+        For email, it's good practice to show the drafted text (mail_draft) \
+        before calling mail_send. Be concise and lead with the answer. The \
+        user's name is Jason. Conversation started: \(conversationDate).
         """
     }
 

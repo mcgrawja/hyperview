@@ -21,6 +21,9 @@ struct ClaudeChatView: View {
         VStack(spacing: 0) {
             if controller.hasKey {
                 conversation
+                if let pending = controller.pendingConfirmation {
+                    confirmationCard(pending)
+                }
                 inputBar
             } else {
                 setupCard
@@ -126,6 +129,40 @@ struct ClaudeChatView: View {
                 .font(Theme.Font.cardCaption)
                 .foregroundStyle(Theme.Palette.textSecondary)
         }
+    }
+
+    // MARK: Confirmation
+
+    /// Shown when Claude wants to take a risky action (send mail/message, delete).
+    /// The loop is paused on a continuation until the user taps a button.
+    private func confirmationCard(_ pending: ClaudeChatController.PendingToolConfirmation) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text(pending.title)
+                .font(Theme.Font.cardBody.weight(.semibold))
+                .foregroundStyle(Theme.Palette.textPrimary)
+            if !pending.detail.isEmpty {
+                Text(pending.detail)
+                    .font(Theme.Font.cardCaption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .textSelection(.enabled)
+            }
+            HStack(spacing: Theme.Spacing.sm) {
+                Spacer()
+                Button("Cancel") { controller.resolveConfirmation(false) }
+                    .buttonStyle(.bordered)
+                Button("Confirm") { controller.resolveConfirmation(true) }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.Palette.claude)
+            }
+        }
+        .padding(Theme.Spacing.md)
+        .background(Theme.Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.card)
+                .strokeBorder(Theme.Palette.claude.opacity(0.4))
+        )
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.bottom, Theme.Spacing.xs)
     }
 
     // MARK: Input

@@ -138,6 +138,17 @@ final class MCPToolExecutor {
                 uid: Int((args["uid"] as? Double) ?? -1)
             )
         case "mail_draft": return try mailDraft(args)
+        case "mail_send": return try await mailSend(args)
+
+        #if os(macOS)
+        case "messages_send":
+            try MessagesSender.send(
+                try require(args, "body"),
+                toHandle: try require(args, "to"),
+                service: str(args, "service") ?? "iMessage"
+            )
+            return try json(["sent": true, "to": try require(args, "to")])
+        #endif
 
         case "contacts_search":
             return try encode(try await brokers.contacts.fetch(BrokerQuery(searchText: try require(args, "query"), limit: 25)))
@@ -366,6 +377,32 @@ final class MCPToolExecutor {
             ],
             "note": "Draft only — open Unifyr → Mail → Compose to review and send.",
         ])
+    }
+
+    /// Actually send mail via SMTP. Gated behind an in-chat confirmation by the
+    /// caller (ClaudeChatController); the MCP server path never reaches this
+    /// tool because it isn't registered there without a confirmation surface.
+    private func mailSend(_ args: [String: Any]) async throws -> String {
+        let accounts = try allAccounts()
+        guard !accounts.isEmpty else { throw MCPError("No mail accounts are configured in Unifyr.") }
+        let account = str(args, "account")
+            .flatMap { email in accounts.first { $0.emailAddress.caseInsensitiveCompare(email) == .orderedSame } }
+            ?? accounts[0]
+        let recipients = try require(args, "to")
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !recipients.isEmpty else { throw MCPError("No recipients.") }
+        let cc = (str(args, "cc") ?? "")
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let outgoing = OutgoingMessage(
+            fromAddress: account.emailAddress,
+            fromName: account.displayName,
+            to: recipients,
+            cc: cc,
+            subject: try require(args, "subject"),
+            body: try require(args, "body")
+        )
+        try await mailService.send(outgoing, account: account)
+        return try json(["sent": true, "from": account.emailAddress, "to": recipients])
     }
 
     private func summary(_ message: MailMessage, accountEmail: String) -> [String: Any] {

@@ -53,7 +53,29 @@ nonisolated indirect enum MCPValue: Sendable {
 }
 
 nonisolated enum MCPToolRegistry {
-    static let tools: [MCPTool] = [
+    /// The full inventory, including platform-only tools (messages_send is macOS
+    /// only, since the Messages module is Mac-only).
+    static var tools: [MCPTool] {
+        #if os(macOS)
+        return coreTools + [messagesSendTool]
+        #else
+        return coreTools
+        #endif
+    }
+
+    #if os(macOS)
+    private static let messagesSendTool = MCPTool(
+        name: "messages_send",
+        description: "Send an iMessage/SMS to a phone number or email handle. The in-app chat asks the user to confirm before sending. macOS only.",
+        schema: MCPTool.object([
+            "to": MCPTool.prop("string", "Recipient handle — a phone number or an iMessage email address"),
+            "body": MCPTool.prop("string", "Message text"),
+            "service": MCPTool.prop("string", "iMessage (default) or SMS"),
+        ], required: ["to", "body"])
+    )
+    #endif
+
+    private static let coreTools: [MCPTool] = [
         // MARK: Notes (NotesStore)
         MCPTool(
             name: "notes_search",
@@ -221,10 +243,21 @@ nonisolated enum MCPToolRegistry {
         ),
         MCPTool(
             name: "mail_draft",
-            description: "Compose a draft reply/message. DRAFT ONLY — Unifyr never sends via MCP; the user reviews and sends in-app.",
+            description: "Compose a draft reply/message WITHOUT sending. Use this to show the user proposed text for review. To actually send, use mail_send.",
             schema: MCPTool.object([
                 "account": MCPTool.prop("string", "From account email"),
                 "to": MCPTool.prop("string", "Recipient(s), comma separated"),
+                "subject": MCPTool.prop("string", "Subject"),
+                "body": MCPTool.prop("string", "Body text"),
+            ], required: ["to", "subject", "body"])
+        ),
+        MCPTool(
+            name: "mail_send",
+            description: "Send an email now via SMTP. The in-app chat asks the user to confirm before it actually sends. Prefer mail_draft first so the user has seen the text.",
+            schema: MCPTool.object([
+                "account": MCPTool.prop("string", "From account email (defaults to the first account)"),
+                "to": MCPTool.prop("string", "Recipient(s), comma separated"),
+                "cc": MCPTool.prop("string", "Optional CC recipient(s), comma separated"),
                 "subject": MCPTool.prop("string", "Subject"),
                 "body": MCPTool.prop("string", "Body text"),
             ], required: ["to", "subject", "body"])
