@@ -24,8 +24,12 @@ struct DashboardView: View {
                 // Photos card removed by owner preference (2026-07-09) — the
                 // Photos module in the sidebar remains the access point.
                 LazyVGrid(columns: columns, alignment: .leading, spacing: Theme.Spacing.lg) {
+                    QuickCaptureCard()
+                    AskClaudeCard()
                     CalendarCard()
                     RemindersCard()
+                    OverdueRemindersCard()
+                    FlaggedMailCard()
                     // Render only while something is pinned (context menus in
                     // Notes/Reminders: "Pin to Dashboard").
                     PinnedNotesCard()
