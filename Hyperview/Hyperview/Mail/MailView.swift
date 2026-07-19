@@ -68,7 +68,9 @@ private struct MailModuleContent: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \MailAccount.createdAt) private var accounts: [MailAccount]
     @Query(sort: \Mailbox.sortIndex) private var mailboxes: [Mailbox]
-    @Query private var messages: [MailMessage]
+    // Sorted newest-first at the store so the list filters don't re-sort the
+    // whole cache on every render (a hot path when the cache is large).
+    @Query(sort: \MailMessage.date, order: .reverse) private var messages: [MailMessage]
     // Universal tags (main CloudKit container) — this subtree's \.modelContext
     // is the mail cache, so tags come through the app-level TagsStore.
     @Environment(\.tagsStore) private var tagsStore
@@ -726,7 +728,6 @@ private struct MailModuleContent: View {
                     let key = message.messageID ?? message.id.uuidString
                     return seen.insert(key).inserted
                 }
-                .sorted { $0.date > $1.date }
         }
         if case .tag(let tagID) = selection {
             let headers = tagsStore?.keys(with: tagID, kind: TagKind.mail) ?? []
@@ -738,14 +739,12 @@ private struct MailModuleContent: View {
                     guard let header = message.messageID, headers.contains(header) else { return false }
                     return seen.insert(header).inserted
                 }
-                .sorted { $0.date > $1.date }
         }
         let folders = selectedFolders()
         guard !folders.isEmpty else { return [] }
         let keys = Set(folders.map { "\($0.account.id.uuidString)|\($0.path)" })
         return messages
             .filter { keys.contains("\($0.accountID.uuidString)|\($0.mailboxPath)") }
-            .sorted { $0.date > $1.date }
     }
 
     /// In unified boxes, tag each row with which account it came from.

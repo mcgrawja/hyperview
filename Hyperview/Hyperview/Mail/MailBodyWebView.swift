@@ -7,6 +7,11 @@
 //  injected so messages read well on any screen. The same wrapper and the same
 //  web view serve both platforms; only the hosting shell differs.
 //
+//  A Coordinator acts as the navigation delegate: link taps open in the user's
+//  browser (not inside the message pane), and the HTML is (re)loaded ONLY when
+//  it actually changes — SwiftUI calls updateNSView/updateUIView often, and
+//  reloading on every call restarted in-flight image fetches and churned CPU.
+//
 
 import SwiftUI
 import WebKit
@@ -16,14 +21,25 @@ struct MailBodyWebView {
     let html: String?
     let plainText: String?
 
-    fileprivate func makeWebView() -> WKWebView {
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    fileprivate func makeWebView(coordinator: Coordinator) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = false
         let webView = WKWebView(frame: .zero, configuration: config)
+        webView.navigationDelegate = coordinator
         // Default (opaque white) background — the message area is light "paper"
         // even in dark mode, matching the wrapper CSS, with no gap below short
         // messages.
         return webView
+    }
+
+    /// Load the document only if it differs from what's already showing.
+    fileprivate func load(into webView: WKWebView, coordinator: Coordinator) {
+        let doc = document
+        guard coordinator.loadedDocument != doc else { return }
+        coordinator.loadedDocument = doc
+        webView.loadHTMLString(doc, baseURL: nil)
     }
 
     fileprivate var document: String {
@@ -65,22 +81,45 @@ struct MailBodyWebView {
         </head><body>\(body)</body></html>
         """
     }
+
+    /// Navigation delegate: intercept link taps and open them in the browser
+    /// rather than loading them inside the message pane.
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        /// The HTML currently loaded, so repeated update calls don't reload.
+        var loadedDocument: String?
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction
+        ) async -> WKNavigationActionPolicy {
+            // The initial loadHTMLString arrives as `.other`; let it (and any
+            // resource loads) through. A user activating a link opens externally.
+            if navigationAction.navigationType == .linkActivated,
+               let url = navigationAction.request.url,
+               let scheme = url.scheme?.lowercased(),
+               scheme == "http" || scheme == "https" || scheme == "mailto" {
+                PlatformKit.open(url)
+                return .cancel
+            }
+            return .allow
+        }
+    }
 }
 
 #if os(macOS)
 extension MailBodyWebView: NSViewRepresentable {
-    func makeNSView(context: Context) -> WKWebView { makeWebView() }
+    func makeNSView(context: Context) -> WKWebView { makeWebView(coordinator: context.coordinator) }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        webView.loadHTMLString(document, baseURL: nil)
+        load(into: webView, coordinator: context.coordinator)
     }
 }
 #else
 extension MailBodyWebView: UIViewRepresentable {
-    func makeUIView(context: Context) -> WKWebView { makeWebView() }
+    func makeUIView(context: Context) -> WKWebView { makeWebView(coordinator: context.coordinator) }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        webView.loadHTMLString(document, baseURL: nil)
+        load(into: webView, coordinator: context.coordinator)
     }
 }
 #endif
