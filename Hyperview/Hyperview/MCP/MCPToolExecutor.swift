@@ -141,6 +141,12 @@ final class MCPToolExecutor {
             )
         case "mail_draft": return try mailDraft(args)
         case "mail_send": return try await mailSend(args)
+        case "mail_delete":
+            return try await mailDelete(
+                account: try require(args, "account"),
+                mailbox: try require(args, "mailbox"),
+                uid: Int((args["uid"] as? Double) ?? -1)
+            )
 
         #if os(macOS)
         case "messages_send":
@@ -578,6 +584,25 @@ final class MCPToolExecutor {
         )
         try await mailService.send(outgoing, account: account)
         return try json(["sent": true, "from": account.emailAddress, "to": recipients])
+    }
+
+    /// Delete = move to the account's server Trash (MailService.delete), then the
+    /// cached row is dropped. Gated behind the in-chat confirmation by the caller.
+    private func mailDelete(account: String, mailbox: String, uid: Int) async throws -> String {
+        guard let target = try allAccounts().first(where: { $0.emailAddress.caseInsensitiveCompare(account) == .orderedSame }) else {
+            throw MCPError("Unknown account \(account)")
+        }
+        guard let message = try mailContext.fetch(FetchDescriptor<MailMessage>())
+            .first(where: { $0.accountID == target.id && $0.mailboxPath == mailbox && $0.uid == uid }) else {
+            throw MCPError("Message not found in cache — run mail_sync or mail_search first")
+        }
+        let subject = message.subject
+        await mailService.delete(message, account: target)
+        return try json([
+            "deleted": true,
+            "subject": subject.isEmpty ? "(no subject)" : subject,
+            "note": "Moved to the account's Trash mailbox on the server.",
+        ])
     }
 
     private func summary(_ message: MailMessage, accountEmail: String) -> [String: Any] {

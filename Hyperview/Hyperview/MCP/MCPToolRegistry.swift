@@ -265,6 +265,15 @@ nonisolated enum MCPToolRegistry {
             ], required: ["to", "subject", "body"])
         ),
         MCPTool(
+            name: "mail_delete",
+            description: "Delete an email — moves it to the account's Trash on the server (recoverable there). Identify it by account email, mailbox path, and uid (from mail_unread/mail_search). The in-app chat asks the user to confirm first.",
+            schema: MCPTool.object([
+                "account": MCPTool.prop("string", "Account email"),
+                "mailbox": MCPTool.prop("string", "Mailbox path, e.g. INBOX"),
+                "uid": MCPTool.prop("number", "Message UID"),
+            ], required: ["account", "mailbox", "uid"])
+        ),
+        MCPTool(
             name: "mail_send",
             description: "Send an email now via SMTP. The in-app chat asks the user to confirm before it actually sends. Prefer mail_draft first so the user has seen the text.",
             schema: MCPTool.object([

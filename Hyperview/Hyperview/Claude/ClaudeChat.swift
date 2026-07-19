@@ -68,7 +68,7 @@ final class ClaudeChatController {
     /// lives here, in the chat loop, where there's a UI to confirm.)
     private static let confirmationRequired: Set<String> = [
         "mail_send", "messages_send", "drive_write",
-        "notes_delete", "calendar_delete_event", "reminders_delete",
+        "mail_delete", "notes_delete", "calendar_delete_event", "reminders_delete",
     ]
 
     @ObservationIgnored private var confirmationContinuation: CheckedContinuation<Bool, Never>?
@@ -290,6 +290,9 @@ final class ClaudeChatController {
             return ("Send this email?", "To \(arg("to").isEmpty ? "—" : arg("to"))" + (subject.isEmpty ? "" : " · “\(subject)”"))
         case "messages_send":
             return ("Send this message?", "To \(arg("to").isEmpty ? "—" : arg("to"))")
+        case "mail_delete":
+            let uid = (args["uid"] as? Double).map { String(Int($0)) } ?? "—"
+            return ("Delete this email?", "\(arg("account").isEmpty ? "" : arg("account") + " · ")message #\(uid) — moves to Trash.")
         case "calendar_delete_event":
             return ("Delete this calendar event?", "This can't be undone.")
         case "reminders_delete":
@@ -308,6 +311,7 @@ final class ClaudeChatController {
         switch name {
         case "mail_send": return "sending the email"
         case "messages_send": return "sending the message"
+        case "mail_delete": return "deleting the email"
         case "calendar_delete_event": return "deleting the event"
         case "reminders_delete": return "deleting the reminder"
         case "notes_delete": return "deleting the note"
