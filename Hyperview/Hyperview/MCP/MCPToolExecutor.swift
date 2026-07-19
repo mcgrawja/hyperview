@@ -71,6 +71,8 @@ final class MCPToolExecutor {
         case "notes_toggle_todo": return try notesToggleTodo(id: try requireUUID(args, "block_id"))
         case "notes_archive": return try notesSetArchived(id: try requireUUID(args, "id"), archived: true)
         case "notes_restore": return try notesSetArchived(id: try requireUUID(args, "id"), archived: false)
+        case "notes_delete": return try notesDelete(id: try requireUUID(args, "id"))
+        case "notes_move": return try notesMove(id: try requireUUID(args, "id"), folderName: str(args, "folder"))
 
         case "calendar_today":
             return try encode(try await brokers.eventKit.fetchTodayEvents())
@@ -174,9 +176,156 @@ final class MCPToolExecutor {
 
         case "dashboard_briefing": return try await briefing()
 
+        case "drive_locations": return try driveListLocations()
+        case "drive_list": return try await driveList(location: try require(args, "location"), path: str(args, "path") ?? "")
+        case "drive_read": return try await driveRead(location: try require(args, "location"), path: try require(args, "path"))
+        case "drive_write":
+            return try await driveWrite(
+                location: try require(args, "location"),
+                path: try require(args, "path"),
+                content: try require(args, "content")
+            )
+
         default:
             throw MCPError("Unknown tool: \(name)")
         }
+    }
+
+    // MARK: - Drive
+
+    /// A place Claude can browse: a local/iCloud folder the user added, or a
+    /// WebDAV server. Resolved fresh per call (bookmarks + UserDefaults), so the
+    /// executor holds no Drive state and leaks no iCloud-KVS observer.
+    private enum DriveLocation {
+        case local(root: URL)
+        case webdav(DriveServer)
+    }
+
+    private func driveLocationNames() -> [(name: String, location: DriveLocation)] {
+        var out: [(String, DriveLocation)] = []
+        let bookmarks = (UserDefaults.standard.array(forKey: "drive.locationBookmarks") as? [Data]) ?? []
+        #if os(macOS)
+        let options: URL.BookmarkResolutionOptions = .withSecurityScope
+        #else
+        let options: URL.BookmarkResolutionOptions = []
+        #endif
+        for data in bookmarks {
+            var stale = false
+            if let url = try? URL(resolvingBookmarkData: data, options: options, relativeTo: nil, bookmarkDataIsStale: &stale) {
+                out.append((url.lastPathComponent, .local(root: url)))
+            }
+        }
+        if let data = UserDefaults.standard.data(forKey: "drive.servers"),
+           let servers = try? JSONDecoder().decode([DriveServer].self, from: data) {
+            for server in servers { out.append((server.title, .webdav(server))) }
+        }
+        return out
+    }
+
+    private func resolveDriveLocation(_ name: String) throws -> DriveLocation {
+        let all = driveLocationNames()
+        guard let match = all.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+            let names = all.map(\.name).joined(separator: ", ")
+            throw MCPError("No Drive location named “\(name)”. Available: \(names.isEmpty ? "(none — add one in Drive first)" : names)")
+        }
+        return match.location
+    }
+
+    private func webDAVClient(for server: DriveServer) -> WebDAVClient? {
+        guard let url = server.url else { return nil }
+        // Same Keychain coordinates DriveServers uses.
+        let password = SyncedKeychain.read(service: "com.mcgraw.Hyperview.webdav", account: server.credentialAccount) ?? ""
+        return WebDAVClient(baseURL: url, username: server.username, password: password)
+    }
+
+    private func webDAVURL(_ server: DriveServer, path: String) -> URL? {
+        guard var url = server.url else { return nil }
+        for component in path.split(separator: "/") where !component.isEmpty {
+            url.appendPathComponent(String(component))
+        }
+        return url
+    }
+
+    private func driveListLocations() throws -> String {
+        let items = driveLocationNames().map { entry -> [String: Any] in
+            switch entry.location {
+            case .local: return ["name": entry.name, "kind": "folder"]
+            case .webdav: return ["name": entry.name, "kind": "server"]
+            }
+        }
+        return try json(["locations": items])
+    }
+
+    private func driveList(location name: String, path: String) async throws -> String {
+        switch try resolveDriveLocation(name) {
+        case .local(let root):
+            let scoped = root.startAccessingSecurityScopedResource()
+            defer { if scoped { root.stopAccessingSecurityScopedResource() } }
+            let dir = path.isEmpty ? root : root.appendingPathComponent(path)
+            let urls = try FileManager.default.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+                options: [.skipsHiddenFiles]
+            )
+            let items = urls.map { url -> [String: Any] in
+                let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+                var item: [String: Any] = ["name": url.lastPathComponent, "kind": (values?.isDirectory ?? false) ? "folder" : "file"]
+                if let size = values?.fileSize { item["size"] = size }
+                return item
+            }
+            return try json(["location": name, "path": path, "items": items])
+        case .webdav(let server):
+            guard let client = webDAVClient(for: server) else { throw MCPError("That server isn't configured correctly.") }
+            let entries = try await client.list(path.isEmpty ? nil : webDAVURL(server, path: path))
+            let items = entries.map { entry -> [String: Any] in
+                var item: [String: Any] = ["name": entry.name, "kind": entry.isDirectory ? "folder" : "file"]
+                if let size = entry.size { item["size"] = size }
+                return item
+            }
+            return try json(["location": name, "path": path, "items": items])
+        }
+    }
+
+    private func driveRead(location name: String, path: String) async throws -> String {
+        let data: Data
+        switch try resolveDriveLocation(name) {
+        case .local(let root):
+            let scoped = root.startAccessingSecurityScopedResource()
+            defer { if scoped { root.stopAccessingSecurityScopedResource() } }
+            data = try Data(contentsOf: root.appendingPathComponent(path))
+        case .webdav(let server):
+            guard let client = webDAVClient(for: server), let url = webDAVURL(server, path: path) else {
+                throw MCPError("That server isn't configured correctly.")
+            }
+            let local = try await client.download(url)
+            data = try Data(contentsOf: local)
+            try? FileManager.default.removeItem(at: local)
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw MCPError("That file isn't UTF-8 text (\(data.count) bytes) — Drive read only handles text files.")
+        }
+        return try json(["path": path, "content": String(text.prefix(40_000)), "truncated": text.count > 40_000])
+    }
+
+    private func driveWrite(location name: String, path: String, content: String) async throws -> String {
+        let data = Data(content.utf8)
+        switch try resolveDriveLocation(name) {
+        case .local(let root):
+            let scoped = root.startAccessingSecurityScopedResource()
+            defer { if scoped { root.stopAccessingSecurityScopedResource() } }
+            let target = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: target, options: .atomic)
+        case .webdav(let server):
+            guard let client = webDAVClient(for: server) else { throw MCPError("That server isn't configured correctly.") }
+            let folderPath = (path as NSString).deletingLastPathComponent
+            let filename = (path as NSString).lastPathComponent
+            guard !filename.isEmpty, let folder = webDAVURL(server, path: folderPath) else {
+                throw MCPError("Invalid path “\(path)”.")
+            }
+            try await client.upload(data, toFolder: folder, as: filename)
+        }
+        return try json(["written": true, "location": name, "path": path, "bytes": data.count])
     }
 
     // MARK: - Notes
@@ -266,6 +415,32 @@ final class MCPToolExecutor {
         NotesStore(context: notesContext).archive(note, archived)
         try notesContext.save()
         return try json(["archived": archived, "title": note.title])
+    }
+
+    /// Soft-delete: moves the note to Recently Deleted (recoverable).
+    private func notesDelete(id: UUID) throws -> String {
+        guard let note = try allNotes().first(where: { $0.id == id }) else { throw MCPError("Note not found") }
+        let title = note.title
+        NotesStore(context: notesContext).delete(note)
+        try notesContext.save()
+        return try json(["deleted": true, "title": title, "note": "Moved to Recently Deleted; can be restored in Notes."])
+    }
+
+    private func notesMove(id: UUID, folderName: String?) throws -> String {
+        guard let note = try allNotes().first(where: { $0.id == id }) else { throw MCPError("Note not found") }
+        if let folderName, !folderName.isEmpty {
+            let folders = try notesContext.fetch(FetchDescriptor<Folder>())
+            guard let folder = folders.first(where: { $0.name.caseInsensitiveCompare(folderName) == .orderedSame }) else {
+                let available = folders.map(\.name).sorted().joined(separator: ", ")
+                throw MCPError("No folder named “\(folderName)”. Available folders: \(available.isEmpty ? "(none)" : available)")
+            }
+            note.folder = folder
+        } else {
+            note.folder = nil // top level / All Notes
+        }
+        note.modifiedAt = Date()
+        try notesContext.save()
+        return try json(["moved": true, "title": note.title, "folder": note.folder?.name ?? "All Notes"])
     }
 
     private func notesToggleTodo(id: UUID) throws -> String {

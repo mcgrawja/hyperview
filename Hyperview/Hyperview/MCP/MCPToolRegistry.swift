@@ -126,6 +126,19 @@ nonisolated enum MCPToolRegistry {
             description: "Restore an archived note.",
             schema: MCPTool.object(["id": MCPTool.prop("string", "Note UUID")], required: ["id"])
         ),
+        MCPTool(
+            name: "notes_delete",
+            description: "Delete a note — moves it to Recently Deleted (recoverable), not a permanent erase. The in-app chat asks the user to confirm first.",
+            schema: MCPTool.object(["id": MCPTool.prop("string", "Note UUID")], required: ["id"])
+        ),
+        MCPTool(
+            name: "notes_move",
+            description: "Move a note into a folder by folder name, or to the top level (All Notes) if folder is omitted or empty.",
+            schema: MCPTool.object([
+                "id": MCPTool.prop("string", "Note UUID"),
+                "folder": MCPTool.prop("string", "Destination folder name (empty = top level)"),
+            ], required: ["id"])
+        ),
 
         // MARK: Calendar (EventKitBroker)
         MCPTool(
@@ -292,6 +305,38 @@ nonisolated enum MCPToolRegistry {
             name: "photos_recent_metadata",
             description: "Metadata (dates, favorites, dimensions) for photos from the last N days (default 7). No pixels.",
             schema: MCPTool.object(["days": MCPTool.prop("number", "Window in days")])
+        ),
+
+        // MARK: Drive (local/iCloud folders + WebDAV servers)
+        MCPTool(
+            name: "drive_locations",
+            description: "List the Drive locations the user has added — local/iCloud folders and WebDAV servers. Use a location's name with the other drive_* tools.",
+            schema: MCPTool.object([:])
+        ),
+        MCPTool(
+            name: "drive_list",
+            description: "List a Drive folder's contents. 'location' is a name from drive_locations; 'path' is a subfolder path within it (empty = the location's root).",
+            schema: MCPTool.object([
+                "location": MCPTool.prop("string", "Location name from drive_locations"),
+                "path": MCPTool.prop("string", "Subfolder path (empty for the root)"),
+            ], required: ["location"])
+        ),
+        MCPTool(
+            name: "drive_read",
+            description: "Read a UTF-8 text file from a Drive location (location name + file path). Binary files aren't supported.",
+            schema: MCPTool.object([
+                "location": MCPTool.prop("string", "Location name from drive_locations"),
+                "path": MCPTool.prop("string", "File path within the location"),
+            ], required: ["location", "path"])
+        ),
+        MCPTool(
+            name: "drive_write",
+            description: "Create or overwrite a text file in a Drive location. Overwrites without warning, so the in-app chat asks the user to confirm first.",
+            schema: MCPTool.object([
+                "location": MCPTool.prop("string", "Location name from drive_locations"),
+                "path": MCPTool.prop("string", "File path within the location (intermediate folders are created)"),
+                "content": MCPTool.prop("string", "The text to write"),
+            ], required: ["location", "path", "content"])
         ),
 
         // MARK: Composite

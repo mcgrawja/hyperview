@@ -67,7 +67,7 @@ final class ClaudeChatController {
     /// in-chat confirmation. (The MCP-server path doesn't reach these; the gate
     /// lives here, in the chat loop, where there's a UI to confirm.)
     private static let confirmationRequired: Set<String> = [
-        "mail_send", "messages_send",
+        "mail_send", "messages_send", "drive_write",
         "notes_delete", "calendar_delete_event", "reminders_delete",
     ]
 
@@ -296,6 +296,9 @@ final class ClaudeChatController {
             return ("Delete this reminder?", "This can't be undone.")
         case "notes_delete":
             return ("Delete this note?", "It moves to Recently Deleted and can be restored.")
+        case "drive_write":
+            let path = arg("path")
+            return ("Write this file?", "\(arg("location").isEmpty ? "" : arg("location") + " · ")\(path.isEmpty ? "—" : path) — overwrites if it exists.")
         default:
             return ("Confirm this action?", name)
         }
@@ -308,6 +311,7 @@ final class ClaudeChatController {
         case "calendar_delete_event": return "deleting the event"
         case "reminders_delete": return "deleting the reminder"
         case "notes_delete": return "deleting the note"
+        case "drive_write": return "writing the file"
         default: return "the action"
         }
     }
