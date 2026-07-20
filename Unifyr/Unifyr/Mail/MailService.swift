@@ -1,0 +1,584 @@
+//
+//  MailService.swift
+//  Unifyr
+//
+//  The mail orchestration layer for the UI (Phase 4), analogous to NotesStore.
+//  It drives the IMAP/SMTP actors (which do the networking + parsing off the
+//  main actor) and upserts Sendable results into the local, non-CloudKit cache
+//  on the main actor. The MCP-facing MailBroker (Phase 6, §7) will wrap the same
+//  operations.
+//
+
+import Foundation
+import SwiftData
+import Observation
+
+@MainActor
+@Observable
+final class MailService {
+    enum Status: Equatable {
+        case idle, connecting, connected, syncing
+        case error(String)
+    }
+
+    var status: Status = .idle
+
+    /// Talking to the server right now. Drives a quiet spinner on the Refresh
+    /// button — the old approach pushed a "Connecting…"/"Syncing…" BANNER into
+    /// the layout on every poll, which shoved the list down and snapped it back
+    /// seconds later. Progress should be ambient; only failures deserve a banner.
+    var isBusy: Bool {
+        status == .connecting || status == .syncing
+    }
+
+    /// Persistent per-account failures (e.g. bad credentials). Unlike `status`,
+    /// these are NOT overwritten by another account's success — they stay until
+    /// the failing account connects.
+    var accountErrors: [UUID: String] = [:]
+
+    @ObservationIgnored var context: ModelContext?
+    /// One live IMAP connection per account.
+    @ObservationIgnored private var clients: [UUID: IMAPClient] = [:]
+    /// Accounts with a connect attempt in flight (see `connect`).
+    @ObservationIgnored private var connecting: Set<UUID> = []
+
+    // MARK: Connection
+
+    func connect(_ account: MailAccount) async {
+        guard clients[account.id] == nil else { return }
+        // The client is only filed once login succeeds, so a slow connect lets
+        // the next caller start a SECOND one behind it (three piled up on the
+        // first iPhone run). Hold the slot for the whole attempt.
+        guard !connecting.contains(account.id) else { return }
+        connecting.insert(account.id)
+        defer { connecting.remove(account.id) }
+
+        guard var password = MailKeychain.password(for: account.id) else {
+            // On a device that just pulled this account from iCloud, the config
+            // can land before iCloud Keychain hands over the password — say so,
+            // rather than implying the account is broken.
+            let message = "No password yet for \(account.emailAddress). If you just added it on another device, check that iCloud Keychain is on; otherwise re-enter it in the account's settings."
+            status = .error(message)
+            accountErrors[account.id] = message
+            return
+        }
+        // Heal stored app passwords that were saved with display whitespace
+        // (Google shows them as "xxxx xxxx xxxx xxxx"; the separators are often
+        // non-breaking spaces). If removing all whitespace yields the canonical
+        // 16-lowercase-letter shape, use — and persist — the condensed form.
+        let condensed = String(password.filter { !$0.isWhitespace })
+        if condensed != password, condensed.count == 16,
+           condensed.allSatisfy({ $0.isLetter && $0.isLowercase }) {
+            MailLog.log("[Mail] healing stored app password for \(account.emailAddress) (was \(password.count) chars with whitespace)")
+            password = condensed
+            MailKeychain.setPassword(condensed, for: account.id)
+        }
+        status = .connecting
+        let config = MailServerConfig(host: account.imapHost, port: account.imapPort, username: account.emailAddress)
+        let client = IMAPClient(config: config)
+        do {
+            // Password METADATA only (shape debugging) — never the content.
+            let hasWhitespace = password.contains(where: \.isWhitespace)
+            MailLog.log("[Mail] connecting \(account.imapHost):\(account.imapPort) as \(account.emailAddress) (pw: \(password.count) chars\(hasWhitespace ? ", CONTAINS WHITESPACE" : ""))")
+            try await client.connect()
+            try await client.login(password: password)
+            clients[account.id] = client
+            status = .connected
+            accountErrors[account.id] = nil
+            MailLog.log("[Mail] login OK (\(account.emailAddress))")
+            await syncMailboxes(account)
+        } catch {
+            MailLog.log("[Mail] connect/login error (\(account.emailAddress)): \(error)")
+            let message = connectFailureMessage(account, error)
+            status = .error(message)
+            accountErrors[account.id] = message
+        }
+    }
+
+    func disconnect(_ account: MailAccount) async {
+        if let client = clients.removeValue(forKey: account.id) {
+            await client.logout()
+        }
+    }
+
+    private func ensureConnected(_ account: MailAccount) async -> IMAPClient? {
+        if let client = clients[account.id] { return client }
+        await connect(account)
+        return clients[account.id]
+    }
+
+    // MARK: Sync
+
+    /// LIST only — deliberately fast. Per-mailbox counts are fetched lazily when
+    /// a mailbox is opened (see `syncMessages`), so the inbox loads immediately
+    /// instead of waiting on a STATUS for every folder.
+    func syncMailboxes(_ account: MailAccount) async {
+        guard let context, let imap = await ensureConnected(account) else { return }
+        do {
+            let infos = try await imap.listMailboxes()
+            MailLog.log("[Mail] listMailboxes -> \(infos.count) mailboxes")
+            upsertMailboxes(infos, accountID: account.id, in: context)
+            try? context.save()
+        } catch {
+            MailLog.log("[Mail] listMailboxes error: \(error)")
+            failed(account, error)
+        }
+    }
+
+    func syncMessages(_ account: MailAccount, mailboxPath: String, limit: Int = 50, quiet: Bool = false) async {
+        guard let context, let imap = await ensureConnected(account) else { return }
+        if !quiet { status = .syncing }
+        do {
+            let summaries = try await imap.fetchSummaries(path: mailboxPath, limit: limit)
+            MailLog.log("[Mail] fetchSummaries \(mailboxPath) -> \(summaries.count) messages")
+            let arrived = upsertMessages(summaries, accountID: account.id, mailboxPath: mailboxPath, in: context)
+            pruneVanished(summaries, accountID: account.id, mailboxPath: mailboxPath, in: context)
+            let syncKey = "\(account.id.uuidString)|\(mailboxPath)"
+            let firstSync = !syncedMailboxes.contains(syncKey)
+            syncedMailboxes.insert(syncKey)
+            if mailboxPath.uppercased() == "INBOX" {
+                await applyRules(to: arrived, account: account, in: context, notifyNew: !firstSync)
+            }
+            // Update just this mailbox's badge (cheap, one round trip).
+            let counts = await imap.status(mailboxPath)
+            updateCounts(mailboxPath: mailboxPath, accountID: account.id, counts: counts, in: context)
+            try? context.save()
+            if !quiet { status = .connected }
+        } catch {
+            MailLog.log("[Mail] syncMessages error: \(error)")
+            if quiet {
+                // Background tick: drop the connection to reconnect next tick,
+                // but don't surface a scary banner for a transient blip.
+                clients[account.id] = nil
+            } else {
+                failed(account, error)
+            }
+        }
+    }
+
+    // MARK: Auto-refresh
+
+    /// Background inbox sync for every account (also triggers rules on new
+    /// arrivals). Timer-based v1; IMAP IDLE is a future upgrade.
+    func startAutoRefresh(every interval: TimeInterval = 300) {
+        guard autoRefreshTask == nil else { return }
+        MailLog.log("[Mail] auto-refresh every \(Int(interval))s")
+        autoRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(interval))
+                await self?.syncAllInboxes()
+            }
+        }
+    }
+
+    func syncAllInboxes() async {
+        guard let context else { return }
+        let accounts = (try? context.fetch(FetchDescriptor<MailAccount>())) ?? []
+        for account in accounts {
+            await syncMessages(account, mailboxPath: "INBOX", quiet: true)
+        }
+    }
+
+    @ObservationIgnored private var autoRefreshTask: Task<Void, Never>?
+
+    private func updateCounts(mailboxPath: String, accountID: UUID, counts: (total: Int, unread: Int), in context: ModelContext) {
+        let boxes = (try? context.fetch(FetchDescriptor<Mailbox>())) ?? []
+        if let box = boxes.first(where: { $0.accountID == accountID && $0.path == mailboxPath }) {
+            box.totalCount = counts.total
+            box.unreadCount = counts.unread
+        }
+        totalUnread = boxes
+            .filter { $0.path.uppercased() == "INBOX" }
+            .reduce(0) { $0 + $1.unreadCount }
+    }
+
+    /// Sum of all inbox unread counts — drives the app-sidebar Mail badge.
+    private(set) var totalUnread = 0
+
+    /// Applies a universal tag to a message (rules) — injected by the app.
+    @ObservationIgnored var universalTagLink: ((UUID, String) -> Void)?
+
+    /// Fired for each genuinely new, undelivered-to-trash, unread INBOX
+    /// message (sender display name, subject) — the app posts a notification.
+    @ObservationIgnored var onNewMail: ((String, String) -> Void)?
+
+    /// Mailboxes synced at least once this launch — so the initial backfill
+    /// doesn't fire a notification for every historical message.
+    @ObservationIgnored private var syncedMailboxes: Set<String> = []
+
+    /// Per-RULE failures (rule id → message). Kept separate from
+    /// `accountErrors`: a rule pointed at a mailbox the server won't accept is
+    /// a config problem, not a broken account, and it shouldn't make the whole
+    /// account look like it's failing to connect.
+    var ruleErrors: [UUID: String] = [:]
+
+    private func recordRuleFailure(_ rule: MailRule, destination: String, error: Error) {
+        let reason: String
+        if case MailError.commandFailed = error {
+            reason = "the server rejected it — that mailbox may not accept messages"
+        } else {
+            reason = describe(error)
+        }
+        ruleErrors[rule.id] = "Rule “\(rule.name)” couldn’t move mail to “\(destination)” — \(reason)."
+        MailLog.log("[Rules] '\(rule.name)' move to \(destination) failed: \(error)")
+    }
+
+    /// On a network error, drop that account's connection so the next action
+    /// reconnects.
+    private func failed(_ account: MailAccount, _ error: Error) {
+        clients[account.id] = nil
+        status = .error("\(account.emailAddress): \(describe(error))")
+        accountErrors[account.id] = "\(account.emailAddress): \(describe(error))"
+    }
+
+    /// Remove an account entirely: connection, cached data, keychain secret, and
+    /// the shared config — the tombstone is what stops the other devices from
+    /// syncing it straight back to us.
+    func removeAccount(_ account: MailAccount) async {
+        await disconnect(account)
+        accountErrors[account.id] = nil
+        MailAccountSync.shared.recordDeletion(email: account.emailAddress)
+        MailKeychain.deletePassword(for: account.id)
+        if let context {
+            let accountID = account.id
+            let messages = (try? context.fetch(FetchDescriptor<MailMessage>())) ?? []
+            for message in messages where message.accountID == accountID { context.delete(message) }
+            let boxes = (try? context.fetch(FetchDescriptor<Mailbox>())) ?? []
+            for box in boxes where box.accountID == accountID { context.delete(box) }
+            context.delete(account)
+            try? context.save()
+        }
+    }
+
+    func search(_ account: MailAccount, mailboxPath: String, query: String, limit: Int = 50) async {
+        guard let context, let imap = await ensureConnected(account) else { return }
+        do {
+            let summaries = try await imap.search(path: mailboxPath, query: query, limit: limit)
+            upsertMessages(summaries, accountID: account.id, mailboxPath: mailboxPath, in: context)
+            try? context.save()
+        } catch {
+            failed(account, error)
+        }
+    }
+
+    func loadBody(_ message: MailMessage, account: MailAccount) async {
+        guard let context, let imap = await ensureConnected(account) else { return }
+        do {
+            let body = try await imap.fetchBody(path: message.mailboxPath, uid: message.uid)
+            message.bodyText = body.text
+            message.bodyHTML = body.html
+            message.hasFetchedBody = true
+            // Replace cached attachments with the freshly decoded set.
+            let messageID = message.id
+            let stale = (try? context.fetch(FetchDescriptor<MailAttachment>())) ?? []
+            for attachment in stale where attachment.messageID == messageID {
+                context.delete(attachment)
+            }
+            for part in body.attachments {
+                context.insert(MailAttachment(
+                    messageID: messageID,
+                    filename: part.filename,
+                    mimeType: part.mimeType,
+                    contentID: part.contentID,
+                    data: part.data
+                ))
+            }
+            if !message.isSeen {
+                try? await imap.markSeen(path: message.mailboxPath, uid: message.uid)
+                message.isSeen = true
+            }
+            try? context.save()
+        } catch {
+            failed(account, error)
+        }
+    }
+
+    // MARK: Message actions
+
+    func setSeen(_ message: MailMessage, account: MailAccount, seen: Bool) async {
+        guard let imap = await ensureConnected(account) else { return }
+        do {
+            try await imap.setFlag(path: message.mailboxPath, uid: message.uid, flag: "\\Seen", on: seen)
+            message.isSeen = seen
+            try? context?.save()
+        } catch { failed(account, error) }
+    }
+
+    func setFlagged(_ message: MailMessage, account: MailAccount, flagged: Bool) async {
+        guard let imap = await ensureConnected(account) else { return }
+        do {
+            try await imap.setFlag(path: message.mailboxPath, uid: message.uid, flag: "\\Flagged", on: flagged)
+            message.isFlagged = flagged
+            try? context?.save()
+        } catch { failed(account, error) }
+    }
+
+    /// Delete = move to the account's trash mailbox (server-side), then drop the
+    /// cached row.
+    func delete(_ message: MailMessage, account: MailAccount) async {
+        await move(message, account: account, to: trashPath(for: account))
+    }
+
+    func move(_ message: MailMessage, account: MailAccount, to destination: String) async {
+        let mailboxPath = message.mailboxPath
+        do {
+            try await moveThrowing(message, account: account, to: destination)
+        } catch {
+            failed(account, error)
+            // The move may have failed simply because the server no longer HAS
+            // this message (deleted on another client) — a ghost, which would
+            // otherwise refuse to delete forever. Re-sync the mailbox: the prune
+            // drops it if it's genuinely gone, and leaves it alone if it isn't.
+            await syncMessages(account, mailboxPath: mailboxPath, quiet: true)
+        }
+    }
+
+    /// The move itself. Throws so callers can decide how to report a failure —
+    /// a rule's bad destination must not make the whole ACCOUNT look broken
+    /// (see `applyRules`), which is what a raw `failed()` would do.
+    private func moveThrowing(_ message: MailMessage, account: MailAccount, to destination: String) async throws {
+        guard destination != message.mailboxPath else { return }
+        guard let context, let imap = await ensureConnected(account) else {
+            throw MailError.notConnected
+        }
+        try await imap.move(path: message.mailboxPath, uid: message.uid, to: destination)
+        // UID is mailbox-scoped, so the cached row is stale after a move;
+        // drop it and let the destination's next sync re-cache it.
+        context.delete(message)
+        try? context.save()
+    }
+
+    /// Best-effort trash mailbox for an account ("Deleted Messages" on iCloud,
+    /// "[Gmail]/Trash" on Gmail, "Trash" elsewhere).
+    func trashPath(for account: MailAccount) -> String {
+        specialPath(for: account, matching: ["TRASH", "DELETED"], fallback: "Trash")
+    }
+
+    /// Best-effort sent mailbox ("Sent Messages" on iCloud, "[Gmail]/Sent Mail").
+    func sentPath(for account: MailAccount) -> String {
+        specialPath(for: account, matching: ["SENT"], fallback: "Sent")
+    }
+
+    private func specialPath(for account: MailAccount, matching needles: [String], fallback: String) -> String {
+        let boxes = (try? context?.fetch(FetchDescriptor<Mailbox>())) ?? []
+        let mine = boxes.filter { $0.accountID == account.id }
+        if let match = mine.first(where: { box in
+            let p = box.path.uppercased()
+            return needles.contains { p.contains($0) }
+        }) {
+            return match.path
+        }
+        return fallback
+    }
+
+    // MARK: Send (§7: gated behind the compose confirm surface)
+
+    func send(_ outgoing: OutgoingMessage, account: MailAccount) async throws {
+        guard let password = MailKeychain.password(for: account.id) else { throw MailError.missingPassword }
+        let config = MailServerConfig(host: account.smtpHost, port: account.smtpPort, username: account.emailAddress)
+        let smtp = SMTPClient(config: config)
+        let rendered = try await smtp.send(outgoing, password: password)
+
+        // Save a copy to the Sent mailbox. Gmail already does this server-side
+        // on SMTP send (an APPEND would duplicate); iCloud and most others
+        // don't. Best-effort — a failed save never fails the send.
+        if !account.smtpHost.lowercased().contains("gmail") {
+            if let imap = await ensureConnected(account) {
+                let sent = sentPath(for: account)
+                do {
+                    try await imap.append(path: sent, message: Data(rendered.utf8))
+                    MailLog.log("[Mail] saved sent message to \(sent)")
+                } catch {
+                    MailLog.log("[Mail] couldn't save to Sent (\(sent)): \(error)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Cache upserts
+
+    private func upsertMailboxes(_ infos: [MailboxInfo], accountID: UUID, in context: ModelContext) {
+        let existing = (try? context.fetch(FetchDescriptor<Mailbox>())) ?? []
+        var byPath = Dictionary(uniqueKeysWithValues: existing.filter { $0.accountID == accountID }.map { ($0.path, $0) })
+        for (index, info) in infos.enumerated() {
+            let box = byPath[info.path] ?? {
+                let new = Mailbox(accountID: accountID, path: info.path, displayName: info.displayName)
+                context.insert(new)
+                byPath[info.path] = new
+                return new
+            }()
+            box.displayName = info.displayName
+            box.unreadCount = info.unreadCount
+            box.totalCount = info.totalCount
+            box.sortIndex = info.path.uppercased() == "INBOX" ? -1 : index
+        }
+    }
+
+    /// Upserts summaries into the cache; returns the messages that were NEWLY
+    /// inserted (rule processing runs only on true arrivals, never updates).
+    @discardableResult
+    private func upsertMessages(_ summaries: [MessageSummary], accountID: UUID, mailboxPath: String, in context: ModelContext) -> [MailMessage] {
+        let existing = (try? context.fetch(FetchDescriptor<MailMessage>())) ?? []
+        var byUID = Dictionary(
+            existing
+                .filter { $0.accountID == accountID && $0.mailboxPath == mailboxPath }
+                .map { ($0.uid, $0) },
+            uniquingKeysWith: { a, _ in a }
+        )
+        var inserted: [MailMessage] = []
+        for summary in summaries {
+            let message = byUID[summary.uid] ?? {
+                let new = MailMessage(accountID: accountID, mailboxPath: mailboxPath, uid: summary.uid)
+                context.insert(new)
+                byUID[summary.uid] = new
+                inserted.append(new)
+                return new
+            }()
+            message.subject = summary.subject
+            message.fromName = summary.fromName
+            message.fromAddress = summary.fromAddress
+            message.toRecipients = summary.toDisplay
+            message.toAddressList = summary.toAddresses.joined(separator: ",")
+            message.ccAddressList = summary.ccAddresses.joined(separator: ",")
+            message.messageID = summary.messageID
+            message.date = summary.date
+            message.isSeen = summary.isSeen
+            message.isFlagged = summary.isFlagged
+        }
+        return inserted
+    }
+
+    /// Drop cached rows for messages the server no longer has — the "ghosts".
+    ///
+    /// Sync only ever UPSERTS what it fetches, so a message deleted or moved on
+    /// another client used to linger in this device's cache forever. Worse, it
+    /// couldn't be deleted by hand either: deletion goes through the server as a
+    /// UID MOVE, and the server has no such UID, so the command fails and the row
+    /// survives. Hence a message that shows on one device, doesn't exist on the
+    /// other, and refuses to go away.
+    ///
+    /// We only fetch the newest `limit` messages, so anything cached BELOW the
+    /// oldest UID we just saw is merely outside that window — not gone. Only a
+    /// row at or above that floor which the server didn't list is genuinely gone.
+    /// Pruning is safe regardless: the cache is server-authoritative, so an
+    /// over-eager prune just re-downloads.
+    private func pruneVanished(_ summaries: [MessageSummary], accountID: UUID, mailboxPath: String, in context: ModelContext) {
+        let live = Set(summaries.map(\.uid))
+        let floor = live.min()
+        let cached = ((try? context.fetch(FetchDescriptor<MailMessage>())) ?? [])
+            .filter { $0.accountID == accountID && $0.mailboxPath == mailboxPath }
+
+        for message in cached {
+            // uid 0 is not a real IMAP uid — it's a phantom from a malformed
+            // summary (see IMAPClient.parseSummary). Nothing on the server can
+            // ever match it, so it would sit below `floor` and survive forever.
+            // Always sweep it.
+            if message.uid > 0 {
+                if let floor, message.uid < floor { continue }
+                if live.contains(message.uid) { continue }
+            }
+            MailLog.log("[Mail] pruning vanished uid \(message.uid) from \(mailboxPath) — \(message.subject)")
+            let messageID = message.id
+            let attachments = (try? context.fetch(FetchDescriptor<MailAttachment>())) ?? []
+            for attachment in attachments where attachment.messageID == messageID {
+                context.delete(attachment)
+            }
+            context.delete(message)
+        }
+    }
+
+    // MARK: Rules
+
+    /// Run enabled rules over newly arrived INBOX messages. First matching
+    /// terminal action (move/trash) wins; non-terminal actions all apply.
+    private func applyRules(to newMessages: [MailMessage], account: MailAccount, in context: ModelContext, notifyNew: Bool = false) async {
+        guard !newMessages.isEmpty else { return }
+
+        // Blocked senders first — straight to Trash, rules never see them.
+        let blocked = Set(((try? context.fetch(FetchDescriptor<BlockedSender>())) ?? []).map(\.address))
+        var remaining: [MailMessage] = []
+        for message in newMessages {
+            if blocked.contains(message.fromAddress.lowercased()) {
+                MailLog.log("[Blocked] trashing message from \(message.fromAddress)")
+                await delete(message, account: account)
+            } else {
+                remaining.append(message)
+            }
+        }
+
+        let rules = ((try? context.fetch(FetchDescriptor<MailRule>())) ?? [])
+            .filter(\.isEnabled)
+            .sorted { $0.sortIndex < $1.sortIndex }
+
+        for message in remaining {
+            var delivered = true // still in this inbox after rules
+            for rule in rules {
+                guard rule.condition.matches(message) else { continue }
+                let action = rule.action
+                MailLog.log("[Rules] '\(rule.name)' matched uid \(message.uid): \(message.subject.prefix(40))")
+
+                if action.markRead { await setSeen(message, account: account, seen: true) }
+                if action.flag { await setFlagged(message, account: account, flagged: true) }
+                if let tagID = action.addTagID, let header = message.messageID, !header.isEmpty {
+                    // Universal tags live in the main (CloudKit) container —
+                    // the app wires this closure to TagsStore.link.
+                    universalTagLink?(tagID, header)
+                }
+                // Terminal actions. A failure here is the RULE's problem (bad
+                // destination), so it's reported against the rule and the
+                // message simply stays in the inbox — the account keeps working.
+                if action.moveToTrash {
+                    do {
+                        try await moveThrowing(message, account: account, to: trashPath(for: account))
+                        delivered = false
+                    } catch {
+                        recordRuleFailure(rule, destination: trashPath(for: account), error: error)
+                    }
+                    break // this rule was terminal either way
+                }
+                if !action.moveToMailboxPath.isEmpty {
+                    do {
+                        try await moveThrowing(message, account: account, to: action.moveToMailboxPath)
+                        delivered = false
+                    } catch {
+                        recordRuleFailure(rule, destination: action.moveToMailboxPath, error: error)
+                    }
+                    break
+                }
+            }
+            // Notify only for genuinely new, still-in-inbox, unread mail.
+            if notifyNew, delivered, !message.isSeen {
+                onNewMail?(
+                    message.fromName.isEmpty ? message.fromAddress : message.fromName,
+                    message.subject.isEmpty ? "(No Subject)" : message.subject
+                )
+            }
+        }
+        try? context.save()
+    }
+
+    private func describe(_ error: Error) -> String {
+        switch error {
+        case MailError.authenticationFailed: return "Login failed — check your email and app password."
+        case MailError.connectionClosed: return "The server closed the connection."
+        case MailError.notConnected: return "Not connected."
+        case MailError.commandFailed(let m): return "Server error: \(m)"
+        case MailError.timeout: return "Couldn't reach the server."
+        default: return error.localizedDescription
+        }
+    }
+
+    /// A failed connect is nearly always a wrong server name — the setup screen
+    /// guesses `imap.<your-domain>`, which doesn't exist for a domain whose mail
+    /// is actually hosted elsewhere (an iCloud or Google custom domain). Say that,
+    /// instead of leaving a bare "Couldn't reach the server".
+    private func connectFailureMessage(_ account: MailAccount, _ error: Error) -> String {
+        let base = "\(account.emailAddress): \(describe(error))"
+        switch error {
+        case MailError.timeout, MailError.connectionClosed:
+            return base + " Check the IMAP server in this account's settings — “\(account.imapHost)” may not exist. If your domain's mail is hosted by iCloud use imap.mail.me.com, or by Google, imap.gmail.com."
+        default:
+            return base
+        }
+    }
+}
