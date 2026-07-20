@@ -112,6 +112,19 @@ private struct MailModuleContent: View {
         }
     }
 
+    /// A message that lives in its account's Sent mailbox — decided per
+    /// MESSAGE (not per selection) so it also reads right in unified Sent,
+    /// smart mailboxes, and search results.
+    private func isSentMessage(_ message: MailMessage) -> Bool {
+        let path = message.mailboxPath
+        if let account = accounts.first(where: { $0.id == message.accountID }),
+           path.caseInsensitiveCompare(service.sentPath(for: account)) == .orderedSame {
+            return true
+        }
+        // Provider variants ("Sent", "Sent Messages", "[Gmail]/Sent Mail").
+        return path.range(of: "sent", options: .caseInsensitive) != nil
+    }
+
     /// Select a deep-linked message wherever it lives (search hit, dashboard
     /// card, briefing row).
     private func openDeepLinkedMessage(_ id: UUID) {
@@ -464,7 +477,8 @@ private struct MailModuleContent: View {
                         message: message,
                         origin: badge?.label,
                         originColor: badge?.color ?? Theme.Palette.primary,
-                        tagColors: tagsFor(message).map { Color(hexString: $0.colorHex) ?? Theme.Palette.primary }
+                        tagColors: tagsFor(message).map { Color(hexString: $0.colorHex) ?? Theme.Palette.primary },
+                        showsRecipient: isSentMessage(message)
                     )
                     .tag(message)
                     .contextMenu { messageContextMenu(message) }
@@ -818,8 +832,29 @@ private struct MessageRow: View {
     var originColor: Color = Theme.Palette.primary
     /// Colors of the message's tags, shown as small dots.
     var tagColors: [Color] = []
+    /// Sent mailboxes: the interesting party is who it went TO — "from" is
+    /// the user themselves there, which says nothing.
+    var showsRecipient: Bool = false
 
     @Environment(\.contactPhotos) private var contactPhotos
+
+    /// The name the row leads with (sender normally, recipients in Sent).
+    private var counterpartyName: String {
+        if showsRecipient {
+            if !message.toRecipients.isEmpty { return message.toRecipients }
+            if !message.toAddressList.isEmpty { return message.toAddressList }
+            return "(No Recipients)"
+        }
+        return message.fromName.isEmpty ? message.fromAddress : message.fromName
+    }
+
+    /// Whose contact photo backs the avatar (first recipient in Sent).
+    private var counterpartyEmail: String {
+        guard showsRecipient else { return message.fromAddress }
+        return message.toAddressList
+            .split(separator: ",").first
+            .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
@@ -827,20 +862,27 @@ private struct MessageRow: View {
                 .fill(message.isSeen ? Color.clear : Theme.Palette.primary)
                 .frame(width: 8, height: 8)
                 .padding(.top, 6)
-            // The sender's face when they're in Contacts WITH a photo; their
-            // initials otherwise. Most senders have no photo the Contacts
+            // The counterparty's face when they're in Contacts WITH a photo;
+            // their initials otherwise. Most people have no photo the Contacts
             // framework will surface, so initials are the common case, not a
             // failure state.
             ContactAvatar(
-                data: contactPhotos?.photo(email: message.fromAddress),
-                name: message.fromName.isEmpty ? message.fromAddress : message.fromName,
+                data: contactPhotos?.photo(email: counterpartyEmail),
+                name: counterpartyName,
                 size: 32
             )
             VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                 HStack {
-                    Text(message.fromName.isEmpty ? message.fromAddress : message.fromName)
-                        .font(Theme.Font.cardBody.weight(message.isSeen ? .regular : .semibold))
-                        .lineLimit(1)
+                    if showsRecipient {
+                        (Text("To: ").foregroundStyle(Theme.Palette.textSecondary)
+                            + Text(counterpartyName))
+                            .font(Theme.Font.cardBody.weight(message.isSeen ? .regular : .semibold))
+                            .lineLimit(1)
+                    } else {
+                        Text(counterpartyName)
+                            .font(Theme.Font.cardBody.weight(message.isSeen ? .regular : .semibold))
+                            .lineLimit(1)
+                    }
                     Spacer()
                     if message.isFlagged {
                         Image(systemName: "flag.fill")
@@ -918,6 +960,20 @@ private struct MessageDetailView: View {
                         if !message.fromName.isEmpty {
                             Text(message.fromAddress).font(Theme.Font.cardCaption)
                                 .foregroundStyle(Theme.Palette.textSecondary)
+                        }
+                        // Recipients — essential when reading Sent (where
+                        // "from" is yourself), useful everywhere.
+                        if !message.toRecipients.isEmpty || !message.toAddressList.isEmpty {
+                            Text("To: \(message.toRecipients.isEmpty ? message.toAddressList : message.toRecipients)")
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                                .lineLimit(2)
+                        }
+                        if !message.ccAddressList.isEmpty {
+                            Text("Cc: \(message.ccAddressList)")
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                                .lineLimit(1)
                         }
                     }
                     Spacer()
