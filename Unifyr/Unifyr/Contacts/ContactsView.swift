@@ -26,6 +26,7 @@ struct ContactsView: View {
     /// nil = All Contacts.
     @State private var selectedGroupID: String?
     @State private var creatingGroup = false
+    @State private var creatingContact = false
     @State private var newGroupName = ""
     @Environment(\.isCompactLayout) private var isCompact
     /// iPhone: pushes the contact list after picking a group/tag.
@@ -81,6 +82,22 @@ struct ContactsView: View {
         .sheet(item: $editing) { contact in
             ContactEditorView(contact: contact) {
                 Task { await load() }
+            }
+        }
+        .sheet(isPresented: $creatingContact) {
+            // nil contact = the editor runs in New Contact mode.
+            ContactEditorView {
+                Task { await load() }
+            }
+        }
+        .toolbar {
+            ToolbarItem {
+                Button {
+                    creatingContact = true
+                } label: {
+                    Image(systemName: "person.crop.circle.badge.plus")
+                }
+                .help("New Contact")
             }
         }
         .alert("New Group", isPresented: $creatingGroup) {

@@ -12,7 +12,8 @@
 import SwiftUI
 
 struct ContactEditorView: View {
-    let contact: ContactSnapshot
+    /// nil = creating a brand-new contact.
+    let contact: ContactSnapshot?
     var onSaved: () -> Void = {}
 
     @Environment(\.brokers) private var brokers
@@ -25,39 +26,45 @@ struct ContactEditorView: View {
     @State private var confirmingDelete = false
     @State private var errorText: String?
 
-    init(contact: ContactSnapshot, onSaved: @escaping () -> Void = {}) {
+    init(contact: ContactSnapshot? = nil, onSaved: @escaping () -> Void = {}) {
         self.contact = contact
         self.onSaved = onSaved
         var data = ContactEditData()
-        data.namePrefix = contact.namePrefix
-        data.givenName = contact.givenName
-        data.middleName = contact.middleName
-        data.familyName = contact.familyName
-        data.nameSuffix = contact.nameSuffix
-        data.nickname = contact.nickname
-        data.phoneticGivenName = contact.phoneticGivenName
-        data.phoneticFamilyName = contact.phoneticFamilyName
-        data.organizationName = contact.organizationName ?? ""
-        data.departmentName = contact.departmentName
-        data.jobTitle = contact.jobTitle
-        data.birthday = contact.birthday
-        data.emails = contact.emails.isEmpty ? [LabeledValueSnapshot(label: "home", value: "")] : contact.emails
-        data.phones = contact.phones.isEmpty ? [LabeledValueSnapshot(label: "mobile", value: "")] : contact.phones
-        data.urls = contact.urls
-        data.postalAddresses = contact.postalAddresses
-        data.relations = contact.relations
-        data.socialProfiles = contact.socialProfiles
-        data.instantMessages = contact.instantMessages
-        data.dates = contact.dates
+        if let contact {
+            data.namePrefix = contact.namePrefix
+            data.givenName = contact.givenName
+            data.middleName = contact.middleName
+            data.familyName = contact.familyName
+            data.nameSuffix = contact.nameSuffix
+            data.nickname = contact.nickname
+            data.phoneticGivenName = contact.phoneticGivenName
+            data.phoneticFamilyName = contact.phoneticFamilyName
+            data.organizationName = contact.organizationName ?? ""
+            data.departmentName = contact.departmentName
+            data.jobTitle = contact.jobTitle
+            data.birthday = contact.birthday
+            data.emails = contact.emails.isEmpty ? [LabeledValueSnapshot(label: "home", value: "")] : contact.emails
+            data.phones = contact.phones.isEmpty ? [LabeledValueSnapshot(label: "mobile", value: "")] : contact.phones
+            data.urls = contact.urls
+            data.postalAddresses = contact.postalAddresses
+            data.relations = contact.relations
+            data.socialProfiles = contact.socialProfiles
+            data.instantMessages = contact.instantMessages
+            data.dates = contact.dates
+        } else {
+            // A fresh card starts with one empty phone/email row, like Apple's.
+            data.emails = [LabeledValueSnapshot(label: "home", value: "")]
+            data.phones = [LabeledValueSnapshot(label: "mobile", value: "")]
+        }
         _edit = State(initialValue: data)
-        _hasBirthday = State(initialValue: contact.birthday != nil)
-        _birthday = State(initialValue: contact.birthday ?? Date())
+        _hasBirthday = State(initialValue: contact?.birthday != nil)
+        _birthday = State(initialValue: contact?.birthday ?? Date())
     }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Edit Contact").font(Theme.Font.cardTitle)
+                Text(contact == nil ? "New Contact" : "Edit Contact").font(Theme.Font.cardTitle)
                 Spacer()
             }
             .padding(Theme.Spacing.lg)
@@ -90,9 +97,11 @@ struct ContactEditorView: View {
             Divider().overlay(Theme.Palette.separator)
 
             HStack {
-                Button("Delete Contact…", role: .destructive) { confirmingDelete = true }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.Palette.danger)
+                if contact != nil {
+                    Button("Delete Contact…", role: .destructive) { confirmingDelete = true }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.Palette.danger)
+                }
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .buttonStyle(.plain)
@@ -114,7 +123,7 @@ struct ContactEditorView: View {
         }
         .frame(width: 520, height: 680)
         .background(Theme.Palette.background)
-        .confirmationDialog("Delete \(contact.displayName)?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+        .confirmationDialog("Delete \(contact?.displayName ?? "Contact")?", isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { Task { await delete() } }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -266,7 +275,8 @@ struct ContactEditorView: View {
         var data = edit
         data.birthday = hasBirthday ? birthday : nil
         do {
-            _ = try await brokers.contacts.saveContact(id: contact.id, edit: data)
+            // nil id = create (see ContactsBroker.saveContact).
+            _ = try await brokers.contacts.saveContact(id: contact?.id, edit: data)
             saving = false
             onSaved()
             dismiss()
@@ -277,6 +287,7 @@ struct ContactEditorView: View {
     }
 
     private func delete() async {
+        guard let contact else { return }   // nothing persisted yet
         do {
             try await brokers.contacts.deleteContact(id: contact.id)
             onSaved()
