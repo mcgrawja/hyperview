@@ -318,6 +318,11 @@ private struct MailModuleContent: View {
                 detailPane
                     .frame(minWidth: 360, idealWidth: geometry.size.width * 0.735, maxWidth: .infinity)
             }
+            // Keyed to the toggle: HSplitView hands a RE-INSERTED pane its
+            // minimum width, not its ideal — only a fresh split applies the
+            // ideal proportions (which is why leaving and re-entering the
+            // module "fixed" it). Rebuilding on toggle restores the layout.
+            .id(mailboxPaneCollapsed)
         }
     }
 
