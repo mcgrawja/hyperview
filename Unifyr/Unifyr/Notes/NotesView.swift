@@ -291,9 +291,20 @@ struct NotesView: View {
             }
         }
         walk(nil, depth: 0)
-        // Orphans (parent deleted elsewhere) still show, at top level.
-        let seen = Set(result.map(\.0.id))
-        for folder in folders where !seen.contains(folder.id) {
+        // Orphans (parent deleted elsewhere) still show, at top level. But a
+        // folder that's merely HIDDEN under a collapsed ancestor is not an
+        // orphan — re-walk ignoring collapse to tell the two apart, else
+        // collapsing a folder dumps its subfolders at the bottom of the list.
+        var reachable = Set<UUID>()
+        func markReachable(_ parentID: UUID?, depth: Int) {
+            guard depth < 8 else { return } // cycle guard
+            for folder in children(of: parentID) {
+                reachable.insert(folder.id)
+                markReachable(folder.id, depth: depth + 1)
+            }
+        }
+        markReachable(nil, depth: 0)
+        for folder in folders where !reachable.contains(folder.id) {
             result.append((folder, 0))
         }
         return result.map { (folder: $0.0, depth: $0.1) }

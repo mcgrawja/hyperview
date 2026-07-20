@@ -174,6 +174,7 @@ struct MessagesView: View {
         }
         .task(id: selectedChatID) {
             await loadTranscript()
+            markReadLocally()
         }
         // Poll for new messages — chat.db has no public change feed.
         .task {
@@ -434,7 +435,18 @@ struct MessagesView: View {
         let latest = await database.latestMessageID(chatIDs: ids)
         if latest != messages.last?.id {
             messages = await database.messages(chatIDs: ids)
+            // The open conversation counts as read as it updates.
+            markReadLocally()
         }
+    }
+
+    /// Record that the user has seen this conversation up to its newest
+    /// message. chat.db is read-only to us, so this is Unifyr's own ledger —
+    /// it feeds the sidebar unread badge (see MessagesDatabase.unreadCount).
+    private func markReadLocally() {
+        guard let chat = selectedChat, let newest = messages.last?.id else { return }
+        MessagesDatabase.markChatReadLocally(chatIDs: memberIDs(chat), upTo: newest)
+        NotificationCenter.default.post(name: .unifyrMessagesReadLocally, object: nil)
     }
 
     private func attachFile(_ chat: ChatSnapshot) {

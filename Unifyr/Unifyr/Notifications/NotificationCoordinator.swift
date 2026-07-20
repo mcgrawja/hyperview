@@ -168,6 +168,13 @@ final class NotificationCoordinator {
     /// Fed from the shell's existing messages-unread poll (avoids a 2nd query).
     var cachedMessagesUnread = 0
 
+    /// Immediate Dock-badge refresh when the messages read ledger changes —
+    /// cheaper than a full tick (no reminder fetch, no message scan).
+    func refreshMessagesBadge(unread: Int) {
+        cachedMessagesUnread = unread
+        updateBadge()
+    }
+
     /// Fed from the shell after computing due reminders.
     func setRemindersDue(_ count: Int) { remindersDue = count }
 }

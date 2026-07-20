@@ -60,6 +60,12 @@ enum Theme {
             light: Color(hex: 0x000000, opacity: 0.08),
             dark: Color(hex: 0xFFFFFF, opacity: 0.09)
         )
+        /// Stronger rule for grids that need clearly readable cell boundaries
+        /// (the calendar's day lines) — still a tint, not a hard border.
+        static let separatorStrong = Color(
+            light: Color(hex: 0x000000, opacity: 0.18),
+            dark: Color(hex: 0xFFFFFF, opacity: 0.20)
+        )
         /// Success/done — intentionally the SAME blue as `primary` (no green).
         static let success = Color(hex: 0x3E8EF7)
         static let warning = Color(hex: 0xF5B841)

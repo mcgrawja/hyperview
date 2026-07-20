@@ -17,6 +17,9 @@ extension Notification.Name {
     static let unifyrOpenChat = Notification.Name("unifyr.openChat")
     static let unifyrOpenReminder = Notification.Name("unifyr.openReminder")
     static let unifyrOpenCalendarDate = Notification.Name("unifyr.openCalendarDate")
+    /// The Messages local read ledger changed — the sidebar badge should
+    /// recount now rather than waiting for the next poll tick.
+    static let unifyrMessagesReadLocally = Notification.Name("unifyr.messagesReadLocally")
 }
 
 /// One hit in the palette. `notification` is the module deep-link (posted

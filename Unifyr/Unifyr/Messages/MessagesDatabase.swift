@@ -385,18 +385,67 @@ actor MessagesDatabase {
         }
     }
 
+    // MARK: Local read ledger
+
+    /// chat.db is read-only to us, so viewing a conversation in Unifyr can't
+    /// clear Apple's `is_read`. This ledger records, per chat.ROWID, the
+    /// highest message ROWID the user has seen *in Unifyr*, so the badge can
+    /// exclude chats they've already caught up on here.
+    nonisolated private static let localReadKey = "messages.localRead"
+
+    nonisolated static func localReadMarks() -> [Int64: Int64] {
+        guard let raw = UserDefaults.standard.dictionary(forKey: localReadKey) as? [String: Int] else { return [:] }
+        var marks: [Int64: Int64] = [:]
+        for (key, value) in raw {
+            if let id = Int64(key) { marks[id] = Int64(value) }
+        }
+        return marks
+    }
+
+    nonisolated static func markChatReadLocally(chatIDs: [Int64], upTo rowID: Int64) {
+        guard rowID > 0 else { return }
+        var raw = (UserDefaults.standard.dictionary(forKey: localReadKey) as? [String: Int]) ?? [:]
+        for id in chatIDs {
+            let key = String(id)
+            if Int64(raw[key] ?? 0) < rowID { raw[key] = Int(rowID) }
+        }
+        UserDefaults.standard.set(raw, forKey: localReadKey)
+    }
+
     /// Unread incoming messages across all chats — the sidebar badge.
+    ///
+    /// Per-row `is_read` alone over-counts: rows read on another device are
+    /// routinely never flipped in this Mac's copy of chat.db, leaving phantom
+    /// unreads that no amount of reading clears. Two extra guards fix that:
+    /// 1. `m.date > c.last_read_message_timestamp` — the chat-level watermark
+    ///    Messages in iCloud *does* keep in sync across devices.
+    /// 2. The local read ledger — chats the user has caught up on in Unifyr
+    ///    itself contribute nothing.
     func unreadCount() -> Int {
         guard hasAccess(), let db else { return 0 }
         let sql = """
-        SELECT COUNT(*) FROM message
-        WHERE is_read = 0 AND is_from_me = 0 AND item_type = 0 AND associated_message_type = 0
+        SELECT cmj.chat_id, COUNT(*), MAX(m.ROWID)
+        FROM message m
+        JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+        JOIN chat c ON c.ROWID = cmj.chat_id
+        WHERE m.is_read = 0 AND m.is_from_me = 0 AND m.item_type = 0
+          AND m.associated_message_type = 0
+          AND m.date > IFNULL(c.last_read_message_timestamp, 0)
+        GROUP BY cmj.chat_id
         """
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
-        return Int(sqlite3_column_int64(statement, 0))
+        let marks = Self.localReadMarks()
+        var total = 0
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let chatID = sqlite3_column_int64(statement, 0)
+            let count = Int(sqlite3_column_int64(statement, 1))
+            let newestUnread = sqlite3_column_int64(statement, 2)
+            if let seen = marks[chatID], seen >= newestUnread { continue }
+            total += count
+        }
+        return total
     }
 
     /// One newly-arrived incoming message, for notifications.

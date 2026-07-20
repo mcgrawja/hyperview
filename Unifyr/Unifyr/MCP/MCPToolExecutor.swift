@@ -610,6 +610,8 @@ final class MCPToolExecutor {
             "account": accountEmail,
             "mailbox": message.mailboxPath,
             "uid": message.uid,
+            // Local cache UUID — the in-app deep-link key (briefing → Mail).
+            "id": message.id.uuidString,
             "from": message.fromName.isEmpty ? message.fromAddress : message.fromName,
             "from_address": message.fromAddress,
             "subject": message.subject,

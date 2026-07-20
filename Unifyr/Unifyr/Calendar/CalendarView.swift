@@ -482,13 +482,21 @@ private struct MonthGridView: View {
                                 )
                                 .frame(maxWidth: .infinity)
                                 .frame(height: rowHeight)
+                                // A faint wash on weekend columns gives the eye a
+                                // second cue (beyond the lines) for where one day
+                                // ends and the next begins.
+                                .background(
+                                    calendar.isDateInWeekend(day)
+                                        ? Theme.Palette.surfaceRaised.opacity(0.45)
+                                        : Color.clear
+                                )
                                 .overlay(alignment: .trailing) {
-                                    Rectangle().fill(Theme.Palette.separator).frame(width: 0.5)
+                                    Rectangle().fill(Theme.Palette.separatorStrong).frame(width: 1)
                                 }
                             }
                         }
                         .overlay(alignment: .bottom) {
-                            Rectangle().fill(Theme.Palette.separator).frame(height: 0.5)
+                            Rectangle().fill(Theme.Palette.separatorStrong).frame(height: 1)
                         }
                     }
                 }
@@ -538,6 +546,9 @@ private struct MonthDayCell: View {
 
             ForEach(events.prefix(3)) { event in
                 MonthEventChip(event: event, dimmed: !inMonth)
+                    // Inset from the cell edge so chips in adjacent day cells
+                    // never visually merge across the column line.
+                    .padding(.horizontal, 3)
                     .onTapGesture { onEditEvent(event) }
                     .contextMenu {
                         Button("Edit Event…") { onEditEvent(event) }
@@ -719,8 +730,11 @@ private struct TimeGridView: View {
             ForEach(days, id: \.self) { day in
                 dayColumn(day, now: now)
                     .frame(maxWidth: .infinity)
+                    // The between-day rule is deliberately stronger than the
+                    // hour lines: reading "which day is this event in" matters
+                    // more than "which hour" at a glance.
                     .overlay(alignment: .leading) {
-                        Rectangle().fill(Theme.Palette.separator).frame(width: 0.5)
+                        Rectangle().fill(Theme.Palette.separatorStrong).frame(width: 1)
                     }
             }
         }

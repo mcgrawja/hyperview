@@ -19,6 +19,15 @@ struct DashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 header
+                // Live clock, centered above the briefing ("3:42 PM").
+                TimelineView(.everyMinute) { context in
+                    Text(context.date.formatted(
+                        .dateTime.hour(.defaultDigits(amPM: .wide)).minute(.twoDigits)
+                    ))
+                    .font(Theme.Font.dashboardTitle.weight(.light).monospacedDigit())
+                    .foregroundStyle(Theme.Palette.textPrimary)
+                    .frame(maxWidth: .infinity)
+                }
                 // Full-width AI briefing (renders only when an API key exists).
                 BriefingCard()
                 // Photos card removed by owner preference (2026-07-09) — the

@@ -100,6 +100,9 @@ private struct MailModuleContent: View {
     @AppStorage("mail.unifiedSectionExpanded") private var unifiedExpanded = true
     @AppStorage("mail.smartSectionExpanded") private var smartExpanded = true
     @AppStorage("mail.tagsSectionExpanded") private var tagsExpanded = true
+    /// Hide the whole mailbox column (Mac/iPad) — the message list gets the
+    /// room. Persisted; the toolbar sidebar button (⌃⌘M) toggles it.
+    @AppStorage("mail.mailboxPaneCollapsed") private var mailboxPaneCollapsed = false
 
     var body: some View {
         if accounts.isEmpty {
@@ -217,6 +220,13 @@ private struct MailModuleContent: View {
                 }
             } else {
                 ToolbarItem {
+                    Button {
+                        withAnimation { mailboxPaneCollapsed.toggle() }
+                    } label: { Image(systemName: "sidebar.leading") }
+                    .help(mailboxPaneCollapsed ? "Show Mailbox List (⌃⌘M)" : "Hide Mailbox List (⌃⌘M)")
+                    .keyboardShortcut("m", modifiers: [.control, .command])
+                }
+                ToolbarItem {
                     Button { composeSheet = ComposeSheet(mode: .new) } label: { Image(systemName: "square.and.pencil") }
                         .help("Compose")
                 }
@@ -273,8 +283,10 @@ private struct MailModuleContent: View {
     private var regularPanes: some View {
         GeometryReader { geometry in
             PlatformHSplit {
-                mailboxPane
-                    .frame(minWidth: 105, idealWidth: geometry.size.width * 0.049, maxWidth: 300)
+                if !mailboxPaneCollapsed {
+                    mailboxPane
+                        .frame(minWidth: 105, idealWidth: geometry.size.width * 0.049, maxWidth: 300)
+                }
                 messageListPane
                     .frame(minWidth: 220, idealWidth: geometry.size.width * 0.20, maxWidth: 520)
                 detailPane

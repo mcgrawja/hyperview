@@ -30,7 +30,7 @@ final class BriefingService {
     var weather: DayWeather?
 
     /// Bump when the briefing prompt/format changes so cached text regenerates.
-    private static let formatVersion = "3"
+    private static let formatVersion = "4"
 
     var weatherLocation: String {
         get { UserDefaults.standard.string(forKey: "briefing.location") ?? "Kingsland, GA" }
@@ -142,10 +142,10 @@ final class BriefingService {
 
         Action Items:
           Reminders:
-            ☐ <title> — due <short date/time>, <notes if any>
+            ☐ <title> — due <short date/time>, <notes if any> [rem:<id>]
           Emails:
             ☐ <sender/what> — <why it needs action: unanswered, expiring, \
-        deadline, warning>
+        deadline, warning> [mail:<id>]
         Agenda:
           <start>–<end> | <title> | <location if any>
             Commute: <the MapKit commute line, indented under its event, only \
@@ -159,6 +159,10 @@ final class BriefingService {
         Emails judgment: only list messages that plausibly need ACTION \
         (replies owed, expirations, deadlines, warnings, real people). \
         Newsletters, promos, and job alerts never appear.
+
+        The [rem:<id>] / [mail:<id>] tags make those lines tappable in the \
+        app: copy each item's "id" from the data VERBATIM into its tag. If an \
+        item has no id in the data, omit the tag entirely — never invent one.
         """
 
         let body: [String: Any] = [
@@ -199,6 +203,23 @@ final class BriefingService {
             .joined()
         guard !text.isEmpty else { throw ClaudeChatError.transport }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Flip a briefing action line's ☐ to ☑ (identified by its `[rem:…]` /
+    /// `[mail:…]` tag) in both the live state and the cached copy, so the
+    /// check survives navigation and relaunch for the rest of the day.
+    func markLineDone(ref: String) {
+        guard case .ready(let text) = state else { return }
+        let needle = "[\(ref)]"
+        let updated = text
+            .components(separatedBy: "\n")
+            .map { line -> String in
+                guard line.contains(needle) else { return line }
+                return line.replacingOccurrences(of: "☐", with: "☑")
+            }
+            .joined(separator: "\n")
+        UserDefaults.standard.set(updated, forKey: "briefing.text")
+        state = .ready(updated)
     }
 
     private static func dayStamp() -> String {

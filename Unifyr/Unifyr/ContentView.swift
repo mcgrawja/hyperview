@@ -97,6 +97,16 @@ struct ContentView: View {
                     try? await Task.sleep(for: .seconds(30))
                 }
             }
+            // Recount the moment a conversation is read in Unifyr, so the
+            // badge clears immediately instead of on the next 30s tick.
+            .onReceive(NotificationCenter.default.publisher(for: .unifyrMessagesReadLocally)) { _ in
+                #if os(macOS)
+                Task {
+                    messagesUnread = await messagesDB?.unreadCount() ?? 0
+                    await notificationCoordinator?.refreshMessagesBadge(unread: messagesUnread)
+                }
+                #endif
+            }
             .toolbar {
                 ToolbarItem {
                     Button {
