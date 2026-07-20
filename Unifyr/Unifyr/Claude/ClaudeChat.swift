@@ -97,6 +97,30 @@ final class ClaudeChatController {
 
     /// Raw API message history: [{role, content}] echoed verbatim.
     @ObservationIgnored private var apiMessages: [[String: Any]] = []
+
+    /// A request-time copy of the transcript with a cache_control breakpoint
+    /// on its FINAL content block. The system+tools breakpoint alone caches
+    /// only the prefix — the ever-growing message history was re-billed as
+    /// fresh input every turn; a rolling breakpoint makes prior turns cache
+    /// hits. The stored `apiMessages` stay unmarked (each request marks only
+    /// its own tail). The last message is always user/tool_result here, so
+    /// the marked block is never a thinking block (which can't carry one).
+    private static func withRollingCacheBreakpoint(_ messages: [[String: Any]]) -> [[String: Any]] {
+        var copy = messages
+        guard var last = copy.last else { return copy }
+        if let text = last["content"] as? String {
+            last["content"] = [[
+                "type": "text", "text": text,
+                "cache_control": ["type": "ephemeral"],
+            ]]
+        } else if var blocks = last["content"] as? [[String: Any]], var tail = blocks.last {
+            tail["cache_control"] = ["type": "ephemeral"]
+            blocks[blocks.count - 1] = tail
+            last["content"] = blocks
+        }
+        copy[copy.count - 1] = last
+        return copy
+    }
     /// Fixed per conversation so the cached system prefix stays byte-stable.
     @ObservationIgnored private var conversationDate = ""
     @ObservationIgnored private var currentTask: Task<Void, Never>?
@@ -353,7 +377,7 @@ final class ClaudeChatController {
                 "cache_control": ["type": "ephemeral"],
             ]],
             "tools": Self.apiTools,
-            "messages": apiMessages,
+            "messages": Self.withRollingCacheBreakpoint(apiMessages),
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 

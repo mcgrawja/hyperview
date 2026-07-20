@@ -123,8 +123,29 @@ nonisolated struct WebDAVClient: Sendable {
         return entries.filter { Self.normalize($0.url.path) != targetPath }
     }
 
-    /// Download a file to a uniquely-named temp location and return it, so Quick
-    /// Look / ShareLink can preview it with the right name and extension.
+    /// Download an entry, reusing the cached copy when the server's size and
+    /// modification date still match — re-opening the same file shouldn't
+    /// re-transfer it.
+    func download(_ entry: WebDAVEntry) async throws -> URL {
+        let destination = Self.cacheDestination(for: entry.url)
+        if let size = entry.size, let remoteMod = entry.modified,
+           let attrs = try? FileManager.default.attributesOfItem(atPath: destination.path),
+           (attrs[.size] as? Int) == size,
+           (attrs[.modificationDate] as? Date) == remoteMod {
+            return destination
+        }
+        let downloaded = try await download(entry.url)
+        // Stamp the server's getlastmodified so the next open can compare.
+        if let remoteMod = entry.modified {
+            try? FileManager.default.setAttributes(
+                [.modificationDate: remoteMod], ofItemAtPath: downloaded.path
+            )
+        }
+        return downloaded
+    }
+
+    /// Download a file to a stable per-URL temp location and return it, so
+    /// Quick Look / ShareLink can preview it with the right name/extension.
     func download(_ url: URL) async throws -> URL {
         var request = URLRequest(url: url)
         request.setValue(authHeader, forHTTPHeaderField: "Authorization")
@@ -143,13 +164,44 @@ nonisolated struct WebDAVClient: Sendable {
             default: throw WebDAVError.http(http.statusCode)
             }
         }
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("webdav", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let name = url.lastPathComponent.isEmpty ? "file" : url.lastPathComponent
-        let destination = dir.appendingPathComponent(name)
+        let destination = Self.cacheDestination(for: url)
+        try? FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
         try? FileManager.default.removeItem(at: destination)
         try FileManager.default.moveItem(at: temp, to: destination)
         return destination
+    }
+
+    /// tmp/webdav/<url-hash>/<name> — hashed per source URL so two files with
+    /// the same name in different folders (or servers) can't collide. FNV-1a,
+    /// not `hashValue` — Swift's hash is seed-randomized per launch, which
+    /// would defeat the cross-launch cache.
+    private static func cacheDestination(for url: URL) -> URL {
+        let name = url.lastPathComponent.isEmpty ? "file" : url.lastPathComponent
+        var hash: UInt32 = 2_166_136_261
+        for byte in url.absoluteString.utf8 { hash = (hash ^ UInt32(byte)) &* 16_777_619 }
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("webdav", isDirectory: true)
+            .appendingPathComponent(String(format: "%08x", hash), isDirectory: true)
+            .appendingPathComponent(name)
+    }
+
+    /// Purge preview downloads that haven't been touched in a week — without
+    /// this, tmp/webdav grows for as long as the app keeps opening files.
+    static func cleanTempDirectory(olderThan age: TimeInterval = 7 * 24 * 3600) {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("webdav", isDirectory: true)
+        guard let buckets = try? fm.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return }
+        let cutoff = Date().addingTimeInterval(-age)
+        for bucket in buckets {
+            let values = try? bucket.resourceValues(forKeys: [.contentModificationDateKey])
+            if let modified = values?.contentModificationDate, modified < cutoff {
+                try? fm.removeItem(at: bucket)
+            }
+        }
     }
 
     // MARK: Mutations
@@ -405,11 +457,17 @@ private nonisolated final class WebDAVParser: NSObject, XMLParserDelegate {
     }
 
     /// `getlastmodified` is an RFC 1123 date ("Mon, 12 Jan 2026 12:00:00 GMT").
-    private static func parseHTTPDate(_ string: String) -> Date? {
+    /// The formatter is cached — DateFormatter construction is expensive and
+    /// this runs once per listed file.
+    private static let httpDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "GMT")
         formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        return formatter.date(from: string)
+        return formatter
+    }()
+
+    private static func parseHTTPDate(_ string: String) -> Date? {
+        httpDateFormatter.date(from: string)
     }
 }

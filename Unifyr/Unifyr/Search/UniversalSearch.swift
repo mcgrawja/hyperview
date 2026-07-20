@@ -162,23 +162,32 @@ struct UniversalSearchView: View {
 
     private func searchNotes(_ text: String) -> [SearchHit] {
         // Trashed notes are not results — a deleted note turning up in search
-        // would undo the whole point of deleting it.
-        let notes = ((try? notesContext.fetch(FetchDescriptor<Note>())) ?? [])
-            .filter { !$0.isArchived && !$0.isTrashed }
-        let blocks = (try? notesContext.fetch(FetchDescriptor<Block>())) ?? []
-        // Block text lives in contentJSON — a byte scan is crude but catches
-        // any inline text without decoding every document.
-        var matchedNoteIDs = Set(
-            notes.filter { $0.title.localizedCaseInsensitiveContains(text) }.map(\.id)
-        )
-        for block in blocks where matchedNoteIDs.count < 12 {
-            guard let noteID = block.note?.id, !matchedNoteIDs.contains(noteID) else { continue }
-            if String(decoding: block.contentJSON, as: UTF8.self).localizedCaseInsensitiveContains(text) {
-                matchedNoteIDs.insert(noteID)
+        // would undo the whole point of deleting it. The title match runs as
+        // a store predicate; only when titles alone can't fill the result set
+        // does the (crude but effective) block byte-scan run at all.
+        let titleMatches = (try? notesContext.fetch(FetchDescriptor<Note>(
+            predicate: #Predicate {
+                !$0.isArchived && $0.deletedAt == nil && $0.title.localizedStandardContains(text)
+            }
+        ))) ?? []
+        var matchedNoteIDs = Set(titleMatches.map(\.id))
+        var matched = titleMatches
+        if matchedNoteIDs.count < 12 {
+            // contentJSON is Data, so it can't be matched in a #Predicate —
+            // scan blocks of live notes, stopping once the set is full.
+            let blocks = (try? notesContext.fetch(FetchDescriptor<Block>(
+                predicate: #Predicate { $0.note?.deletedAt == nil }
+            ))) ?? []
+            for block in blocks where matchedNoteIDs.count < 12 {
+                guard let note = block.note, !note.isArchived,
+                      !matchedNoteIDs.contains(note.id) else { continue }
+                if String(decoding: block.contentJSON, as: UTF8.self).localizedCaseInsensitiveContains(text) {
+                    matchedNoteIDs.insert(note.id)
+                    matched.append(note)
+                }
             }
         }
-        return notes
-            .filter { matchedNoteIDs.contains($0.id) }
+        return matched
             .prefix(8)
             .map { note in
                 SearchHit(
@@ -194,15 +203,20 @@ struct UniversalSearchView: View {
     private func searchMail(_ text: String) -> [SearchHit] {
         guard let mailContainer else { return [] }
         let context = ModelContext(mailContainer)
-        let messages = (try? context.fetch(FetchDescriptor<MailMessage>())) ?? []
+        // Predicate + sort + limit in the store: fetching the whole mail
+        // cache on every (debounced) keystroke made the palette drag.
+        var descriptor = FetchDescriptor<MailMessage>(
+            predicate: #Predicate {
+                $0.subject.localizedStandardContains(text)
+                    || $0.fromName.localizedStandardContains(text)
+                    || $0.fromAddress.localizedStandardContains(text)
+                    || $0.snippet.localizedStandardContains(text)
+            },
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        descriptor.fetchLimit = 8
+        let messages = (try? context.fetch(descriptor)) ?? []
         return messages
-            .filter {
-                $0.subject.localizedCaseInsensitiveContains(text)
-                    || $0.fromName.localizedCaseInsensitiveContains(text)
-                    || $0.fromAddress.localizedCaseInsensitiveContains(text)
-                    || $0.snippet.localizedCaseInsensitiveContains(text)
-            }
-            .sorted { $0.date > $1.date }
             .prefix(8)
             .map { message in
                 SearchHit(

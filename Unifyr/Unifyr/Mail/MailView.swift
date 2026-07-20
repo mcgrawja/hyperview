@@ -112,6 +112,14 @@ private struct MailModuleContent: View {
         }
     }
 
+    /// Select a deep-linked message wherever it lives (search hit, dashboard
+    /// card, briefing row).
+    private func openDeepLinkedMessage(_ id: UUID) {
+        guard let message = messages.first(where: { $0.id == id }) else { return }
+        selection = .mailbox(MailboxSelection(accountID: message.accountID, path: message.mailboxPath))
+        selectedMessage = message
+    }
+
     /// The single account a concrete-mailbox selection belongs to (nil for
     /// unified boxes — those span accounts).
     private var selectedAccount: MailAccount? {
@@ -168,12 +176,13 @@ private struct MailModuleContent: View {
         .onChange(of: searchText) { _, newValue in
             if newValue.isEmpty { Task { await syncSelection() } }
         }
-        // Universal-search deep link: select the message wherever it lives.
+        // Deep link: select the message wherever it lives. The live post
+        // covers a mounted Mail view; the DeepLink latch (consumed in the
+        // .task below) covers arriving while Mail was still mounting.
         .onReceive(NotificationCenter.default.publisher(for: .unifyrOpenMailMessage)) { notification in
-            guard let id = notification.userInfo?["id"] as? UUID,
-                  let message = messages.first(where: { $0.id == id }) else { return }
-            selection = .mailbox(MailboxSelection(accountID: message.accountID, path: message.mailboxPath))
-            selectedMessage = message
+            DeepLink.take(.unifyrOpenMailMessage)
+            guard let id = notification.userInfo?["id"] as? UUID else { return }
+            openDeepLinkedMessage(id)
         }
         .task(id: accounts.map(\.id)) {
             service.context = context
@@ -198,6 +207,10 @@ private struct MailModuleContent: View {
                 await service.connect(account)
             }
             await syncSelection()
+            // A deep link that arrived while Mail was still mounting.
+            if let info = DeepLink.take(.unifyrOpenMailMessage), let id = info["id"] as? UUID {
+                openDeepLinkedMessage(id)
+            }
         }
         .toolbar {
             // A phone nav bar can't hold five buttons — on compact, everything

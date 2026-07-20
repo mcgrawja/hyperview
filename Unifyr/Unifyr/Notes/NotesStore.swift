@@ -90,7 +90,8 @@ struct NotesStore {
                 context.insert(block)
             }
             BlockSerializer.apply(content, to: block)
-            block.sortKey = keys[index]
+            // Guarded: assigning an identical value still dirties the row.
+            if block.sortKey != keys[index] { block.sortKey = keys[index] }
         }
 
         if existing.count > contents.count {
@@ -135,12 +136,32 @@ struct NotesStore {
 
     /// The real, irreversible delete — only ever reached from the trash.
     func deletePermanently(_ note: Note) {
+        purgeExternalReferences(of: note)
         context.delete(note) // cascades to blocks (§4 delete rule)
     }
 
     func emptyTrash(_ notes: [Note]) {
         for note in notes where note.isTrashed {
+            purgeExternalReferences(of: note)
             context.delete(note)
+        }
+    }
+
+    /// Assets and tag links reference the note by UUID, not by relationship,
+    /// so the cascade doesn't reach them — without this they'd be orphaned
+    /// forever (and stale links inflate tag counts).
+    private func purgeExternalReferences(of note: Note) {
+        let noteID = note.id
+        let noteKey = note.id.uuidString
+        if let assets = try? context.fetch(FetchDescriptor<Asset>(
+            predicate: #Predicate { $0.noteID == noteID }
+        )) {
+            for asset in assets { context.delete(asset) }
+        }
+        if let links = try? context.fetch(FetchDescriptor<HVTagLink>(
+            predicate: #Predicate { $0.itemKind == "note" && $0.itemKey == noteKey }
+        )) {
+            for link in links { context.delete(link) }
         }
     }
 
@@ -151,19 +172,29 @@ struct NotesStore {
 
     // MARK: - Private lookups
 
+    // Only the LAST sibling's sort key is ever needed (for keyAfter), so both
+    // lookups push filter+sort+limit into the store instead of fetching the
+    // whole table and narrowing in Swift.
+
     private func folderNotes(_ folder: Folder?) -> [Note] {
         let folderID = folder?.id
-        let all = (try? context.fetch(FetchDescriptor<Note>())) ?? []
-        return all
-            .filter { $0.folder?.id == folderID && !$0.isArchived }
-            .sorted { $0.sortKey < $1.sortKey }
+        var descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { $0.folder?.id == folderID && !$0.isArchived },
+            sortBy: [SortDescriptor(\.sortKey, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        let last = (try? context.fetch(descriptor)) ?? []
+        return last.reversed()
     }
 
     private func folders(parentID: UUID?) -> [Folder] {
-        let all = (try? context.fetch(FetchDescriptor<Folder>())) ?? []
-        return all
-            .filter { $0.parentFolderID == parentID }
-            .sorted { $0.sortKey < $1.sortKey }
+        var descriptor = FetchDescriptor<Folder>(
+            predicate: #Predicate { $0.parentFolderID == parentID },
+            sortBy: [SortDescriptor(\.sortKey, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        let last = (try? context.fetch(descriptor)) ?? []
+        return last.reversed()
     }
 }
 

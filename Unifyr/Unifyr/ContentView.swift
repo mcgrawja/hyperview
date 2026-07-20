@@ -33,13 +33,9 @@ struct ContentView: View {
         }
         selection = hit.module
         if let notification = hit.notification {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                NotificationCenter.default.post(
-                    name: notification.name,
-                    object: nil,
-                    userInfo: notification.userInfo
-                )
-            }
+            // Post-and-latch: a mounted destination handles the live post; a
+            // still-mounting one finds the latch on appear (see DeepLink).
+            DeepLink.send(notification.name, userInfo: notification.userInfo)
         }
     }
 
@@ -128,21 +124,17 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .unifyrShowTagManager)) { _ in
                 showingTagManager = true
             }
-            // Dashboard pinned-item rows: switch to the module, then post the
-            // module-level open notification once it has mounted.
+            // Dashboard pinned-item rows: switch to the module and hand off
+            // via the DeepLink latch (no timers — see DeepLink).
             .onReceive(NotificationCenter.default.publisher(for: .unifyrRevealNote)) { notification in
                 guard let id = notification.userInfo?["id"] as? UUID else { return }
                 selection = .notes
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    NotificationCenter.default.post(name: .unifyrOpenNote, object: nil, userInfo: ["id": id])
-                }
+                DeepLink.send(.unifyrOpenNote, userInfo: ["id": id])
             }
             .onReceive(NotificationCenter.default.publisher(for: .unifyrRevealReminder)) { notification in
                 guard let id = notification.userInfo?["id"] as? String else { return }
                 selection = .reminders
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    NotificationCenter.default.post(name: .unifyrOpenReminder, object: nil, userInfo: ["id": id])
-                }
+                DeepLink.send(.unifyrOpenReminder, userInfo: ["id": id])
             }
             // Tapping a Unifyr notification opens its module.
             .onReceive(NotificationCenter.default.publisher(for: .unifyrOpenModule)) { notification in

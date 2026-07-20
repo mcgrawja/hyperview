@@ -69,6 +69,12 @@ final class DriveServers {
     private(set) var servers: [DriveServer] = []
 
     private let store = NSUbiquitousKeyValueStore.default
+    /// Held so the block observer can be removed if this instance is ever
+    /// recreated (DriveView holds it as @State, which SwiftUI can rebuild).
+    /// nonisolated(unsafe): written once in init, read once in deinit — no
+    /// concurrent access is possible.
+    /// @ObservationIgnored keeps it raw storage the attribute can apply to.
+    @ObservationIgnored private nonisolated(unsafe) var kvsObserver: NSObjectProtocol?
 
     // MARK: Wire format
 
@@ -84,12 +90,23 @@ final class DriveServers {
 
     // MARK: Lifecycle
 
+    /// init stays CHEAP (a UserDefaults decode): as a @State default value
+    /// this runs on every re-creation of the host view struct, and SwiftUI
+    /// throws all but the first instance away.
     init() {
         loadLocal()
-        // Re-reconcile whenever another device writes. The store lives for the
-        // app session (this is a @State singleton), so the observer is never
-        // removed; [weak self] keeps it from pinning the instance.
-        NotificationCenter.default.addObserver(
+    }
+
+    deinit {
+        if let kvsObserver { NotificationCenter.default.removeObserver(kvsObserver) }
+    }
+
+    /// One-time KVS hookup (re-reconcile whenever another device writes),
+    /// called from the owning view's .task — only the instance SwiftUI kept
+    /// ever registers and reconciles.
+    func activate() {
+        guard kvsObserver == nil else { return }
+        kvsObserver = NotificationCenter.default.addObserver(
             forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
             object: store,
             queue: .main

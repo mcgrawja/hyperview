@@ -28,6 +28,13 @@ enum UsageLedger {
     private static let key = "claude.usageLedger"
     private static let cap = 5000
 
+    /// In-memory working copy: `record` used to decode + re-encode the whole
+    /// (up to 5000-entry) array on the main actor per streamed turn. Now the
+    /// array is decoded once, appended in memory, and flushed after a short
+    /// quiet gap (tool-looping turns record up to ~12× in quick succession).
+    private static var cache: [UsageEntry]?
+    private static var flushTask: Task<Void, Never>?
+
     static func record(
         model: String,
         input: Int,
@@ -43,21 +50,39 @@ enum UsageLedger {
             cacheRead: cacheRead, cacheWrite: cacheWrite, source: source
         ))
         if all.count > cap { all.removeFirst(all.count - cap) }
-        if let data = try? JSONEncoder().encode(all) {
-            UserDefaults.standard.set(data, forKey: key)
-        }
+        cache = all
+        scheduleFlush()
     }
 
     static func entries() -> [UsageEntry] {
+        if let cache { return cache }
         guard let data = UserDefaults.standard.data(forKey: key),
               let decoded = try? JSONDecoder().decode([UsageEntry].self, from: data) else {
+            cache = []
             return []
         }
+        cache = decoded
         return decoded
     }
 
     static func clear() {
+        cache = []
+        flushTask?.cancel()
         UserDefaults.standard.removeObject(forKey: key)
+    }
+
+    private static func scheduleFlush() {
+        flushTask?.cancel()
+        flushTask = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            flush()
+        }
+    }
+
+    private static func flush() {
+        guard let cache, let data = try? JSONEncoder().encode(cache) else { return }
+        UserDefaults.standard.set(data, forKey: key)
     }
 
     /// List price $/MTok (input, output) by model family.

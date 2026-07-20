@@ -294,6 +294,10 @@ private struct AlarmItem: Codable, Identifiable {
     var label: String
     var enabled: Bool
     var repeatsDaily: Bool
+    /// When this alarm was last scheduled to fire — how a ONE-SHOT alarm is
+    /// recognized as already-fired (and auto-disabled) instead of silently
+    /// re-arming for tomorrow on the next reschedule pass.
+    var scheduledFire: Date?
 
     var timeString: String {
         var comps = DateComponents()
@@ -379,8 +383,10 @@ private struct AlarmView: View {
     }
 
     private func apply() {
+        // Reschedule first (it stamps scheduledFire / disables spent
+        // one-shots), THEN persist the stamped state.
+        for index in alarms.indices { AlarmStore.reschedule(&alarms[index]) }
         AlarmStore.save(alarms)
-        for alarm in alarms { AlarmStore.reschedule(alarm) }
     }
 }
 
@@ -433,7 +439,21 @@ private enum AlarmStore {
     static func load() -> [AlarmItem] {
         guard let data = UserDefaults.standard.data(forKey: key),
               let items = try? JSONDecoder().decode([AlarmItem].self, from: data) else { return [] }
-        return items.sorted { ($0.hour, $0.minute) < ($1.hour, $1.minute) }
+        // A one-shot alarm whose fire time has passed is spent: flip it off so
+        // a later reschedule pass can't re-arm it for tomorrow.
+        var cleaned = items
+        var changed = false
+        for index in cleaned.indices {
+            let alarm = cleaned[index]
+            if alarm.enabled, !alarm.repeatsDaily,
+               let fire = alarm.scheduledFire, fire < Date() {
+                cleaned[index].enabled = false
+                cleaned[index].scheduledFire = nil
+                changed = true
+            }
+        }
+        if changed { save(cleaned) }
+        return cleaned.sorted { ($0.hour, $0.minute) < ($1.hour, $1.minute) }
     }
 
     static func save(_ alarms: [AlarmItem]) {
@@ -442,13 +462,26 @@ private enum AlarmStore {
         }
     }
 
-    static func reschedule(_ alarm: AlarmItem) {
+    /// (Re)schedule an alarm's notification and stamp `scheduledFire` so a
+    /// one-shot can later be recognized as spent. Mutates the passed alarm.
+    static func reschedule(_ alarm: inout AlarmItem) {
         let id = "clock-alarm-\(alarm.id.uuidString)"
         NotificationService.shared.cancel(identifier: id)
-        guard alarm.enabled else { return }
+        guard alarm.enabled else {
+            alarm.scheduledFire = nil
+            return
+        }
+        // A one-shot that already fired must not silently re-arm for
+        // tomorrow — it gets disabled instead.
+        if !alarm.repeatsDaily, let fire = alarm.scheduledFire, fire < Date() {
+            alarm.enabled = false
+            alarm.scheduledFire = nil
+            return
+        }
         var comps = DateComponents(); comps.hour = alarm.hour; comps.minute = alarm.minute
         // Next occurrence of hour:minute today or tomorrow.
         let fire = Calendar.current.nextDate(after: Date(), matching: comps, matchingPolicy: .nextTime) ?? Date()
+        alarm.scheduledFire = fire
         NotificationService.shared.schedule(
             kind: .clock,
             identifier: id,

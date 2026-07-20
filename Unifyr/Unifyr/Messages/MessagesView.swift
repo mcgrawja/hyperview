@@ -30,6 +30,8 @@ struct MessagesView: View {
     @State private var chats: [ChatSnapshot] = []
     @State private var selectedChatID: Int64?
     @State private var messages: [MessageSnapshot] = []
+    /// chat.db change stamp at the last poll — gates the 5s refresh.
+    @State private var lastRefreshStamp: TimeInterval = 0
     @State private var draft = ""
     @State private var sending = false
     @State private var sendError: String?
@@ -56,8 +58,15 @@ struct MessagesView: View {
         }
         .background(Theme.Palette.background)
         .navigationTitle("Messages")
-        .task { await start() }
+        .task {
+            await start()
+            // A deep link that arrived while this module was still mounting.
+            if let info = DeepLink.take(.unifyrOpenChat), let id = info["id"] as? Int64 {
+                selectedChatID = id
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .unifyrOpenChat)) { notification in
+            DeepLink.take(.unifyrOpenChat)
             if let id = notification.userInfo?["id"] as? Int64 {
                 selectedChatID = id
             }
@@ -427,8 +436,15 @@ struct MessagesView: View {
 
     /// Quiet poll: refresh the chat list; reload the open transcript only
     /// when its newest ROWID moved (avoids scroll jumps).
+    ///
+    /// The whole pass is gated on the db change stamp — chats() is an
+    /// expensive multi-query rebuild, and with no writes to chat.db there is
+    /// nothing it could possibly return differently.
     private func refresh() async {
         guard phase == .ready else { return }
+        let stamp = await database.changeStamp()
+        guard stamp != lastRefreshStamp else { return }
+        lastRefreshStamp = stamp
         chats = await database.chats()
         guard let chat = selectedChat else { return }
         let ids = memberIDs(chat)
@@ -519,11 +535,11 @@ struct MessagesView: View {
         if let contactPhotos { await contactPhotos.loadIfNeeded(brokers) }
 
         guard brokers.contacts.authorization == .authorized || brokers.contacts.authorization == .limited,
-              let contacts = try? await brokers.contacts.fetch(BrokerQuery(limit: 3000)) else { return }
+              let contacts = try? await brokers.contacts.fetchIndex(limit: 3000) else { return }
         var index: [String: String] = [:]
         for contact in contacts {
             let name = contact.displayName
-            guard name != "No Name" else { continue }
+            guard !name.isEmpty else { continue }
             for email in contact.emailAddresses {
                 index[email.lowercased()] = name
             }

@@ -29,7 +29,10 @@ struct HomeAssistantCard: View {
         } accessory: {
             accessory
         }
-        .task(id: config.connection) { await load() }
+        .task(id: config.connection) {
+            config.activate()   // one-time KVS hookup (no-op after the first)
+            await load()
+        }
         .sheet(isPresented: $showConnect) {
             HomeAssistantConnectSheet(config: config)
         }
@@ -171,7 +174,15 @@ struct HomeAssistantCard: View {
         errorText = nil
         defer { loading = false }
         do {
-            entities = try await client.states()
+            // With pins chosen, fetch ONLY those entities (concurrently) —
+            // /api/states returns the whole home's state set just to render a
+            // handful of rows. The full fetch remains for the picker.
+            let pinned = config.connection?.pinnedEntities ?? []
+            if pinned.isEmpty {
+                entities = try await client.states()
+            } else {
+                entities = try await client.states(ids: pinned)
+            }
         } catch {
             errorText = error.localizedDescription
         }

@@ -90,12 +90,15 @@ final class BriefingService {
             state = .failed("Couldn't gather your data.")
             return
         }
-        let unreadDetail = await executor.execute(name: "mail_unread", arguments: ["limit": 12.0])
-        // Real drive time to the first located event (MapKit; best-effort).
-        let commute = await CommuteService.estimate(
+        // Unread detail and the MapKit commute estimate are independent —
+        // run them concurrently instead of back to back.
+        async let unreadTask = executor.execute(name: "mail_unread", arguments: ["limit": 12.0])
+        async let commuteTask = CommuteService.estimate(
             homeLocation: weatherLocation,
             briefingJSON: briefingData.content
         )
+        let unreadDetail = await unreadTask
+        let commute = await commuteTask
 
         // 2. One compact API call to write it up.
         do {
@@ -122,7 +125,10 @@ final class BriefingService {
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.timeoutInterval = 120
 
-        let model = UserDefaults.standard.string(forKey: "claude.model") ?? "claude-opus-4-8"
+        // Same fallback as the chat controller's default — a divergent default
+        // here could silently run briefings on a 5×-cost model before the chat
+        // controller ever writes the stored value.
+        let model = UserDefaults.standard.string(forKey: "claude.model") ?? "claude-sonnet-5"
         let weatherLine = weather?.promptSummary ?? "Weather data unavailable."
         let prompt = """
         Write Jason's daily briefing from this Unifyr data. Today is \

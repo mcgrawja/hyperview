@@ -103,6 +103,23 @@ final class MCPController {
         if isEnabled {
             Task { await start() }
         }
+
+        // The audit log otherwise grows without bound for the app's life —
+        // keep a rolling window (newest `auditCap` rows).
+        pruneAuditLog()
+    }
+
+    private static let auditCap = 2000
+
+    private func pruneAuditLog() {
+        let context = automationContainer.mainContext
+        var descriptor = FetchDescriptor<MCPAuditEntry>(
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        descriptor.fetchOffset = Self.auditCap
+        guard let stale = try? context.fetch(descriptor), !stale.isEmpty else { return }
+        for entry in stale { context.delete(entry) }
+        try? context.save()
     }
 
     func start() async {

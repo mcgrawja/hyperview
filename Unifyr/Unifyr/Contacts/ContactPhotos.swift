@@ -42,11 +42,11 @@ final class ContactPhotoStore {
         isLoading = true
         defer { isLoading = false }
 
-        guard let contacts = try? await brokers.contacts.fetch(BrokerQuery(limit: 5000)) else { return }
+        // Lite fetch: name/emails/phones/thumbnail only — the full-key fetch
+        // decoded every field of every contact just to build this index.
+        guard let contacts = try? await brokers.contacts.fetchIndex(limit: 5000, includeThumbnails: true) else { return }
         for contact in contacts {
-            let name = [contact.givenName, contact.familyName]
-                .filter { !$0.isEmpty }
-                .joined(separator: " ")
+            let name = contact.displayName
             for email in contact.emailAddresses {
                 let key = email.lowercased()
                 namesByEmail[key] = name.isEmpty ? nil : name

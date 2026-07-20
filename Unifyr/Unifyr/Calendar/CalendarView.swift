@@ -80,8 +80,17 @@ struct CalendarView: View {
         }
         .background(Theme.Palette.background)
         .navigationTitle("Calendar")
-        .task { await start() }
+        .task {
+            await start()
+            // A deep link that arrived while this module was still mounting.
+            if let info = DeepLink.take(.unifyrOpenCalendarDate), let date = info["date"] as? Date {
+                anchor = date
+                modeRaw = CalendarViewMode.day.rawValue
+                await load()
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .unifyrOpenCalendarDate)) { notification in
+            DeepLink.take(.unifyrOpenCalendarDate)
             guard let date = notification.userInfo?["date"] as? Date else { return }
             anchor = date
             modeRaw = CalendarViewMode.day.rawValue

@@ -63,6 +63,7 @@ actor PhotoBroker: DataBroker {
 
         let result = PHAsset.fetchAssets(with: .image, options: options)
         var snapshots: [PhotoSnapshot] = []
+        var fetchedAssets: [String: PHAsset] = [:]
         result.enumerateObjects { asset, _, _ in
             snapshots.append(PhotoSnapshot(
                 id: asset.localIdentifier,
@@ -71,7 +72,13 @@ actor PhotoBroker: DataBroker {
                 pixelWidth: asset.pixelWidth,
                 pixelHeight: asset.pixelHeight
             ))
+            fetchedAssets[asset.localIdentifier] = asset
         }
+        // Remember the PHAssets so thumbnail(for:) doesn't have to run a
+        // per-cell fetchAssets round-trip back into the photo store. (Merged
+        // outside the enumeration closure — actor state can't be touched from
+        // inside it under strict concurrency.)
+        for (id, asset) in fetchedAssets { assetCache[id] = asset }
         MailLog.log("[Photos] auth=\(authorization) fetched \(snapshots.count) (limit \(query.limit ?? -1), range \(query.dateRange == nil ? "any" : "set"))")
         return snapshots
     }
@@ -87,9 +94,21 @@ actor PhotoBroker: DataBroker {
 
     /// JPEG thumbnail bytes for an asset, longest side ≈ `maxPixels`.
     /// iCloud-resident originals are fetched over the network if needed.
+    /// PHAssets already seen by a list fetch, so per-cell thumbnail requests
+    /// skip the photo-store round-trip. Refilled on every list pass; entries
+    /// are tiny (object references).
+    private var assetCache: [String: PHAsset] = [:]
+
     func thumbnail(for id: String, maxPixels: CGFloat = 240) async -> Data? {
-        let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
-        guard let asset = fetch.firstObject else { return nil }
+        let asset: PHAsset
+        if let cached = assetCache[id] {
+            asset = cached
+        } else {
+            let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
+            guard let fetched = fetch.firstObject else { return nil }
+            assetCache[id] = fetched
+            asset = fetched
+        }
 
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat // handler fires exactly once

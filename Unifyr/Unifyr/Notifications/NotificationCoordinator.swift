@@ -24,9 +24,11 @@ final class NotificationCoordinator {
 
     /// High-water ROWID for new-message detection (0 = not yet baselined).
     private var lastMessageRowID: Int64 = 0
-    /// Currently-scheduled time-based identifiers, so dropped items get cancelled.
-    private var scheduledReminderIDs: Set<String> = []
-    private var scheduledEventIDs: Set<String> = []
+    /// Currently-scheduled time-based notifications: identifier → (fire, body).
+    /// The values make each 30s tick a DIFF — unchanged items are skipped
+    /// instead of being torn down and re-added twice a minute.
+    private var scheduledReminders: [String: (fire: Date, body: String)] = [:]
+    private var scheduledEvents: [String: (fire: Date, body: String)] = [:]
     /// handle → contact name cache for message notifications.
     private var nameIndex: [String: String] = [:]
     private var nameIndexLoaded = false
@@ -59,20 +61,29 @@ final class NotificationCoordinator {
         let auth = brokers.eventKit.remindersAuthorization
         guard auth == .authorized || auth == .limited else { return }
 
-        // Reminders due within the next 24h (and not completed).
+        // Reminders due within the next 24h (and not completed). The range is
+        // bounded — a year back (overdue badge) through tomorrow — so EventKit
+        // uses its incomplete-with-due-date predicate instead of fetching the
+        // entire reminders database every 30s.
         let now = Date()
         let horizon = now.addingTimeInterval(24 * 3600)
-        let reminders = (try? await brokers.eventKit.fetchReminders(BrokerQuery(includeCompleted: false))) ?? []
+        let yearBack = now.addingTimeInterval(-365 * 24 * 3600)
+        let reminders = (try? await brokers.eventKit.fetchReminders(
+            BrokerQuery(dateRange: yearBack...horizon, includeCompleted: false)
+        )) ?? []
 
         // Badge count of reminders due: overdue + due by end of today.
         let endOfToday = Calendar.current.startOfDay(for: now).addingTimeInterval(24 * 3600)
         remindersDue = reminders.filter { ($0.dueDate ?? .distantFuture) < endOfToday }.count
 
-        var desiredReminderIDs = Set<String>()
+        var desiredReminders: [String: (fire: Date, body: String)] = [:]
         for reminder in reminders {
             guard let due = reminder.dueDate, due > now, due <= horizon else { continue }
             let id = "rem-\(reminder.id)"
-            desiredReminderIDs.insert(id)
+            desiredReminders[id] = (due, reminder.title)
+            // Only (re)register when new or actually changed — re-adding an
+            // unchanged request every tick churns the notification center.
+            guard (scheduledReminders[id] ?? (.distantPast, "")) != desiredReminders[id]! else { continue }
             NotificationService.shared.schedule(
                 kind: .reminder,
                 identifier: id,
@@ -82,34 +93,36 @@ final class NotificationCoordinator {
                 userInfo: ["id": reminder.id]
             )
         }
-        for stale in scheduledReminderIDs.subtracting(desiredReminderIDs) {
+        for stale in scheduledReminders.keys where desiredReminders[stale] == nil {
             NotificationService.shared.cancel(identifier: stale)
         }
-        scheduledReminderIDs = desiredReminderIDs
+        scheduledReminders = desiredReminders
 
         // Events starting within the next 24h → 10-minute heads-up.
         guard brokers.eventKit.calendarAuthorization == .authorized
                 || brokers.eventKit.calendarAuthorization == .limited else { return }
         let events = (try? await brokers.eventKit.fetch(BrokerQuery(dateRange: now...horizon))) ?? []
-        var desiredEventIDs = Set<String>()
+        var desiredEvents: [String: (fire: Date, body: String)] = [:]
         for event in events where !event.isAllDay {
             let alertAt = event.start.addingTimeInterval(-10 * 60)
             guard alertAt > now else { continue }
             let id = "evt-\(event.id)"
-            desiredEventIDs.insert(id)
+            let body = event.title + (event.location.map { " · \($0)" } ?? "")
+            desiredEvents[id] = (alertAt, body)
+            guard (scheduledEvents[id] ?? (.distantPast, "")) != desiredEvents[id]! else { continue }
             NotificationService.shared.schedule(
                 kind: .calendar,
                 identifier: id,
                 title: "In 10 minutes",
-                body: event.title + (event.location.map { " · \($0)" } ?? ""),
+                body: body,
                 at: alertAt,
                 userInfo: ["id": event.id]
             )
         }
-        for stale in scheduledEventIDs.subtracting(desiredEventIDs) {
+        for stale in scheduledEvents.keys where desiredEvents[stale] == nil {
             NotificationService.shared.cancel(identifier: stale)
         }
-        scheduledEventIDs = desiredEventIDs
+        scheduledEvents = desiredEvents
     }
 
     // MARK: New messages → immediate notifications
@@ -137,11 +150,11 @@ final class NotificationCoordinator {
         guard !nameIndexLoaded else { return }
         nameIndexLoaded = true
         guard brokers.contacts.authorization == .authorized || brokers.contacts.authorization == .limited,
-              let contacts = try? await brokers.contacts.fetch(BrokerQuery(limit: 3000)) else { return }
+              let contacts = try? await brokers.contacts.fetchIndex(limit: 3000) else { return }
         var index: [String: String] = [:]
         for contact in contacts {
             let name = contact.displayName
-            guard name != "No Name" else { continue }
+            guard !name.isEmpty else { continue }
             for email in contact.emailAddresses { index[email.lowercased()] = name }
             for phone in contact.phoneNumbers {
                 let digits = phone.filter(\.isNumber)
@@ -174,7 +187,4 @@ final class NotificationCoordinator {
         cachedMessagesUnread = unread
         updateBadge()
     }
-
-    /// Fed from the shell after computing due reminders.
-    func setRemindersDue(_ count: Int) { remindersDue = count }
 }

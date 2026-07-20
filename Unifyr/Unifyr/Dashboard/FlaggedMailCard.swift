@@ -71,11 +71,15 @@ struct FlaggedMailCard: View {
         let context = ModelContext(mailContainer)
         let accounts = (try? context.fetch(FetchDescriptor<MailAccount>())) ?? []
         let names = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0.emailAddress) })
-        let messages = (try? context.fetch(FetchDescriptor<MailMessage>())) ?? []
+        // Predicate + sort + limit in the store — fetching the whole mail
+        // cache to show 6 rows stalls the main actor on a big mailbox.
+        var descriptor = FetchDescriptor<MailMessage>(
+            predicate: #Predicate { $0.isFlagged },
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        descriptor.fetchLimit = 6
+        let messages = (try? context.fetch(descriptor)) ?? []
         items = messages
-            .filter { $0.isFlagged }
-            .sorted { $0.date > $1.date }
-            .prefix(6)
             .map { message in
                 Item(
                     id: message.id,
@@ -86,12 +90,9 @@ struct FlaggedMailCard: View {
             }
     }
 
-    /// Switch to Mail, then deep-link the message once the module has mounted
-    /// (same 0.4s handoff Universal Search uses).
+    /// Switch to Mail and hand off through the DeepLink latch (no timer race).
     private func open(_ id: UUID) {
         NotificationCenter.default.post(name: .unifyrOpenModule, object: nil, userInfo: ["module": "mail"])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            NotificationCenter.default.post(name: .unifyrOpenMailMessage, object: nil, userInfo: ["id": id])
-        }
+        DeepLink.send(.unifyrOpenMailMessage, userInfo: ["id": id])
     }
 }

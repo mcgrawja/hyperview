@@ -109,28 +109,28 @@ struct PinnedRemindersCard: View {
     @State private var reminders: [ReminderSnapshot] = []
 
     var body: some View {
-        if !reminders.isEmpty {
-            DashboardCard(title: "Pinned Reminders", systemImage: "pin") {
-                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                    ForEach(reminders) { reminder in
-                        row(reminder)
+        // The .task/.onReceive live on a stable Group — attaching a copy to
+        // each branch gives the branches distinct view identities, so every
+        // empty↔populated flip re-fired the other branch's .task (double
+        // broker fetch per transition).
+        Group {
+            if !reminders.isEmpty {
+                DashboardCard(title: "Pinned Reminders", systemImage: "pin") {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                        ForEach(reminders) { reminder in
+                            row(reminder)
+                        }
                     }
                 }
+            } else {
+                // Invisible loader: the card appears once a pinned reminder loads.
+                Color.clear.frame(width: 0, height: 0)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .unifyrPinsChanged)) { _ in
-                pinnedIDs = PinStore.pinnedReminderIDs
-                Task { await load() }
-            }
-            .task { await load() }
-        } else {
-            // Invisible loader: the card appears once a pinned reminder loads.
-            Color.clear
-                .frame(width: 0, height: 0)
-                .task { await load() }
-                .onReceive(NotificationCenter.default.publisher(for: .unifyrPinsChanged)) { _ in
-                    pinnedIDs = PinStore.pinnedReminderIDs
-                    Task { await load() }
-                }
+        }
+        .task { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .unifyrPinsChanged)) { _ in
+            pinnedIDs = PinStore.pinnedReminderIDs
+            Task { await load() }
         }
     }
 
@@ -195,9 +195,9 @@ struct PinnedRemindersCard: View {
             reminders = []
             return
         }
-        let all = (try? await brokers.eventKit.fetchReminders(BrokerQuery(includeCompleted: true))) ?? []
+        // Direct per-id lookups — not a fetch of every reminder in every list.
+        let all = (try? await brokers.eventKit.fetchReminders(ids: Array(pinnedIDs))) ?? []
         reminders = all
-            .filter { pinnedIDs.contains($0.id) }
             .sorted { a, b in
                 switch (a.dueDate, b.dueDate) {
                 case let (x?, y?): return x < y

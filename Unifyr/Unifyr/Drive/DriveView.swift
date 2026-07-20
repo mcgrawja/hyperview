@@ -121,6 +121,7 @@ struct DriveView: View {
         .background(Theme.Palette.background)
         .navigationTitle("Drive")
         .task {
+            servers.activate()   // one-time KVS hookup (no-op after the first)
             removeUniversalFileLinksIfNeeded()
         }
     }

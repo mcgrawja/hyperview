@@ -83,10 +83,13 @@ struct OverdueRemindersCard: View {
     }
 
     private func load() async {
-        // Wide window so long-overdue items surface (the default only reaches a
-        // week back); then keep only those actually past due.
-        let all = (try? await brokers.eventKit.fetchDueReminders(within: 365 * 24 * 60 * 60)) ?? []
+        // Overdue = incomplete with a due date from a year back to NOW —
+        // bounded on both ends so EventKit's due-date predicate does the
+        // narrowing instead of a wide fetch filtered here.
         let now = Date()
+        let all = (try? await brokers.eventKit.fetchReminders(
+            BrokerQuery(dateRange: now.addingTimeInterval(-365 * 24 * 3600)...now)
+        )) ?? []
         reminders = all
             .filter { ($0.dueDate ?? .distantFuture) < now }
             .sorted { ($0.dueDate ?? .distantPast) < ($1.dueDate ?? .distantPast) }

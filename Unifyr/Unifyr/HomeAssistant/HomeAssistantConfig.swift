@@ -57,6 +57,13 @@ final class HomeAssistantConfig {
     private(set) var connection: HomeAssistantConnection?
 
     private let store = NSUbiquitousKeyValueStore.default
+    /// Held so the block observer can be removed when this instance dies —
+    /// the owning card is recreated on every dashboard visit, so without
+    /// removal each visit would leak one more registered block.
+    /// nonisolated(unsafe): written once in init, read once in deinit
+    /// (which is nonisolated) — no concurrent access is possible.
+    /// @ObservationIgnored keeps it raw storage the attribute can apply to.
+    @ObservationIgnored private nonisolated(unsafe) var kvsObserver: NSObjectProtocol?
 
     // MARK: Wire format
 
@@ -67,9 +74,22 @@ final class HomeAssistantConfig {
 
     // MARK: Lifecycle
 
+    /// init stays CHEAP (a UserDefaults decode): as a @State default value
+    /// this runs on every re-creation of the host view struct, and SwiftUI
+    /// throws all but the first instance away.
     init() {
         loadLocal()
-        NotificationCenter.default.addObserver(
+    }
+
+    deinit {
+        if let kvsObserver { NotificationCenter.default.removeObserver(kvsObserver) }
+    }
+
+    /// One-time KVS hookup, called from the owning view's .task — only the
+    /// instance SwiftUI actually kept ever registers and reconciles.
+    func activate() {
+        guard kvsObserver == nil else { return }
+        kvsObserver = NotificationCenter.default.addObserver(
             forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
             object: store,
             queue: .main

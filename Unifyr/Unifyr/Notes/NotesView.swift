@@ -92,14 +92,18 @@ struct NotesView: View {
         .onReceive(NotificationCenter.default.publisher(for: .unifyrRequestNoteLink)) { _ in
             showingNoteLinkPicker = true
         }
-        // A hyperview://note/<uuid> link was clicked in the editor.
+        // A hyperview://note/<uuid> link was clicked in the editor, or a
+        // deep link arrived (dashboard pin / search) — the .task consumes a
+        // latch that landed while this module was still mounting.
         .onReceive(NotificationCenter.default.publisher(for: .unifyrOpenNote)) { notification in
-            guard let id = notification.userInfo?["id"] as? UUID,
-                  let target = notes.first(where: { $0.id == id }) else { return }
-            if selectedFolder != nil, target.folder?.id != selectedFolder?.id {
-                selectedFolder = nil
+            DeepLink.take(.unifyrOpenNote)
+            guard let id = notification.userInfo?["id"] as? UUID else { return }
+            openNoteByID(id)
+        }
+        .task {
+            if let info = DeepLink.take(.unifyrOpenNote), let id = info["id"] as? UUID {
+                openNoteByID(id)
             }
-            selectedNote = target
         }
         .alert("Rename Folder", isPresented: .init(
             get: { renamingFolder != nil },
@@ -272,6 +276,16 @@ struct NotesView: View {
             collapsed.insert(folder.id)
         }
         collapsedFoldersRaw = collapsed.map(\.uuidString).joined(separator: ",")
+    }
+
+    /// Open a specific note (deep link / in-editor note link), clearing the
+    /// folder filter if the note lives elsewhere.
+    private func openNoteByID(_ id: UUID) {
+        guard let target = notes.first(where: { $0.id == id }) else { return }
+        if selectedFolder != nil, target.folder?.id != selectedFolder?.id {
+            selectedFolder = nil
+        }
+        selectedNote = target
     }
 
     /// The folder tree flattened depth-first (indentation = depth). A collapsed
@@ -463,8 +477,11 @@ struct NotesView: View {
     @ViewBuilder
     private var editorPane: some View {
         if let selectedNote {
+            // No .id(selectedNote.id): the bridge swaps documents into the
+            // EXISTING web view (EditorBridge.show), so forcing a new view
+            // identity per note would tear down and re-create the WKWebView —
+            // a full index.html + TipTap reload — on every selection.
             NoteEditorHost(note: selectedNote)
-                .id(selectedNote.id)
         } else {
             VStack(spacing: Theme.Spacing.md) {
                 Image(systemName: "note.text")

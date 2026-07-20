@@ -46,8 +46,15 @@ struct RemindersView: View {
         }
         .background(Theme.Palette.background)
         .navigationTitle("Reminders")
-        .task { await start() }
+        .task {
+            await start()
+            // A deep link that arrived while this module was still mounting.
+            if let info = DeepLink.take(.unifyrOpenReminder), let id = info["id"] as? String {
+                selectedID = id
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .unifyrOpenReminder)) { notification in
+            DeepLink.take(.unifyrOpenReminder)
             if let id = notification.userInfo?["id"] as? String {
                 selectedID = id
             }

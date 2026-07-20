@@ -12,8 +12,11 @@ import SwiftUI
 struct ClaudeChatView: View {
     /// App-level controller — the conversation persists across module switches.
     @Environment(\.claudeChat) private var envController
-    @State private var fallback = ClaudeChatController()
-    private var controller: ClaudeChatController { envController ?? fallback }
+    /// Shared lazily-created fallback (previews / missing environment). As a
+    /// @State default it would re-run ClaudeChatController.init — including a
+    /// keychain read — on every re-creation of this view struct.
+    private static let sharedFallback = ClaudeChatController()
+    private var controller: ClaudeChatController { envController ?? Self.sharedFallback }
     @State private var draft = ""
     @State private var showingSettings = false
 

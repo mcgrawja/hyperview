@@ -61,6 +61,9 @@ struct TagMenu: View {
             for link in existing { context.delete(link) }
         }
         try? context.save()
+        // TagsStore (Mail's cached copy) rebuilds on this — without it, tag
+        // changes made here leave Mail's tag list and counts stale.
+        NotificationCenter.default.post(name: .unifyrTagsChanged, object: nil)
     }
 }
 
@@ -70,10 +73,20 @@ struct TagDots: View {
     let key: String
 
     @Query(sort: \HVTag.name) private var tags: [HVTag]
+    // Predicate scoped to THIS item — a plain @Query here loads the entire
+    // cross-module link table once per visible row (O(rows × links)).
     @Query private var links: [HVTagLink]
 
+    init(kind: String, key: String) {
+        self.kind = kind
+        self.key = key
+        _links = Query(filter: #Predicate<HVTagLink> {
+            $0.itemKind == kind && $0.itemKey == key
+        })
+    }
+
     private var itemTags: [HVTag] {
-        let ids = Set(links.filter { $0.itemKind == kind && $0.itemKey == key }.compactMap(\.tagID))
+        let ids = Set(links.compactMap(\.tagID))
         return tags.filter { ids.contains($0.id) }
     }
 
@@ -164,6 +177,7 @@ struct TagManagerView: View {
         let color = Self.paletteDefaults[tags.count % Self.paletteDefaults.count]
         context.insert(HVTag(name: name, colorHex: color))
         try? context.save()
+        NotificationCenter.default.post(name: .unifyrTagsChanged, object: nil)
         newName = ""
     }
 
@@ -173,6 +187,7 @@ struct TagManagerView: View {
         }
         context.delete(tag)
         try? context.save()
+        NotificationCenter.default.post(name: .unifyrTagsChanged, object: nil)
     }
 }
 

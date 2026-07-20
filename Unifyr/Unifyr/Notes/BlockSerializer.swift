@@ -138,9 +138,16 @@ nonisolated enum BlockSerializer {
     /// `contentJSON` payload).
     @MainActor
     static func apply(_ content: BlockContent, to block: Block) {
+        // Only touch the block when something actually changed — writing (and
+        // bumping modifiedAt on) every block on every save marks the whole
+        // note dirty, which under CloudKit re-uploads every block record.
+        let payload = encodePayload(.init(attrs: content.attrs, content: content.content))
+        guard block.blockKind != content.kind
+            || block.isChecked != content.isChecked
+            || block.contentJSON != payload else { return }
         block.blockKind = content.kind
         block.isChecked = content.isChecked
-        block.contentJSON = encodePayload(.init(attrs: content.attrs, content: content.content))
+        block.contentJSON = payload
         block.modifiedAt = Date()
     }
 
@@ -169,7 +176,14 @@ nonisolated enum BlockSerializer {
         var content: [PMNode]
     }
 
-    private static let encoder = JSONEncoder()
+    // sortedKeys: payload bytes must be DETERMINISTIC so "did this block
+    // change?" can compare encoded payloads without false positives from
+    // dictionary key order.
+    private static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }()
     private static let decoder = JSONDecoder()
 
     private static func listItemNode(for block: BlockContent) -> PMNode {

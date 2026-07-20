@@ -107,6 +107,16 @@ nonisolated struct ContactGroupSnapshot: Identifiable, Sendable, Hashable, Codab
 }
 
 /// A contact (from `ContactsBroker`).
+/// Minimal contact row for index builders (name lookups, avatar stores) —
+/// see ContactsBroker.fetchIndex.
+nonisolated struct ContactIndexEntry: Identifiable, Sendable {
+    let id: String
+    let displayName: String
+    let emailAddresses: [String]
+    let phoneNumbers: [String]
+    let thumbnail: Data?
+}
+
 nonisolated struct ContactSnapshot: Identifiable, Sendable, Hashable, Codable {
     /// `CNContact.identifier`.
     let id: String

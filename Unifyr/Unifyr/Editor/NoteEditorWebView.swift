@@ -128,6 +128,10 @@ extension NoteEditorWebView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.show(note)
     }
+
+    static func dismantleNSView(_ nsView: WKWebView, coordinator: EditorBridge) {
+        coordinator.teardown()
+    }
 }
 #else
 extension NoteEditorWebView: UIViewRepresentable {
@@ -137,6 +141,10 @@ extension NoteEditorWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.show(note)
+    }
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: EditorBridge) {
+        coordinator.teardown()
     }
 }
 #endif
@@ -183,9 +191,50 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     /// Called when the selected note (or view state) changes.
     func show(_ note: Note) {
+        // Switching notes: any pending (debounced) edits belong to the OLD
+        // note — persist them before its document is swapped out.
+        if note.id != loadedNoteID { flushPendingSave() }
         self.note = note
         guard isReady, note.id != loadedNoteID else { return }
         loadDocument(for: note)
+    }
+
+    /// Final teardown from the representable's dismantle: persist anything
+    /// still buffered and detach the script handler (the content controller
+    /// retains its handlers strongly).
+    func teardown() {
+        flushPendingSave()
+        saveDebounce?.cancel()
+        webView?.configuration.userContentController.removeAllScriptMessageHandlers()
+    }
+
+    // MARK: Debounced persistence
+
+    // The JS editor emits the ENTIRE document on every keystroke. Persisting
+    // each one did a full decode + reconcile + main-thread SwiftData save per
+    // keystroke (and, under CloudKit, an upload storm). Instead the latest
+    // document is buffered and persisted after a quiet gap — with flushes on
+    // note switch and teardown so nothing is ever lost.
+    private var pendingDocument: (noteID: UUID, note: Note, data: Data)?
+    private var saveDebounce: Task<Void, Never>?
+
+    private func bufferDocumentChange(_ note: Note, data: Data) {
+        pendingDocument = (note.id, note, data)
+        saveDebounce?.cancel()
+        saveDebounce = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            self?.flushPendingSave()
+        }
+    }
+
+    private func flushPendingSave() {
+        guard let pending = pendingDocument else { return }
+        pendingDocument = nil
+        saveDebounce?.cancel()
+        let document = BlockSerializer.decodeDocument(pending.data)
+        store.save(document, to: pending.note)
+        try? store.context.save()
     }
 
     // MARK: JS -> Swift
@@ -209,9 +258,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             guard let note,
                   let docObject = body["doc"],
                   let data = try? JSONSerialization.data(withJSONObject: docObject) else { return }
-            let document = BlockSerializer.decodeDocument(data)
-            store.save(document, to: note)
-            try? store.context.save()
+            bufferDocumentChange(note, data: data)
 
         case "blockAction":
             // Persisted via the following documentChanged; logged here for the
@@ -285,7 +332,9 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         let hrefLiteral = Self.jsLiteral(href)
         let textLiteral = Self.jsLiteral(text)
         webView?.evaluateJavaScript(
-            "window.unifyr.insertLink(\(hrefLiteral), \(textLiteral));",
+            // "hyperview" is the bundled editor JS's namespace — a wire name,
+            // not a display name; it did not rename with the app.
+            "window.hyperview.insertLink(\(hrefLiteral), \(textLiteral));",
             completionHandler: nil
         )
     }
@@ -301,7 +350,8 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         let json = String(decoding: BlockSerializer.encode(document), as: UTF8.self)
         // Encode the JSON string as a JS string literal (safe escaping).
         let literal = String(decoding: (try? JSONEncoder().encode(json)) ?? Data("\"{}\"".utf8), as: UTF8.self)
-        webView?.evaluateJavaScript("window.unifyr.loadDocument(\(literal));", completionHandler: nil)
+        // window.hyperview: bundled-JS wire name (see insertLink).
+        webView?.evaluateJavaScript("window.hyperview.loadDocument(\(literal));", completionHandler: nil)
         loadedNoteID = note.id
     }
 }

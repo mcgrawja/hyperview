@@ -33,6 +33,18 @@ actor MessagesDatabase {
         realHome + "/Library/Messages/chat.db"
     }
 
+    /// Cheap change stamp for the pollers: combined mtimes of chat.db and its
+    /// WAL. ANY write — new message, read-status flip, chat deletion — moves
+    /// one of them, so an unchanged stamp means every cached answer is still
+    /// valid and the expensive queries can be skipped entirely.
+    nonisolated func changeStamp() -> TimeInterval {
+        let fm = FileManager.default
+        return [Self.chatDBPath, Self.chatDBPath + "-wal"].reduce(0) { total, path in
+            let date = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+            return total + (date?.timeIntervalSinceReferenceDate ?? 0)
+        }
+    }
+
     /// True once the database opens and answers a query. False means Full
     /// Disk Access hasn't been granted (or the grant needs an app relaunch).
     func hasAccess() -> Bool {
@@ -421,8 +433,20 @@ actor MessagesDatabase {
     ///    Messages in iCloud *does* keep in sync across devices.
     /// 2. The local read ledger — chats the user has caught up on in Unifyr
     ///    itself contribute nothing.
+    /// Cache so the 30s badge poll costs a file stat, not a table scan, while
+    /// nothing has changed. Keyed on the db change stamp + the read ledger.
+    private var unreadCache: (stamp: TimeInterval, marksHash: Int, count: Int)?
+
     func unreadCount() -> Int {
         guard hasAccess(), let db else { return 0 }
+        let stamp = changeStamp()
+        let marks = Self.localReadMarks()
+        var hasher = Hasher()
+        hasher.combine(marks)
+        let marksHash = hasher.finalize()
+        if let cached = unreadCache, cached.stamp == stamp, cached.marksHash == marksHash {
+            return cached.count
+        }
         let sql = """
         SELECT cmj.chat_id, COUNT(*), MAX(m.ROWID)
         FROM message m
@@ -436,7 +460,6 @@ actor MessagesDatabase {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(statement) }
-        let marks = Self.localReadMarks()
         var total = 0
         while sqlite3_step(statement) == SQLITE_ROW {
             let chatID = sqlite3_column_int64(statement, 0)
@@ -445,6 +468,7 @@ actor MessagesDatabase {
             if let seen = marks[chatID], seen >= newestUnread { continue }
             total += count
         }
+        unreadCache = (stamp, marksHash, total)
         return total
     }
 

@@ -145,9 +145,7 @@ struct BriefingCard: View {
                     } onOpen: {
                         // Tapping the text reveals it in Reminders.
                         NotificationCenter.default.post(name: .unifyrOpenModule, object: nil, userInfo: ["module": "reminders"])
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                            NotificationCenter.default.post(name: .unifyrOpenReminder, object: nil, userInfo: ["id": id])
-                        }
+                        DeepLink.send(.unifyrOpenReminder, userInfo: ["id": id])
                     }
                 case .mail(let id):
                     actionRow(line) {
@@ -156,9 +154,7 @@ struct BriefingCard: View {
                     } onOpen: {
                         guard let uuid = UUID(uuidString: id) else { return }
                         NotificationCenter.default.post(name: .unifyrOpenModule, object: nil, userInfo: ["module": "mail"])
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                            NotificationCenter.default.post(name: .unifyrOpenMailMessage, object: nil, userInfo: ["id": uuid])
-                        }
+                        DeepLink.send(.unifyrOpenMailMessage, userInfo: ["id": uuid])
                     }
                 }
             }

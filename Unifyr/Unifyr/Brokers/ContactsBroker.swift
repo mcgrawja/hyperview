@@ -71,6 +71,36 @@ actor ContactsBroker: DataBroker {
 
     /// `fetch` searches by name when `searchText` is set, otherwise returns the
     /// address book (bounded by `limit`, default 100 to keep the dashboard snappy).
+    /// Lightweight whole-book pass for INDEX builders (name lookups, avatar
+    /// stores): name + emails + phones (+ thumbnail on request) only. The
+    /// full-key fetch below decodes postal addresses, relations, social
+    /// profiles, and birthdays for thousands of contacts nobody reads —
+    /// three separate features were paying that on every module open.
+    func fetchIndex(limit: Int, includeThumbnails: Bool = false) async throws -> [ContactIndexEntry] {
+        try ensureAuthorized()
+        var keys: [CNKeyDescriptor] = [
+            CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
+            CNContactEmailAddressesKey as CNKeyDescriptor,
+            CNContactPhoneNumbersKey as CNKeyDescriptor,
+        ]
+        if includeThumbnails { keys.append(CNContactThumbnailImageDataKey as CNKeyDescriptor) }
+
+        var results: [ContactIndexEntry] = []
+        let request = CNContactFetchRequest(keysToFetch: keys)
+        request.sortOrder = .userDefault
+        try store.enumerateContacts(with: request) { contact, stop in
+            results.append(ContactIndexEntry(
+                id: contact.identifier,
+                displayName: CNContactFormatter.string(from: contact, style: .fullName) ?? "",
+                emailAddresses: contact.emailAddresses.map { String($0.value) },
+                phoneNumbers: contact.phoneNumbers.map { $0.value.stringValue },
+                thumbnail: includeThumbnails ? contact.thumbnailImageData : nil
+            ))
+            if results.count >= limit { stop.pointee = true }
+        }
+        return results
+    }
+
     func fetch(_ query: BrokerQuery) async throws -> [ContactSnapshot] {
         try ensureAuthorized()
         let limit = query.limit ?? 100

@@ -304,6 +304,18 @@ actor EventKitBroker: DataBroker {
     }
 
     /// Marks a reminder complete by identifier.
+    /// Resolve specific reminders by identifier — a direct item lookup per id,
+    /// for callers (pinned cards) that would otherwise fetch every reminder in
+    /// every list just to keep a handful.
+    func fetchReminders(ids: [String]) async throws -> [ReminderSnapshot] {
+        guard remindersAuthorization == .authorized || remindersAuthorization == .limited else {
+            throw BrokerError.accessDenied
+        }
+        return ids.compactMap { id in
+            (store.calendarItem(withIdentifier: id) as? EKReminder).map(Self.snapshot(from:))
+        }
+    }
+
     func completeReminder(id: String) async throws {
         try await setReminderCompleted(id: id, completed: true)
     }

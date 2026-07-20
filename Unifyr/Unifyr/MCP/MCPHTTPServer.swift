@@ -4,7 +4,9 @@
 //
 //  Minimal HTTP/1.1 server bound to 127.0.0.1 only — the local shim between
 //  the app's tool executor and the Node stdio bridge that Claude Desktop
-//  launches (§7.2). Token-gated: every request must carry X-Unifyr-Token.
+//  launches (§7.2). Token-gated: every request must carry x-hyperview-token
+//  (a wire name — the existing Claude Desktop config sends it; it did not
+//  rename with the app).
 //
 //    GET  /health -> {"ok":true}
 //    GET  /tools  -> {"tools":[...]}            (MCP tools/list shape)
@@ -62,6 +64,16 @@ actor MCPHTTPServer {
         let conn = connection
         conn.start(queue: DispatchQueue(label: "com.mcgraw.Hyperview.mcp.conn"))
 
+        // Watchdog: a client that opens the socket and never completes a
+        // request would otherwise park this task (and the connection) forever.
+        // Cancelling the connection errors the pending receive, breaking the
+        // loop below.
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(30))
+            if !Task.isCancelled { conn.cancel() }
+        }
+        defer { watchdog.cancel() }
+
         var buffer = Data()
         while buffer.count < 4_000_000 {
             guard let chunk = await receive(conn) else { break }
@@ -70,7 +82,7 @@ actor MCPHTTPServer {
 
             let responseBody: Data
             let status: String
-            if request.headers["x-hyperview-token"] != token {
+            if !Self.constantTimeEquals(request.headers["x-hyperview-token"] ?? "", token) {
                 status = "401 Unauthorized"
                 responseBody = Data(#"{"ok":false,"error":"unauthorized"}"#.utf8)
             } else {
@@ -82,6 +94,17 @@ actor MCPHTTPServer {
             break
         }
         conn.cancel()
+    }
+
+    /// Full-length comparison with no data-dependent early exit — a plain
+    /// `!=` short-circuits on the first differing byte, a timing side channel
+    /// any local process could probe.
+    private static func constantTimeEquals(_ a: String, _ b: String) -> Bool {
+        let lhs = Array(a.utf8), rhs = Array(b.utf8)
+        guard lhs.count == rhs.count else { return false }
+        var diff: UInt8 = 0
+        for index in lhs.indices { diff |= lhs[index] ^ rhs[index] }
+        return diff == 0
     }
 
     private func receive(_ conn: NWConnection) async -> Data? {
@@ -132,6 +155,9 @@ actor MCPHTTPServer {
         }
 
         let contentLength = headers["content-length"].flatMap(Int.init) ?? 0
+        // A content-length beyond the receive cap would make the caller wait
+        // for a body that can never fully arrive.
+        guard contentLength >= 0, contentLength <= 4_000_000 else { return nil }
         let body = raw.subdata(in: headerEnd.upperBound..<raw.endIndex)
         guard body.count >= contentLength else { return nil } // wait for more
         return Request(

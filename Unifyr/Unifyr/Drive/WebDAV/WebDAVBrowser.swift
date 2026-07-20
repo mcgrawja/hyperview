@@ -93,6 +93,8 @@ struct WebDAVBrowser: View {
         }
         .background(Theme.Palette.background)
         .task(id: location) { await reload() }
+        // Week-old preview downloads get purged so tmp doesn't grow forever.
+        .task { WebDAVClient.cleanTempDirectory() }
         .toolbar {
             ToolbarItem { sortMenu }
             ToolbarItem {
@@ -352,7 +354,8 @@ struct WebDAVBrowser: View {
         downloadingID = entry.url
         defer { downloadingID = nil }
         do {
-            let local = try await client.download(entry.url)
+            // Entry-based: reuses the cached copy when size+mtime still match.
+            let local = try await client.download(entry)
             onOpenFile(local)
         } catch {
             errorText = "Couldn't download “\(entry.name)”: \(error.localizedDescription)"

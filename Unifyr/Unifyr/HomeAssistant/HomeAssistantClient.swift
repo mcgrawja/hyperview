@@ -113,6 +113,31 @@ nonisolated struct HomeAssistantClient: Sendable {
         }
     }
 
+    /// Fetch just the named entities (`GET /api/states/<id>`, concurrently) —
+    /// the dashboard card path, so a few pinned rows don't pull the whole
+    /// home's state set. Entities the server no longer knows are skipped.
+    func states(ids: [String]) async throws -> [HAEntity] {
+        try await withThrowingTaskGroup(of: HAEntity?.self) { group in
+            for id in ids {
+                group.addTask {
+                    let response = try await self.get(self.endpoint("api", "states", id))
+                    switch response.status {
+                    case 200...299: break
+                    case 401, 403: throw HAError.unauthorized
+                    case 404: return nil            // entity gone — not fatal
+                    default: throw HAError.http(response.status)
+                    }
+                    return try? JSONDecoder().decode(HAEntity.self, from: response.data)
+                }
+            }
+            var results: [HAEntity] = []
+            for try await entity in group {
+                if let entity { results.append(entity) }
+            }
+            return results
+        }
+    }
+
     /// Fetch all entity states (`GET /api/states`).
     func states() async throws -> [HAEntity] {
         let response = try await get(endpoint("api", "states"))
@@ -176,7 +201,9 @@ nonisolated struct HomeAssistantClient: Sendable {
 
 // MARK: - Decoding
 
-extension HAEntity: Decodable {
+// nonisolated: the conformance must be usable from off-main task groups
+// (states(ids:)) — the file's MainActor default would otherwise isolate it.
+nonisolated extension HAEntity: Decodable {
     private enum CodingKeys: String, CodingKey {
         case entityID = "entity_id"
         case state
