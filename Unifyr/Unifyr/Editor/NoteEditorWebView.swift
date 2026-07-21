@@ -79,13 +79,50 @@ enum FileLinkBookmarks {
     #endif
 }
 
+// MARK: - Editor documents
+
+/// What the bridge edits: any block document that can round-trip through the
+/// BlockSerializer. Notes load/save whole-note documents; database row pages
+/// (Unifyr 1.5) load/save the blocks scoped to one row. The bridge itself only
+/// ever sees this handle. `save` is responsible for persistence end to end
+/// (reconcile AND context.save).
+@MainActor
+struct EditorDocument {
+    let id: UUID
+    let load: () -> PMNode
+    let save: (PMNode) -> Void
+
+    init(id: UUID, load: @escaping () -> PMNode, save: @escaping (PMNode) -> Void) {
+        self.id = id
+        self.load = load
+        self.save = save
+    }
+
+    /// A whole note (the Phase-2 path).
+    init(note: Note, store: NotesStore) {
+        self.id = note.id
+        self.load = { store.loadDocument(note) }
+        self.save = { document in
+            store.save(document, to: note)
+            try? store.context.save()
+        }
+    }
+}
+
 // MARK: - The hosting view (platform-specific shell, shared bridge)
 
 struct NoteEditorWebView {
-    let note: Note
-    let store: NotesStore
+    let document: EditorDocument
 
-    func makeCoordinator() -> EditorBridge { EditorBridge(store: store) }
+    init(note: Note, store: NotesStore) {
+        self.document = EditorDocument(note: note, store: store)
+    }
+
+    init(document: EditorDocument) {
+        self.document = document
+    }
+
+    func makeCoordinator() -> EditorBridge { EditorBridge() }
 
     /// Builds the configured web view — identical on both platforms.
     fileprivate func makeWebView(coordinator: EditorBridge) -> WKWebView {
@@ -126,7 +163,7 @@ extension NoteEditorWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        context.coordinator.show(note)
+        context.coordinator.show(document)
     }
 
     static func dismantleNSView(_ nsView: WKWebView, coordinator: EditorBridge) {
@@ -140,7 +177,7 @@ extension NoteEditorWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        context.coordinator.show(note)
+        context.coordinator.show(document)
     }
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: EditorBridge) {
@@ -154,16 +191,14 @@ extension NoteEditorWebView: UIViewRepresentable {
 /// The bridge coordinator: routes messages both ways for one editor instance.
 @MainActor
 final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-    private let store: NotesStore
     private weak var webView: WKWebView?
     private var isReady = false
-    private var note: Note?
-    private var loadedNoteID: UUID?
+    private var document: EditorDocument?
+    private var loadedDocumentID: UUID?
     // Token only crosses to removeObserver; safe to share.
     nonisolated(unsafe) private var insertLinkToken: (any NSObjectProtocol)?
 
-    init(store: NotesStore) {
-        self.store = store
+    override init() {
         super.init()
         // NotesView answers a requestNoteLink / requestFileLink by posting the
         // chosen link back here.
@@ -189,14 +224,14 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     func attach(_ webView: WKWebView) { self.webView = webView }
 
-    /// Called when the selected note (or view state) changes.
-    func show(_ note: Note) {
-        // Switching notes: any pending (debounced) edits belong to the OLD
-        // note — persist them before its document is swapped out.
-        if note.id != loadedNoteID { flushPendingSave() }
-        self.note = note
-        guard isReady, note.id != loadedNoteID else { return }
-        loadDocument(for: note)
+    /// Called when the edited document (or view state) changes.
+    func show(_ document: EditorDocument) {
+        // Switching documents: any pending (debounced) edits belong to the OLD
+        // one — persist them before its content is swapped out.
+        if document.id != loadedDocumentID { flushPendingSave() }
+        self.document = document
+        guard isReady, document.id != loadedDocumentID else { return }
+        loadDocument(for: document)
     }
 
     /// Final teardown from the representable's dismantle: persist anything
@@ -214,12 +249,12 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     // each one did a full decode + reconcile + main-thread SwiftData save per
     // keystroke (and, under CloudKit, an upload storm). Instead the latest
     // document is buffered and persisted after a quiet gap — with flushes on
-    // note switch and teardown so nothing is ever lost.
-    private var pendingDocument: (noteID: UUID, note: Note, data: Data)?
+    // document switch and teardown so nothing is ever lost.
+    private var pendingDocument: (id: UUID, document: EditorDocument, data: Data)?
     private var saveDebounce: Task<Void, Never>?
 
-    private func bufferDocumentChange(_ note: Note, data: Data) {
-        pendingDocument = (note.id, note, data)
+    private func bufferDocumentChange(_ document: EditorDocument, data: Data) {
+        pendingDocument = (document.id, document, data)
         saveDebounce?.cancel()
         saveDebounce = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
@@ -232,9 +267,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         guard let pending = pendingDocument else { return }
         pendingDocument = nil
         saveDebounce?.cancel()
-        let document = BlockSerializer.decodeDocument(pending.data)
-        store.save(document, to: pending.note)
-        try? store.context.save()
+        pending.document.save(BlockSerializer.decodeDocument(pending.data))
     }
 
     // MARK: JS -> Swift
@@ -252,13 +285,13 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         switch type {
         case "ready":
             isReady = true
-            if let note { loadDocument(for: note) }
+            if let document { loadDocument(for: document) }
 
         case "documentChanged":
-            guard let note,
+            guard let document,
                   let docObject = body["doc"],
                   let data = try? JSONSerialization.data(withJSONObject: docObject) else { return }
-            bufferDocumentChange(note, data: data)
+            bufferDocumentChange(document, data: data)
 
         case "blockAction":
             // Persisted via the following documentChanged; logged here for the
@@ -345,13 +378,13 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     // MARK: Swift -> JS
 
-    private func loadDocument(for note: Note) {
-        let document = store.loadDocument(note)
-        let json = String(decoding: BlockSerializer.encode(document), as: UTF8.self)
+    private func loadDocument(for document: EditorDocument) {
+        let node = document.load()
+        let json = String(decoding: BlockSerializer.encode(node), as: UTF8.self)
         // Encode the JSON string as a JS string literal (safe escaping).
         let literal = String(decoding: (try? JSONEncoder().encode(json)) ?? Data("\"{}\"".utf8), as: UTF8.self)
         // window.hyperview: bundled-JS wire name (see insertLink).
         webView?.evaluateJavaScript("window.hyperview.loadDocument(\(literal));", completionHandler: nil)
-        loadedNoteID = note.id
+        loadedDocumentID = document.id
     }
 }

@@ -71,7 +71,7 @@ struct NotesView: View {
                     listPane
                         .navigationTitle("Notes")
                         .navigationDestination(item: $selectedNote) { note in
-                            NoteEditorHost(note: note)
+                            noteDetail(note)
                                 .id(note.id)
                                 .inlineNavigationTitle()
                         }
@@ -162,6 +162,8 @@ struct NotesView: View {
                 Spacer()
                 Button(action: addFolder) { Image(systemName: "folder.badge.plus") }
                     .buttonStyle(.plain).help("New Folder")
+                Button(action: addDatabase) { Image(systemName: "tablecells") }
+                    .buttonStyle(.plain).help("New Database")
                 Button(action: addNote) { Image(systemName: "square.and.pencil") }
                     .buttonStyle(.plain).help("New Note")
             }
@@ -424,7 +426,7 @@ struct NotesView: View {
 
     private func noteRow(_ note: Note) -> some View {
         HStack(spacing: Theme.Spacing.sm) {
-            Text(note.emoji ?? "📝")
+            Text(note.emoji ?? (note.kind == .database ? "📊" : "📝"))
             VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
                 HStack(spacing: Theme.Spacing.xs) {
                     Text(note.title.isEmpty ? "Untitled" : note.title)
@@ -477,11 +479,7 @@ struct NotesView: View {
     @ViewBuilder
     private var editorPane: some View {
         if let selectedNote {
-            // No .id(selectedNote.id): the bridge swaps documents into the
-            // EXISTING web view (EditorBridge.show), so forcing a new view
-            // identity per note would tear down and re-create the WKWebView —
-            // a full index.html + TipTap reload — on every selection.
-            NoteEditorHost(note: selectedNote)
+            noteDetail(selectedNote)
         } else {
             VStack(spacing: Theme.Spacing.md) {
                 Image(systemName: "note.text")
@@ -498,6 +496,26 @@ struct NotesView: View {
         }
     }
 
+    /// Pages open the block editor; databases (Unifyr 1.5) open the
+    /// table/board module.
+    @ViewBuilder
+    private func noteDetail(_ note: Note) -> some View {
+        if note.kind == .database {
+            // .id: DatabaseView's @Query predicates are built in its init, so
+            // switching databases must re-create the view. (No WKWebView lives
+            // at this level — the row page creates its own — so this is cheap,
+            // unlike .id on NoteEditorHost, which would reload TipTap on every
+            // note switch.)
+            DatabaseView(note: note).id(note.id)
+        } else {
+            // No .id(note.id): the bridge swaps documents into the EXISTING
+            // web view (EditorBridge.show), so forcing a new view identity per
+            // note would tear down and re-create the WKWebView — a full
+            // index.html + TipTap reload — on every selection.
+            NoteEditorHost(note: note)
+        }
+    }
+
     // MARK: Actions
 
     private func addNote() {
@@ -510,6 +528,15 @@ struct NotesView: View {
         let folder = store.createFolder()
         try? context.save()
         selectedFolder = folder
+    }
+
+    /// A database IS a note (kind == .database), so it lives in the same
+    /// folders, lists, trash, and search as every other note.
+    private func addDatabase() {
+        let note = store.createNote(folder: selectedFolder)
+        DatabaseStore(context: context).seedNewDatabase(note)
+        try? context.save()
+        selectedNote = note
     }
 
     /// Move to Recently Deleted (reversible).

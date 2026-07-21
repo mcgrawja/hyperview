@@ -147,12 +147,14 @@ struct NotesStore {
         }
     }
 
-    /// Assets and tag links reference the note by UUID, not by relationship,
-    /// so the cascade doesn't reach them — without this they'd be orphaned
-    /// forever (and stale links inflate tag counts).
+    /// Assets, tag links, and database data (properties/rows/values, §4.3)
+    /// reference the note by UUID, not by relationship, so the cascade doesn't
+    /// reach them — without this they'd be orphaned forever (and stale links
+    /// inflate tag counts).
     private func purgeExternalReferences(of note: Note) {
         let noteID = note.id
         let noteKey = note.id.uuidString
+        DatabaseStore(context: context).purgeDatabaseData(noteID: noteID)
         if let assets = try? context.fetch(FetchDescriptor<Asset>(
             predicate: #Predicate { $0.noteID == noteID }
         )) {
