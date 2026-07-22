@@ -194,10 +194,19 @@ struct UniversalSearchView: View {
                     module: .notes,
                     icon: "note.text",
                     title: note.title.isEmpty ? "Untitled" : note.title,
-                    subtitle: note.folder?.name ?? "All Notes",
+                    subtitle: parentPageTitle(of: note) ?? "Top Level",
                     notification: (.unifyrOpenNote, ["id": note.id])
                 )
             }
+    }
+
+    /// The containing page's title (Notion-style tree; folders left the UI).
+    private func parentPageTitle(of note: Note) -> String? {
+        guard let parentID = note.parentNoteID else { return nil }
+        var descriptor = FetchDescriptor<Note>(predicate: #Predicate { $0.id == parentID })
+        descriptor.fetchLimit = 1
+        guard let parent = ((try? notesContext.fetch(descriptor)) ?? []).first else { return nil }
+        return parent.title.isEmpty ? "Untitled" : parent.title
     }
 
     private func searchMail(_ text: String) -> [SearchHit] {

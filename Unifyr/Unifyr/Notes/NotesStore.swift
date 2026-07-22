@@ -42,16 +42,23 @@ struct NotesStore {
 
     // MARK: Create
 
+    /// Create a page under `parent` (nil = top level). Notion model: pages
+    /// nest inside pages; folders are gone from the UI.
     @discardableResult
-    func createNote(title: String = "", folder: Folder? = nil) -> Note {
-        let siblings = folderNotes(folder)
+    func createPage(title: String = "", parent: Note? = nil) -> Note {
         let note = Note(
             title: title,
-            folder: folder,
-            sortKey: FractionalIndex.keyAfter(siblings.last?.sortKey)
+            sortKey: FractionalIndex.keyAfter(lastChildSortKey(parentID: parent?.id))
         )
+        note.parentNoteID = parent?.id
         context.insert(note)
         return note
+    }
+
+    /// Legacy entry point (MCP notes_create) — a top-level page now.
+    @discardableResult
+    func createNote(title: String = "", folder: Folder? = nil) -> Note {
+        createPage(title: title, parent: nil)
     }
 
     @discardableResult
@@ -113,31 +120,98 @@ struct NotesStore {
         block.note?.modifiedAt = Date()
     }
 
-    // MARK: Delete / archive
+    // MARK: Page tree
 
-    /// SOFT-delete: move the note to the trash. Everything that lists notes
-    /// filters `isTrashed` out, so this reads as a delete — but it's reversible,
-    /// which the old `context.delete` (cascading straight through the blocks)
-    /// was not.
-    func delete(_ note: Note) {
-        note.trashedFromFolderID = note.folder?.id
-        note.deletedAt = Date()
-        note.folder = nil
+    /// Every page nested under `note`, to any depth (cycle-guarded). The tree
+    /// is UUID-linked, so this is a plain walk over the passed collection.
+    func descendants(of note: Note, in all: [Note]) -> [Note] {
+        var result: [Note] = []
+        var queue: [UUID] = [note.id]
+        var seen: Set<UUID> = [note.id]
+        while let parentID = queue.first {
+            queue.removeFirst()
+            for child in all where child.parentNoteID == parentID {
+                guard seen.insert(child.id).inserted else { continue }
+                result.append(child)
+                queue.append(child.id)
+            }
+        }
+        return result
+    }
+
+    /// Re-nest a page (nil = top level). The caller guards against moving a
+    /// page into its own subtree; this re-checks anyway because a cycle in the
+    /// tree is unrecoverable-by-UI.
+    func move(_ note: Note, toParent parent: Note?, in all: [Note]) {
+        if let parent {
+            guard parent.id != note.id,
+                  !descendants(of: note, in: all).contains(where: { $0.id == parent.id })
+            else { return }
+        }
+        note.parentNoteID = parent?.id
+        note.sortKey = FractionalIndex.keyAfter(lastChildSortKey(parentID: parent?.id, excluding: note.id))
         note.modifiedAt = Date()
     }
 
-    /// Put a trashed note back where it came from, if that folder still exists.
-    func restore(_ note: Note, folders: [Folder]) {
-        note.folder = folders.first { $0.id == note.trashedFromFolderID }
-        note.deletedAt = nil
-        note.trashedFromFolderID = nil
+    /// Reorder among siblings (`offset` -1 / +1), Database-module style.
+    func movePage(_ note: Note, offset: Int, within siblings: [Note]) {
+        guard let index = siblings.firstIndex(where: { $0.id == note.id }) else { return }
+        let target = index + offset
+        guard target >= 0, target < siblings.count else { return }
+        if offset < 0 {
+            let lower = target - 1 >= 0 ? siblings[target - 1] : nil
+            note.sortKey = FractionalIndex.keyBetween(lower?.sortKey, siblings[target].sortKey)
+        } else {
+            let after = target + 1 < siblings.count ? siblings[target + 1] : nil
+            note.sortKey = FractionalIndex.keyBetween(siblings[target].sortKey, after?.sortKey)
+        }
         note.modifiedAt = Date()
+    }
+
+    func toggleFavorite(_ note: Note) {
+        note.isFavorite.toggle()
+        note.modifiedAt = Date()
+    }
+
+    // MARK: Delete / archive
+    //
+    // Deleting a page takes its WHOLE subtree to the trash (Notion semantics):
+    // children keep their parentNoteID, so restore is just clearing deletedAt
+    // back down the subtree. The trash lists only subtree ROOTS.
+
+    /// SOFT-delete the page and everything under it.
+    func delete(_ note: Note, in all: [Note]) {
+        let now = Date()
+        for page in [note] + descendants(of: note, in: all) {
+            page.deletedAt = now
+            page.modifiedAt = now
+        }
+    }
+
+    /// Restore the page's subtree. If its old parent is gone or still in the
+    /// trash, it comes back at the top level rather than staying invisible.
+    func restore(_ note: Note, in all: [Note]) {
+        if let parentID = note.parentNoteID {
+            let parent = all.first { $0.id == parentID }
+            if parent == nil || parent?.isTrashed == true {
+                note.parentNoteID = nil
+            }
+        }
+        for page in [note] + descendants(of: note, in: all) {
+            page.deletedAt = nil
+            page.trashedFromFolderID = nil
+            page.modifiedAt = Date()
+        }
     }
 
     /// The real, irreversible delete — only ever reached from the trash.
-    func deletePermanently(_ note: Note) {
-        purgeExternalReferences(of: note)
-        context.delete(note) // cascades to blocks (§4 delete rule)
+    /// Takes the subtree with it (children of a purged root would otherwise
+    /// dangle forever, invisible).
+    func deletePermanently(_ note: Note, in all: [Note]) {
+        for page in descendants(of: note, in: all) + [note] {
+            purgeExternalReferences(of: page)
+            context.delete(page) // cascades to blocks (§4 delete rule)
+        }
     }
 
     func emptyTrash(_ notes: [Note]) {
@@ -174,19 +248,18 @@ struct NotesStore {
 
     // MARK: - Private lookups
 
-    // Only the LAST sibling's sort key is ever needed (for keyAfter), so both
+    // Only the LAST sibling's sort key is ever needed (for keyAfter), so these
     // lookups push filter+sort+limit into the store instead of fetching the
     // whole table and narrowing in Swift.
 
-    private func folderNotes(_ folder: Folder?) -> [Note] {
-        let folderID = folder?.id
+    private func lastChildSortKey(parentID: UUID?, excluding excludedID: UUID? = nil) -> String? {
         var descriptor = FetchDescriptor<Note>(
-            predicate: #Predicate { $0.folder?.id == folderID && !$0.isArchived },
+            predicate: #Predicate { $0.parentNoteID == parentID && $0.deletedAt == nil && !$0.isArchived },
             sortBy: [SortDescriptor(\.sortKey, order: .reverse)]
         )
-        descriptor.fetchLimit = 1
+        descriptor.fetchLimit = 2
         let last = (try? context.fetch(descriptor)) ?? []
-        return last.reversed()
+        return last.first { $0.id != excludedID }?.sortKey
     }
 
     private func folders(parentID: UUID?) -> [Folder] {

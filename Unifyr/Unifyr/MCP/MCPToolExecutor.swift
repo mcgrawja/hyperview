@@ -423,11 +423,13 @@ final class MCPToolExecutor {
         return try json(["archived": archived, "title": note.title])
     }
 
-    /// Soft-delete: moves the note to Recently Deleted (recoverable).
+    /// Soft-delete: moves the page (and its sub-pages) to Recently Deleted
+    /// (recoverable).
     private func notesDelete(id: UUID) throws -> String {
-        guard let note = try allNotes().first(where: { $0.id == id }) else { throw MCPError("Note not found") }
+        let all = try allNotes()
+        guard let note = all.first(where: { $0.id == id }) else { throw MCPError("Note not found") }
         let title = note.title
-        NotesStore(context: notesContext).delete(note)
+        NotesStore(context: notesContext).delete(note, in: all)
         try notesContext.save()
         return try json(["deleted": true, "title": title, "note": "Moved to Recently Deleted; can be restored in Notes."])
     }

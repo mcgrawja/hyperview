@@ -51,6 +51,22 @@ final class Note {
     /// Database property definitions, unused in v1.
     var schemaJSON: Data? = nil
 
+    // MARK: Notion-style pages (2026-07-22 refocus — additive, seeder v5)
+    //
+    // The Notes module became a Notion clone: pages nest inside pages and
+    // folders left the UI (the Folder entity stays in the schema — production
+    // CloudKit is additive-only — just unused).
+
+    /// The page this page nests under; nil = top level. UUID convention like
+    /// `Block.parentBlockID` (never a relationship) so partial syncs degrade
+    /// to orphans, not broken graphs.
+    var parentNoteID: UUID? = nil
+    /// Pinned to the sidebar's Favorites section.
+    var isFavorite: Bool = false
+    /// JSON grab-bag for future page presentation (cover, wide layout, …) —
+    /// §10 risk #2 says prefer a JSON field over speculative schema fields.
+    var pagePropsJSON: Data? = nil
+
     init(
         title: String = "",
         emoji: String? = nil,

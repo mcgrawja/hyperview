@@ -25,7 +25,9 @@ nonisolated enum CloudKitSchemaSeeder {
     // v4: Note.deletedAt / Note.trashedFromFolderID (the Notes trash). New
     // FIELDS on an existing record type still need re-seeding, and still need a
     // production deploy before an archived build will sync them.
-    private static let flag = "cloudkit.schemaInitialized.v4"
+    // v5: Note.parentNoteID / Note.isFavorite / Note.pagePropsJSON (the
+    // Notion-style page tree, 2026-07-22).
+    private static let flag = "cloudkit.schemaInitialized.v5"
 
     /// One-shot, off the main thread (the upload can take a little while).
     static func initializeIfNeeded() {

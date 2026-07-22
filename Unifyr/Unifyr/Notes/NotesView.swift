@@ -2,9 +2,12 @@
 //  NotesView.swift
 //  Unifyr
 //
-//  Phase 2 Notes module: folder sidebar + note list + editor detail. The
-//  Notion-lite store (D4) — no Apple Notes. Ordering uses String sort keys
-//  (§4.1). Mutations go through NotesStore; lists are @Query-driven.
+//  The Notes module, Notion-style (2026-07-22 refocus): ONE page tree — pages
+//  nest inside pages (`Note.parentNoteID`), databases are pages, folders are
+//  gone from the UI. Left: favorites + tree + tags + trash. Right: the
+//  selected page (breadcrumbs, icon, title, sub-pages, block editor or
+//  database). Ordering uses String sort keys (§4.1); mutations go through
+//  NotesStore; lists are @Query-driven.
 //
 
 import SwiftUI
@@ -15,21 +18,17 @@ import UniformTypeIdentifiers
 struct NotesView: View {
     @Environment(\.modelContext) private var context
 
-    @Query(sort: \Folder.sortKey) private var folders: [Folder]
     @Query(sort: \Note.sortKey) private var notes: [Note]
     @Query(sort: \HVTag.name) private var allTags: [HVTag]
     @Query private var tagLinks: [HVTagLink]
-    @State private var selectedTagID: UUID?
 
-    @State private var selectedFolder: Folder?
     @State private var selectedNote: Note?
-    /// Recently Deleted is a mode, not a folder — a trashed note has no folder.
+    @State private var selectedTagID: UUID?
+    /// Recently Deleted is a mode, not a page — a trashed page shows nowhere else.
     @State private var showingTrash = false
-    /// Collapsed folder ids, comma-separated (see the Folder collapse section).
-    @AppStorage("notes.collapsedFolders") private var collapsedFoldersRaw = ""
+    /// Collapsed page ids, comma-separated — a per-device view preference.
+    @AppStorage("notes.collapsedPages") private var collapsedPagesRaw = ""
     @State private var showingNoteLinkPicker = false
-    @State private var renamingFolder: Folder?
-    @State private var renameText = ""
     @Environment(\.isCompactLayout) private var isCompact
     // iOS file links: the editor can't open a modal panel, so this view owns
     // the document picker and the Quick Look preview.
@@ -38,40 +37,38 @@ struct NotesView: View {
 
     private var store: NotesStore { NotesStore(context: context) }
 
-    /// Notes in the trash, newest first — shown only in Recently Deleted.
+    private var noteByID: [UUID: Note] {
+        Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0) })
+    }
+
+    /// Trashed pages, newest first — shown only in Recently Deleted.
     private var trashedNotes: [Note] {
         notes.filter(\.isTrashed).sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
     }
 
-    private var visibleNotes: [Note] {
-        if showingTrash { return trashedNotes }
+    /// Deleting takes the subtree, so the trash shows only subtree ROOTS —
+    /// restoring one brings its children back with it.
+    private var trashRoots: [Note] {
+        let byID = noteByID
+        return trashedNotes.filter { note in
+            guard let parentID = note.parentNoteID, let parent = byID[parentID] else { return true }
+            return !parent.isTrashed
+        }
+    }
 
-        var result = notes.filter { note in
-            // A trashed note is invisible everywhere but the trash.
-            !note.isTrashed
-                && !note.isArchived
-                && (selectedFolder == nil || note.folder?.id == selectedFolder?.id)
-        }
-        if let selectedTagID {
-            let keys = Set(
-                tagLinks
-                    .filter { $0.tagID == selectedTagID && $0.itemKind == TagKind.note }
-                    .map(\.itemKey)
-            )
-            result = result.filter { keys.contains($0.id.uuidString) }
-        }
-        return result
+    private var favorites: [Note] {
+        notes.filter { $0.isFavorite && !$0.isTrashed && !$0.isArchived }
     }
 
     var body: some View {
         Group {
             if isCompact {
-                // iPhone: note list, drill into the editor.
+                // iPhone: page tree, drill into the page.
                 NavigationStack {
                     listPane
                         .navigationTitle("Notes")
                         .navigationDestination(item: $selectedNote) { note in
-                            noteDetail(note)
+                            pageHost(note)
                                 .id(note.id)
                                 .inlineNavigationTitle()
                         }
@@ -80,7 +77,7 @@ struct NotesView: View {
                 PlatformHSplit {
                     listPane
                         .frame(minWidth: 240, idealWidth: 280, maxWidth: 360)
-                    editorPane
+                    detailPane
                         .frame(minWidth: 380)
                 }
             }
@@ -104,21 +101,6 @@ struct NotesView: View {
             if let info = DeepLink.take(.unifyrOpenNote), let id = info["id"] as? UUID {
                 openNoteByID(id)
             }
-        }
-        .alert("Rename Folder", isPresented: .init(
-            get: { renamingFolder != nil },
-            set: { if !$0 { renamingFolder = nil } }
-        )) {
-            TextField("Folder name", text: $renameText)
-            Button("Rename") {
-                let trimmed = renameText.trimmingCharacters(in: .whitespaces)
-                if let renamingFolder, !trimmed.isEmpty {
-                    renamingFolder.name = trimmed
-                    try? context.save()
-                }
-                renamingFolder = nil
-            }
-            Button("Cancel", role: .cancel) { renamingFolder = nil }
         }
         .sheet(isPresented: $showingNoteLinkPicker) {
             NoteLinkPicker(notes: notes.filter { !$0.isArchived && !$0.isTrashed && $0.id != selectedNote?.id }) { note in
@@ -153,30 +135,49 @@ struct NotesView: View {
         .quickLookPreview($previewURL)
     }
 
-    // MARK: List pane
+    // MARK: List pane (the page tree)
 
     private var listPane: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: Theme.Spacing.sm) {
                 Text("Notes").font(Theme.Font.cardTitle)
                 Spacer()
-                Button(action: addFolder) { Image(systemName: "folder.badge.plus") }
-                    .buttonStyle(.plain).help("New Folder")
-                Button(action: addDatabase) { Image(systemName: "tablecells") }
+                Button(action: { addDatabase(parent: nil) }) { Image(systemName: "tablecells") }
                     .buttonStyle(.plain).help("New Database")
-                Button(action: addNote) { Image(systemName: "square.and.pencil") }
-                    .buttonStyle(.plain).help("New Note")
+                Button(action: { addPage(parent: nil) }) { Image(systemName: "square.and.pencil") }
+                    .buttonStyle(.plain).help("New Page")
             }
             .padding(Theme.Spacing.md)
 
             List(selection: $selectedNote) {
-                Section("Folders") {
-                    folderRow(nil, label: "All Notes", systemImage: "tray.full")
-                    ForEach(flattenedFolders, id: \.folder.id) { entry in
-                        folderRow(entry.folder, label: entry.folder.name, systemImage: "folder", emoji: entry.folder.emoji)
-                            .padding(.leading, CGFloat(entry.depth) * 14)
+                if !favorites.isEmpty {
+                    Section("Favorites") {
+                        ForEach(favorites) { note in
+                            pageRow(note, depth: 0, showsChevron: false).tag(note)
+                        }
                     }
                 }
+
+                Section("Pages") {
+                    if let selectedTagID {
+                        // A tag filters the tree down to a flat matching list.
+                        ForEach(taggedNotes(selectedTagID)) { note in
+                            pageRow(note, depth: 0, showsChevron: false).tag(note)
+                        }
+                    } else {
+                        ForEach(flattenedPages, id: \.note.id) { entry in
+                            pageRow(entry.note, depth: entry.depth, showsChevron: true).tag(entry.note)
+                        }
+                        Button {
+                            addPage(parent: nil)
+                        } label: {
+                            Label("New Page", systemImage: "plus")
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
                 if !allTags.isEmpty {
                     Section("Tags") {
                         ForEach(allTags) { tag in
@@ -199,17 +200,18 @@ struct NotesView: View {
                         }
                     }
                 }
-                if !trashedNotes.isEmpty {
+
+                if !trashRoots.isEmpty {
                     Section {
                         Button {
                             showingTrash.toggle()
-                            if showingTrash { selectedFolder = nil; selectedTagID = nil }
+                            if showingTrash { selectedTagID = nil }
                         } label: {
                             HStack(spacing: Theme.Spacing.sm) {
                                 Image(systemName: "trash")
                                 Text("Recently Deleted")
                                 Spacer()
-                                Text("\(trashedNotes.count)")
+                                Text("\(trashRoots.count)")
                                     .font(Theme.Font.cardCaption)
                                     .foregroundStyle(Theme.Palette.textSecondary)
                             }
@@ -217,18 +219,12 @@ struct NotesView: View {
                         }
                         .buttonStyle(.plain)
                         .listRowBackground(showingTrash ? Theme.Palette.primary.softFill(0.12) : Color.clear)
-                    }
-                }
-                Section {
-                    ForEach(visibleNotes) { note in
-                        noteRow(note).tag(note)
-                    }
-                } header: {
-                    HStack {
-                        Text(sectionTitle)
+
                         if showingTrash {
-                            Spacer()
-                            Button("Empty") {
+                            ForEach(trashRoots) { note in
+                                trashRow(note)
+                            }
+                            Button("Empty Trash") {
                                 if selectedNote?.isTrashed == true { selectedNote = nil }
                                 store.emptyTrash(trashedNotes)
                                 try? context.save()
@@ -246,249 +242,226 @@ struct NotesView: View {
         .background(Theme.Palette.surface)
     }
 
-    private var sectionTitle: String {
-        if showingTrash { return "Recently Deleted" }
-        return selectedFolder?.name ?? "All Notes"
+    // MARK: Tree flattening
+
+    private var collapsedPages: Set<UUID> {
+        Set(collapsedPagesRaw.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
     }
 
-    // MARK: Folder collapse
-    //
-    // Kept in UserDefaults, not on the Folder model: which folders YOU have
-    // twisted open is a per-device view preference, and putting it on the model
-    // would mean another CloudKit field, another schema deploy, and your Mac
-    // collapsing folders on your phone.
-
-    private var collapsedFolders: Set<UUID> {
-        Set(collapsedFoldersRaw.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
+    private func isCollapsed(_ note: Note) -> Bool {
+        collapsedPages.contains(note.id)
     }
 
-    private func isCollapsed(_ folder: Folder) -> Bool {
-        collapsedFolders.contains(folder.id)
-    }
-
-    private func hasChildren(_ folder: Folder) -> Bool {
-        folders.contains { $0.parentFolderID == folder.id }
-    }
-
-    private func toggleCollapsed(_ folder: Folder) {
-        var collapsed = collapsedFolders
-        if collapsed.contains(folder.id) {
-            collapsed.remove(folder.id)
+    private func toggleCollapsed(_ note: Note) {
+        var collapsed = collapsedPages
+        if collapsed.contains(note.id) {
+            collapsed.remove(note.id)
         } else {
-            collapsed.insert(folder.id)
+            collapsed.insert(note.id)
         }
-        collapsedFoldersRaw = collapsed.map(\.uuidString).joined(separator: ",")
+        collapsedPagesRaw = collapsed.map(\.uuidString).joined(separator: ",")
     }
 
-    /// Open a specific note (deep link / in-editor note link), clearing the
-    /// folder filter if the note lives elsewhere.
-    private func openNoteByID(_ id: UUID) {
-        guard let target = notes.first(where: { $0.id == id }) else { return }
-        if selectedFolder != nil, target.folder?.id != selectedFolder?.id {
-            selectedFolder = nil
-        }
-        selectedNote = target
+    /// Live children of a page (or the top level, for nil).
+    private func children(of parentID: UUID?) -> [Note] {
+        notes.filter { $0.parentNoteID == parentID && !$0.isTrashed && !$0.isArchived }
     }
 
-    /// The folder tree flattened depth-first (indentation = depth). A collapsed
-    /// folder still shows — its descendants don't.
-    private var flattenedFolders: [(folder: Folder, depth: Int)] {
-        func children(of parentID: UUID?) -> [Folder] {
-            folders.filter { $0.parentFolderID == parentID }
-        }
-        let collapsed = collapsedFolders
-        var result: [(Folder, Int)] = []
+    private func hasChildren(_ note: Note) -> Bool {
+        notes.contains { $0.parentNoteID == note.id && !$0.isTrashed && !$0.isArchived }
+    }
+
+    /// The page tree flattened depth-first (indentation = depth). A collapsed
+    /// page still shows — its descendants don't. Pages whose parent vanished
+    /// in a partial sync surface at the top level rather than disappearing.
+    private var flattenedPages: [(note: Note, depth: Int)] {
+        let collapsed = collapsedPages
+        var result: [(Note, Int)] = []
         func walk(_ parentID: UUID?, depth: Int) {
-            guard depth < 8 else { return } // cycle guard
-            for folder in children(of: parentID) {
-                result.append((folder, depth))
-                guard !collapsed.contains(folder.id) else { continue }
-                walk(folder.id, depth: depth + 1)
+            guard depth < 16 else { return } // cycle guard
+            for note in children(of: parentID) {
+                result.append((note, depth))
+                guard !collapsed.contains(note.id) else { continue }
+                walk(note.id, depth: depth + 1)
             }
         }
         walk(nil, depth: 0)
-        // Orphans (parent deleted elsewhere) still show, at top level. But a
-        // folder that's merely HIDDEN under a collapsed ancestor is not an
-        // orphan — re-walk ignoring collapse to tell the two apart, else
-        // collapsing a folder dumps its subfolders at the bottom of the list.
+        // Orphan rescue — but a page merely HIDDEN under a collapsed ancestor
+        // is not an orphan, so re-walk ignoring collapse to tell them apart.
         var reachable = Set<UUID>()
         func markReachable(_ parentID: UUID?, depth: Int) {
-            guard depth < 8 else { return } // cycle guard
-            for folder in children(of: parentID) {
-                reachable.insert(folder.id)
-                markReachable(folder.id, depth: depth + 1)
+            guard depth < 16 else { return }
+            for note in children(of: parentID) {
+                reachable.insert(note.id)
+                markReachable(note.id, depth: depth + 1)
             }
         }
         markReachable(nil, depth: 0)
-        for folder in folders where !reachable.contains(folder.id) {
-            result.append((folder, 0))
+        for note in notes
+        where !note.isTrashed && !note.isArchived && !reachable.contains(note.id) {
+            result.append((note, 0))
         }
-        return result.map { (folder: $0.0, depth: $0.1) }
+        return result.map { (note: $0.0, depth: $0.1) }
     }
 
-    /// Folders that may become `folder`'s parent (not itself, not a descendant).
-    private func validParents(for folder: Folder) -> [Folder] {
-        var descendants = Set<UUID>()
-        func mark(_ id: UUID) {
-            descendants.insert(id)
-            for child in folders where child.parentFolderID == id {
-                mark(child.id)
-            }
-        }
-        mark(folder.id)
-        return folders.filter { !descendants.contains($0.id) }
+    private func taggedNotes(_ tagID: UUID) -> [Note] {
+        let keys = Set(
+            tagLinks
+                .filter { $0.tagID == tagID && $0.itemKind == TagKind.note }
+                .map(\.itemKey)
+        )
+        return notes.filter { !$0.isTrashed && !$0.isArchived && keys.contains($0.id.uuidString) }
     }
 
-    private func folderRow(_ folder: Folder?, label: String, systemImage: String, emoji: String? = nil) -> some View {
+    /// Pages that may become `note`'s parent (not itself, not a descendant,
+    /// not a database — rows are a database's children, not pages).
+    private func validParents(for note: Note) -> [Note] {
+        var excluded = Set(store.descendants(of: note, in: notes).map(\.id))
+        excluded.insert(note.id)
+        return notes.filter {
+            !excluded.contains($0.id) && !$0.isTrashed && !$0.isArchived && $0.kind == .page
+        }
+    }
+
+    /// Open a specific page (deep link / in-editor note link), expanding its
+    /// ancestors so the selection is actually visible in the tree.
+    private func openNoteByID(_ id: UUID) {
+        guard let target = notes.first(where: { $0.id == id }) else { return }
+        var collapsed = collapsedPages
+        var cursor = target.parentNoteID
+        var hops = 0
+        while let parentID = cursor, hops < 16 {
+            collapsed.remove(parentID)
+            cursor = noteByID[parentID]?.parentNoteID
+            hops += 1
+        }
+        collapsedPagesRaw = collapsed.map(\.uuidString).joined(separator: ",")
+        selectedTagID = nil
+        selectedNote = target
+    }
+
+    // MARK: Rows
+
+    private func pageRow(_ note: Note, depth: Int, showsChevron: Bool) -> some View {
         HStack(spacing: Theme.Spacing.xs) {
-            // The twist-down sits OUTSIDE the row's button: a button nested in
-            // another button's label doesn't reliably get the click.
-            if let folder, hasChildren(folder) {
+            if showsChevron, hasChildren(note) {
                 Button {
-                    toggleCollapsed(folder)
+                    toggleCollapsed(note)
                 } label: {
-                    Image(systemName: isCollapsed(folder) ? "chevron.right" : "chevron.down")
+                    Image(systemName: isCollapsed(note) ? "chevron.right" : "chevron.down")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(Theme.Palette.textSecondary)
                         .frame(width: 12, height: 12)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-            } else {
-                // Keeps childless folders' names aligned with their siblings'.
+            } else if showsChevron {
+                // Keeps childless pages' titles aligned with their siblings'.
                 Color.clear.frame(width: 12, height: 12)
             }
 
-            Button {
-                selectedFolder = folder
-                showingTrash = false
-            } label: {
-                HStack(spacing: Theme.Spacing.sm) {
-                    if let emoji { Text(emoji) } else { Image(systemName: systemImage) }
-                    Text(label).lineLimit(1)
-                    Spacer()
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            Text(note.emoji ?? (note.kind == .database ? "📊" : "📄"))
+            Text(note.title.isEmpty ? "Untitled" : note.title)
+                .font(Theme.Font.cardBody)
+                .lineLimit(1)
+            TagDots(kind: TagKind.note, key: note.id.uuidString)
+            Spacer(minLength: 0)
         }
-        .listRowBackground(
-            (!showingTrash && selectedFolder?.id == folder?.id)
-                ? Theme.Palette.primary.opacity(0.12)
-                : Color.clear
-        )
+        .padding(.leading, CGFloat(depth) * 14)
         .contextMenu {
-            if let folder {
-                Button("Rename…") {
-                    renameText = folder.name
-                    renamingFolder = folder
+            if note.kind == .page {
+                Button("New Sub-page") { addPage(parent: note) }
+                Button("New Sub-database") { addDatabase(parent: note) }
+            }
+            Button(note.isFavorite ? "Remove from Favorites" : "Add to Favorites") {
+                store.toggleFavorite(note)
+                try? context.save()
+            }
+            Menu("Move To") {
+                if note.parentNoteID != nil {
+                    Button("Top Level") { move(note, to: nil) }
                 }
-                Button("New Subfolder") {
-                    let child = store.createFolder(parent: folder)
-                    try? context.save()
-                    // Twist the parent open, or the folder you just made is
-                    // invisible and it looks like nothing happened.
-                    if isCollapsed(folder) { toggleCollapsed(folder) }
-                    selectedFolder = child
-                }
-                Menu("Move To") {
-                    if folder.parentFolderID != nil {
-                        Button("Top Level") {
-                            folder.parentFolderID = nil
-                            try? context.save()
-                        }
-                    }
-                    ForEach(validParents(for: folder)) { parent in
-                        Button(parent.name) {
-                            folder.parentFolderID = parent.id
-                            try? context.save()
-                        }
-                    }
-                }
-                Divider()
-                Button("Delete Folder", role: .destructive) {
-                    deleteFolder(folder)
+                ForEach(validParents(for: note)) { parent in
+                    Button(pageLabel(parent)) { move(note, to: parent) }
                 }
             }
-        }
-    }
-
-    /// Deleting a folder re-parents its subfolders to its parent; its notes
-    /// fall back to All Notes (relationship nullifies, §4.1).
-    private func deleteFolder(_ folder: Folder) {
-        for child in folders where child.parentFolderID == folder.id {
-            child.parentFolderID = folder.parentFolderID
-        }
-        if selectedFolder?.id == folder.id { selectedFolder = nil }
-        context.delete(folder)
-        try? context.save()
-    }
-
-    private func noteRow(_ note: Note) -> some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            Text(note.emoji ?? (note.kind == .database ? "📊" : "📝"))
-            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
-                HStack(spacing: Theme.Spacing.xs) {
-                    Text(note.title.isEmpty ? "Untitled" : note.title)
-                        .font(Theme.Font.cardBody)
-                        .lineLimit(1)
-                    TagDots(kind: TagKind.note, key: note.id.uuidString)
-                }
-                Text(subtitle(for: note))
-                    .font(Theme.Font.cardCaption)
-                    .foregroundStyle(Theme.Palette.textSecondary)
+            moveUpDownButtons(note)
+            Divider()
+            TagMenu(kind: TagKind.note, key: note.id.uuidString)
+            Button(PinStore.isPinned(note: note.id) ? "Unpin from Dashboard" : "Pin to Dashboard") {
+                PinStore.toggle(note: note.id)
             }
-        }
-        .contextMenu {
-            if note.isTrashed {
-                Button("Put Back") { restore(note) }
-                Divider()
-                Button("Delete Permanently", role: .destructive) { deleteForever(note) }
-            } else {
-                TagMenu(kind: TagKind.note, key: note.id.uuidString)
-                Button(PinStore.isPinned(note: note.id) ? "Unpin from Dashboard" : "Pin to Dashboard") {
-                    PinStore.toggle(note: note.id)
-                }
-                Divider()
-                Button("Delete", role: .destructive) { delete(note) }
-            }
+            Divider()
+            Button("Delete", role: .destructive) { delete(note) }
         }
         // Swipe is the phone idiom; a context menu is a long-press away.
         .swipeActions(edge: .trailing) {
-            if note.isTrashed {
-                Button("Delete", role: .destructive) { deleteForever(note) }
-                Button("Put Back") { restore(note) }
-                    .tint(Theme.Palette.primary)
-            } else {
-                Button("Delete", role: .destructive) { delete(note) }
-            }
+            Button("Delete", role: .destructive) { delete(note) }
         }
     }
-
-    /// Trashed notes say WHEN they were deleted — that's the thing you're
-    /// looking for in a trash, not when you last edited them.
-    private func subtitle(for note: Note) -> String {
-        if let deletedAt = note.deletedAt {
-            return "Deleted \(deletedAt.formatted(date: .abbreviated, time: .shortened))"
-        }
-        return note.modifiedAt.formatted(date: .abbreviated, time: .shortened)
-    }
-
-    // MARK: Editor pane
 
     @ViewBuilder
-    private var editorPane: some View {
+    private func moveUpDownButtons(_ note: Note) -> some View {
+        let siblings = children(of: note.parentNoteID)
+        Button("Move Up") {
+            store.movePage(note, offset: -1, within: siblings)
+            try? context.save()
+        }
+        .disabled(siblings.first?.id == note.id)
+        Button("Move Down") {
+            store.movePage(note, offset: 1, within: siblings)
+            try? context.save()
+        }
+        .disabled(siblings.last?.id == note.id)
+    }
+
+    private func trashRow(_ note: Note) -> some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Text(note.emoji ?? (note.kind == .database ? "📊" : "📄"))
+            VStack(alignment: .leading, spacing: Theme.Spacing.xxs) {
+                Text(note.title.isEmpty ? "Untitled" : note.title)
+                    .font(Theme.Font.cardBody)
+                    .lineLimit(1)
+                if let deletedAt = note.deletedAt {
+                    Text("Deleted \(deletedAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(Theme.Font.cardCaption)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                }
+            }
+            Spacer()
+        }
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Put Back") { restore(note) }
+            Divider()
+            Button("Delete Permanently", role: .destructive) { deleteForever(note) }
+        }
+        .swipeActions(edge: .trailing) {
+            Button("Delete", role: .destructive) { deleteForever(note) }
+            Button("Put Back") { restore(note) }
+                .tint(Theme.Palette.primary)
+        }
+    }
+
+    private func pageLabel(_ note: Note) -> String {
+        "\(note.emoji ?? (note.kind == .database ? "📊" : "📄")) \(note.title.isEmpty ? "Untitled" : note.title)"
+    }
+
+    // MARK: Detail pane
+
+    @ViewBuilder
+    private var detailPane: some View {
         if let selectedNote {
-            noteDetail(selectedNote)
+            pageHost(selectedNote)
         } else {
             VStack(spacing: Theme.Spacing.md) {
-                Image(systemName: "note.text")
+                Image(systemName: "doc.text")
                     .font(.system(size: 42))
                     .foregroundStyle(Theme.Palette.textSecondary)
-                Text("Select or create a note")
+                Text("Select or create a page")
                     .font(Theme.Font.cardTitle)
                     .foregroundStyle(Theme.Palette.textPrimary)
-                Button("New Note", action: addNote)
+                Button("New Page") { addPage(parent: nil) }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.Palette.primary)
             }
@@ -496,71 +469,278 @@ struct NotesView: View {
         }
     }
 
-    /// Pages open the block editor; databases (Unifyr 1.5) open the
-    /// table/board module.
-    @ViewBuilder
-    private func noteDetail(_ note: Note) -> some View {
-        if note.kind == .database {
-            // .id: DatabaseView's @Query predicates are built in its init, so
-            // switching databases must re-create the view. (No WKWebView lives
-            // at this level — the row page creates its own — so this is cheap,
-            // unlike .id on NoteEditorHost, which would reload TipTap on every
-            // note switch.)
-            DatabaseView(note: note).id(note.id)
-        } else {
-            // No .id(note.id): the bridge swaps documents into the EXISTING
-            // web view (EditorBridge.show), so forcing a new view identity per
-            // note would tear down and re-create the WKWebView — a full
-            // index.html + TipTap reload — on every selection.
-            NoteEditorHost(note: note)
-        }
+    private func pageHost(_ note: Note) -> some View {
+        PageHost(
+            note: note,
+            allNotes: notes,
+            open: { openNoteByID($0.id) },
+            addSubPage: { parent, database in
+                database ? addDatabase(parent: parent) : addPage(parent: parent)
+            }
+        )
     }
 
     // MARK: Actions
 
-    private func addNote() {
-        let note = store.createNote(folder: selectedFolder)
+    private func addPage(parent: Note?) {
+        let note = store.createPage(parent: parent)
         try? context.save()
+        if let parent, isCollapsed(parent) { toggleCollapsed(parent) }
+        selectedTagID = nil
         selectedNote = note
     }
 
-    private func addFolder() {
-        let folder = store.createFolder()
-        try? context.save()
-        selectedFolder = folder
-    }
-
-    /// A database IS a note (kind == .database), so it lives in the same
-    /// folders, lists, trash, and search as every other note.
-    private func addDatabase() {
-        let note = store.createNote(folder: selectedFolder)
+    /// A database IS a page (kind == .database), just seeded with a schema.
+    private func addDatabase(parent: Note?) {
+        let note = store.createPage(parent: parent)
         DatabaseStore(context: context).seedNewDatabase(note)
         try? context.save()
+        if let parent, isCollapsed(parent) { toggleCollapsed(parent) }
+        selectedTagID = nil
         selectedNote = note
     }
 
-    /// Move to Recently Deleted (reversible).
+    private func move(_ note: Note, to parent: Note?) {
+        store.move(note, toParent: parent, in: notes)
+        try? context.save()
+        if let parent, isCollapsed(parent) { toggleCollapsed(parent) }
+    }
+
+    /// Move the page AND its subtree to Recently Deleted (reversible).
     private func delete(_ note: Note) {
-        if selectedNote?.id == note.id { selectedNote = nil }
-        store.delete(note)
+        if let selectedNote,
+           selectedNote.id == note.id
+            || store.descendants(of: note, in: notes).contains(where: { $0.id == selectedNote.id }) {
+            self.selectedNote = nil
+        }
+        store.delete(note, in: notes)
         try? context.save()
     }
 
     private func restore(_ note: Note) {
-        store.restore(note, folders: folders)
+        store.restore(note, in: notes)
         try? context.save()
-        if trashedNotes.isEmpty { showingTrash = false }
+        if trashRoots.isEmpty { showingTrash = false }
     }
 
     private func deleteForever(_ note: Note) {
         if selectedNote?.id == note.id { selectedNote = nil }
-        store.deletePermanently(note)
+        store.deletePermanently(note, in: notes)
         try? context.save()
-        if trashedNotes.isEmpty { showingTrash = false }
+        if trashRoots.isEmpty { showingTrash = false }
     }
 }
 
-/// "Link to note" picker: searchable list of notes; choosing one posts the
+// MARK: - Page host (breadcrumbs · icon · title · sub-pages · content)
+
+private struct PageHost: View {
+    @Environment(\.modelContext) private var context
+    @Bindable var note: Note
+    let allNotes: [Note]
+    let open: (Note) -> Void
+    /// (parent, isDatabase)
+    let addSubPage: (Note, Bool) -> Void
+
+    @State private var showingCheatsheet = false
+    @State private var showingIconPicker = false
+
+    private var byID: [UUID: Note] {
+        Dictionary(uniqueKeysWithValues: allNotes.map { ($0.id, $0) })
+    }
+
+    /// Ancestors, outermost first (cycle-guarded).
+    private var breadcrumbs: [Note] {
+        var chain: [Note] = []
+        var cursor = note.parentNoteID
+        var hops = 0
+        while let parentID = cursor, hops < 16, let parent = byID[parentID] {
+            chain.append(parent)
+            cursor = parent.parentNoteID
+            hops += 1
+        }
+        return chain.reversed()
+    }
+
+    private var subPages: [Note] {
+        allNotes.filter { $0.parentNoteID == note.id && !$0.isTrashed && !$0.isArchived }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !breadcrumbs.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        ForEach(breadcrumbs) { ancestor in
+                            Button {
+                                open(ancestor)
+                            } label: {
+                                Text("\(ancestor.emoji ?? (ancestor.kind == .database ? "📊" : "📄")) \(ancestor.title.isEmpty ? "Untitled" : ancestor.title)")
+                                    .font(Theme.Font.cardCaption)
+                                    .foregroundStyle(Theme.Palette.textSecondary)
+                                    .lineLimit(1)
+                            }
+                            .buttonStyle(.plain)
+                            Text("/")
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                        }
+                    }
+                }
+                .padding(.horizontal, Theme.Spacing.xl)
+                .padding(.top, Theme.Spacing.md)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
+                Button {
+                    showingIconPicker = true
+                } label: {
+                    Text(note.emoji ?? (note.kind == .database ? "📊" : "📄"))
+                        .font(.system(size: 30))
+                        .opacity(note.emoji == nil ? 0.45 : 1)
+                }
+                .buttonStyle(.plain)
+                .help("Change icon")
+                .popover(isPresented: $showingIconPicker) {
+                    EmojiIconPicker(emoji: $note.emoji)
+                }
+
+                TextField("Untitled", text: $note.title)
+                    .textFieldStyle(.plain)
+                    .font(Theme.Font.dashboardTitle)
+                    .onChange(of: note.title) { _, _ in note.modifiedAt = Date() }
+
+                if note.kind == .page {
+                    Button {
+                        showingCheatsheet.toggle()
+                    } label: {
+                        Image(systemName: "questionmark.circle")
+                            .font(.title3)
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Markdown shortcuts")
+                    .popover(isPresented: $showingCheatsheet, arrowEdge: .top) {
+                        MarkdownCheatsheet()
+                    }
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.top, breadcrumbs.isEmpty ? Theme.Spacing.lg : Theme.Spacing.sm)
+            .padding(.bottom, Theme.Spacing.sm)
+
+            // Sub-pages, Notion-style, right under the title. (Inline sub-page
+            // BLOCKS are a later phase — this strip is the navigation.)
+            if note.kind == .page, !subPages.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        ForEach(subPages) { child in
+                            Button {
+                                open(child)
+                            } label: {
+                                Text("\(child.emoji ?? (child.kind == .database ? "📊" : "📄")) \(child.title.isEmpty ? "Untitled" : child.title)")
+                                    .font(Theme.Font.cardCaption)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, Theme.Spacing.sm)
+                                    .padding(.vertical, Theme.Spacing.xs)
+                                    .background(Theme.Palette.surfaceRaised, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        Menu {
+                            Button("New Sub-page") { addSubPage(note, false) }
+                            Button("New Sub-database") { addSubPage(note, true) }
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                                .padding(Theme.Spacing.xs)
+                        }
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                    }
+                }
+                .padding(.horizontal, Theme.Spacing.xl)
+                .padding(.bottom, Theme.Spacing.sm)
+            }
+
+            if note.kind == .database {
+                // .id: DatabaseView's @Query predicates are built in its init,
+                // so switching databases must re-create the view.
+                DatabaseView(note: note).id(note.id)
+            } else {
+                // No .id(note.id): the bridge swaps documents into the EXISTING
+                // web view (EditorBridge.show) — re-creating the WKWebView per
+                // note would reload TipTap on every selection.
+                NoteEditorWebView(note: note, store: NotesStore(context: context))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(Theme.Palette.background)
+    }
+}
+
+// MARK: - Emoji icon picker
+
+/// A small curated grid + free-form field. (The system emoji palette can't be
+/// summoned into a popover reliably on both platforms; this covers the common
+/// cases and the field takes anything.)
+private struct EmojiIconPicker: View {
+    @Binding var emoji: String?
+    @Environment(\.dismiss) private var dismiss
+    @State private var custom = ""
+
+    private static let common: [String] = [
+        "📄", "📝", "📚", "📖", "📌", "📋", "🗂️", "🗒️",
+        "💡", "🎯", "🚀", "⭐️", "🔥", "✅", "🧠", "🛠️",
+        "🏠", "🏢", "🛒", "💰", "📈", "📊", "🗓️", "⏰",
+        "🍽️", "✈️", "🏋️", "🚗", "🖨️", "🎮", "🎵", "🎬",
+        "❤️", "🌟", "🌱", "🌊", "🐾", "🎁", "🔒", "🔑",
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(34)), count: 8), spacing: Theme.Spacing.xs) {
+                ForEach(Self.common, id: \.self) { candidate in
+                    Button {
+                        emoji = candidate
+                        dismiss()
+                    } label: {
+                        Text(candidate).font(.system(size: 22))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            HStack(spacing: Theme.Spacing.sm) {
+                TextField("Any emoji…", text: $custom)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(applyCustom)
+                Button("Set", action: applyCustom)
+                    .disabled(custom.trimmingCharacters(in: .whitespaces).isEmpty)
+                if emoji != nil {
+                    Button("Remove") {
+                        emoji = nil
+                        dismiss()
+                    }
+                    .foregroundStyle(Theme.Palette.danger)
+                }
+            }
+        }
+        .padding(Theme.Spacing.md)
+        .frame(width: 330)
+    }
+
+    private func applyCustom() {
+        let trimmed = custom.trimmingCharacters(in: .whitespaces)
+        guard let first = trimmed.first else { return }
+        emoji = String(first)
+        dismiss()
+    }
+}
+
+// MARK: - Note link picker
+
+/// "Link to note" picker: searchable list of pages; choosing one posts the
 /// link back to the editor bridge.
 private struct NoteLinkPicker: View {
     let notes: [Note]
@@ -582,7 +762,7 @@ private struct NoteLinkPicker: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(Theme.Palette.textSecondary)
-                TextField("Search notes…", text: $query)
+                TextField("Search pages…", text: $query)
                     .textFieldStyle(.plain)
                     .onSubmit {
                         if let first = filtered.first { pick(first) }
@@ -593,7 +773,7 @@ private struct NoteLinkPicker: View {
             Divider().overlay(Theme.Palette.separator)
 
             if filtered.isEmpty {
-                EmptyStateLine(text: "No matching notes.")
+                EmptyStateLine(text: "No matching pages.")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(filtered) { note in
@@ -601,17 +781,10 @@ private struct NoteLinkPicker: View {
                         pick(note)
                     } label: {
                         HStack(spacing: Theme.Spacing.sm) {
-                            Text(note.emoji ?? "📝")
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(note.title.isEmpty ? "Untitled" : note.title)
-                                    .font(Theme.Font.cardBody)
-                                    .lineLimit(1)
-                                if let folder = note.folder {
-                                    Text(folder.name)
-                                        .font(Theme.Font.cardCaption)
-                                        .foregroundStyle(Theme.Palette.textSecondary)
-                                }
-                            }
+                            Text(note.emoji ?? (note.kind == .database ? "📊" : "📄"))
+                            Text(note.title.isEmpty ? "Untitled" : note.title)
+                                .font(Theme.Font.cardBody)
+                                .lineLimit(1)
                             Spacer()
                         }
                         .contentShape(Rectangle())
@@ -637,43 +810,5 @@ private struct NoteLinkPicker: View {
     private func pick(_ note: Note) {
         onPick(note)
         dismiss()
-    }
-}
-
-/// Editor detail: an editable title over the WKWebView block editor.
-private struct NoteEditorHost: View {
-    @Environment(\.modelContext) private var context
-    @Bindable var note: Note
-    @State private var showingCheatsheet = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
-                TextField("Untitled", text: $note.title)
-                    .textFieldStyle(.plain)
-                    .font(Theme.Font.dashboardTitle)
-                    .onChange(of: note.title) { _, _ in note.modifiedAt = Date() }
-
-                Button {
-                    showingCheatsheet.toggle()
-                } label: {
-                    Image(systemName: "questionmark.circle")
-                        .font(.title3)
-                        .foregroundStyle(Theme.Palette.textSecondary)
-                }
-                .buttonStyle(.plain)
-                .help("Markdown shortcuts")
-                .popover(isPresented: $showingCheatsheet, arrowEdge: .top) {
-                    MarkdownCheatsheet()
-                }
-            }
-            .padding(.horizontal, Theme.Spacing.xl)
-            .padding(.top, Theme.Spacing.lg)
-            .padding(.bottom, Theme.Spacing.sm)
-
-            NoteEditorWebView(note: note, store: NotesStore(context: context))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .background(Theme.Palette.background)
     }
 }

@@ -112,17 +112,10 @@ struct DatabaseView: View {
         .background(Theme.Palette.background)
     }
 
+    // No title row here — the Notes module's PageHost owns breadcrumbs, icon,
+    // and title for every page kind (2026-07-22 Notion refocus).
     private var databaseBody: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.md) {
-                TextField("Untitled", text: $note.title)
-                    .textFieldStyle(.plain)
-                    .font(Theme.Font.dashboardTitle)
-                    .onChange(of: note.title) { _, _ in note.modifiedAt = Date() }
-            }
-            .padding(.horizontal, Theme.Spacing.xl)
-            .padding(.top, Theme.Spacing.lg)
-
             HStack(spacing: Theme.Spacing.md) {
                 Picker("View", selection: .init(
                     get: { viewMode },

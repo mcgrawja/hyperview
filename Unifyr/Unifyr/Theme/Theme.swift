@@ -31,8 +31,10 @@ enum Theme {
         static let claude = Color(hex: 0xF2A65A)
 
         // Surfaces (appearance-dependent; dark values are tuned, not inverted).
+        // Light background is WHITE (Jason, 2026-07-22 — Notion-style paper
+        // content panes); cards keep their edges via border + shadow.
         static let background = Color(
-            light: Color(hex: 0xE7EAEF),
+            light: Color(hex: 0xFFFFFF),
             dark: Color(hex: 0x1B1D21)
         )
         static let surface = Color(
