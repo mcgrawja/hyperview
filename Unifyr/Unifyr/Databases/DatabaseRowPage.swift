@@ -80,7 +80,8 @@ struct DatabaseRowPage: View {
             Divider().overlay(Theme.Palette.separator)
                 .padding(.horizontal, Theme.Spacing.xl)
 
-            // The row's page content, in the shared TipTap editor.
+            // The row's page content, in the shared TipTap editor. Assets
+            // belong to the database NOTE (the row is not a Note).
             NoteEditorWebView(document: EditorDocument(
                 id: row.id,
                 load: { [context] in
@@ -89,6 +90,12 @@ struct DatabaseRowPage: View {
                 save: { [context] document in
                     DatabaseStore(context: context).saveRowDocument(document, row: row, in: note)
                     try? context.save()
+                },
+                saveAsset: { [context] data, filename, mimeType in
+                    let asset = Asset(noteID: note.id, filename: filename, mimeType: mimeType, data: data)
+                    context.insert(asset)
+                    try? context.save()
+                    return asset.id
                 }
             ))
             .frame(maxWidth: .infinity, maxHeight: .infinity)

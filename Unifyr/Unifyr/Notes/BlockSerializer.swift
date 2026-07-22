@@ -111,6 +111,11 @@ nonisolated enum BlockSerializer {
             case "callout":
                 result.append(BlockContent(kind: .callout, attrs: node.attrs, content: node.content ?? []))
 
+            case "toggle":
+                // Content is the [toggleSummary, toggleBody] pair — passed
+                // through whole, like a table.
+                result.append(BlockContent(kind: .toggle, attrs: node.attrs, content: node.content ?? []))
+
             default:
                 // Unknown node: preserve its inline content as a paragraph so no
                 // text is silently dropped.
@@ -216,6 +221,8 @@ nonisolated enum BlockSerializer {
             return PMNode(type: "table", content: block.content)
         case .callout:
             return PMNode(type: "callout", attrs: block.attrs, content: block.content)
+        case .toggle:
+            return PMNode(type: "toggle", attrs: block.attrs, content: block.content)
         case .bullet, .numbered, .todo:
             // Handled by the list-grouping path in `document(from:)`; a lone list
             // block still serializes sensibly as a single-item list.

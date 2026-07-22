@@ -1,14 +1,17 @@
 //
-//  Hyperview note editor — TipTap build (D6).
+//  Unifyr note editor — TipTap build (D6).
 //
-//  Bundled by esbuild into a single self-contained Hyperview/Editor/editor.js
-//  (no network dependency). Speaks the SAME §5 bridge and ProseMirror doc JSON
-//  shape as the interim editor and Swift's BlockSerializer, so it is a drop-in
-//  replacement:
+//  Bundled by esbuild into a single self-contained Unifyr/Editor/editor.js
+//  (no network dependency). Speaks the §5 bridge and ProseMirror doc JSON
+//  shape that Swift's BlockSerializer round-trips:
 //
-//    Swift → JS : window.hyperview.loadDocument(json) / applyExternalChange(patch)
+//    Swift → JS : window.hyperview.loadDocument(json) / insertLink / insertImage
 //    JS → Swift : postMessage({type:"ready"})
 //                 postMessage({type:"documentChanged", doc})   (debounced 500ms)
+//                 postMessage({type:"saveImage"|"requestImage"|"requestNoteLink"
+//                              |"requestFileLink"|"openLink"})
+//
+//  ("hyperview" is the bridge wire name — it deliberately did not rename.)
 //
 
 import { Editor } from "@tiptap/core";
@@ -21,7 +24,12 @@ import Table from "@tiptap/extension-table";
 import TableRow from "@tiptap/extension-table-row";
 import TableHeader from "@tiptap/extension-table-header";
 import TableCell from "@tiptap/extension-table-cell";
+import Image from "@tiptap/extension-image";
 import { SlashCommands } from "./slash-menu.js";
+import { Callout } from "./callout.js";
+import { Toggle, ToggleSummary, ToggleBody } from "./toggle.js";
+import { CodeBlock } from "./code-block.js";
+import { DragHandle } from "./drag-handle.js";
 
 function post(msg) {
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -39,11 +47,33 @@ function scheduleChange(editor) {
   }, 500);
 }
 
+// Pasted/dropped images go to Swift as data URLs; Swift stores an Asset and
+// calls back insertImage with a unifyr-asset:// URL, so note documents stay
+// small (CloudKit records must — the bytes live in the Asset's external
+// storage, not the block JSON).
+function sendImageFile(file) {
+  const reader = new FileReader();
+  reader.onload = function () {
+    post({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
+  };
+  reader.readAsDataURL(file);
+}
+
+function firstImageFile(list) {
+  for (const item of list || []) {
+    const file = item.getAsFile ? (item.type && item.type.startsWith("image/") ? item.getAsFile() : null) : item;
+    if (file && file.type && file.type.startsWith("image/")) return file;
+  }
+  return null;
+}
+
 const editor = new Editor({
   element: document.getElementById("editor"),
   extensions: [
-    // Heading capped at 1–3 to match Hyperview's block kinds (§4.2).
-    StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
+    // Heading capped at 1–3 to match Unifyr's block kinds (§4.2). The stock
+    // code block yields to the lowlight-highlighted one below.
+    StarterKit.configure({ heading: { levels: [1, 2, 3] }, codeBlock: false }),
+    CodeBlock,
     TaskList,
     TaskItem.configure({ nested: true }),
     // Clicks are intercepted below and routed to Swift (note links, file
@@ -54,11 +84,34 @@ const editor = new Editor({
     TableRow,
     TableHeader,
     TableCell,
+    Image,
+    Callout,
+    Toggle,
+    ToggleSummary,
+    ToggleBody,
+    DragHandle,
     Placeholder.configure({ placeholder: "Type ‘/’ for commands…" }),
     SlashCommands,
   ],
   content: EMPTY_DOC,
   autofocus: false,
+  editorProps: {
+    handlePaste(_view, event) {
+      const file = firstImageFile(event.clipboardData && event.clipboardData.items);
+      if (!file) return false;
+      event.preventDefault();
+      sendImageFile(file);
+      return true;
+    },
+    handleDrop(_view, event, _slice, moved) {
+      if (moved) return false; // an internal block drag, not a file drop
+      const file = firstImageFile(event.dataTransfer && event.dataTransfer.files);
+      if (!file) return false;
+      event.preventDefault();
+      sendImageFile(file);
+      return true;
+    },
+  },
   onUpdate: function ({ editor }) {
     scheduleChange(editor);
   },
@@ -96,6 +149,15 @@ window.hyperview = {
         { type: "text", text: label, marks: [{ type: "link", attrs: { href: href } }] },
         { type: "text", text: " " },
       ])
+      .run();
+  },
+  // Swift → JS: the stored-asset URL for a saved image (saveImage /
+  // requestImage results).
+  insertImage: function (src, alt) {
+    editor
+      .chain()
+      .focus()
+      .insertContent({ type: "image", attrs: { src: src, alt: alt || null } })
       .run();
   },
 };

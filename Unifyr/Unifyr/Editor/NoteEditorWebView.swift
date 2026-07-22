@@ -11,6 +11,7 @@
 import SwiftUI
 import SwiftData
 import WebKit
+import UniformTypeIdentifiers
 
 #if os(macOS)
 import AppKit
@@ -91,11 +92,21 @@ struct EditorDocument {
     let id: UUID
     let load: () -> PMNode
     let save: (PMNode) -> Void
+    /// Store pasted/dropped image bytes as an Asset owned by this document's
+    /// note; returns the new asset id (image blocks reference it as
+    /// `unifyr-asset://<uuid>`). nil = images unsupported in this context.
+    let saveAsset: ((_ data: Data, _ filename: String, _ mimeType: String) -> UUID?)?
 
-    init(id: UUID, load: @escaping () -> PMNode, save: @escaping (PMNode) -> Void) {
+    init(
+        id: UUID,
+        load: @escaping () -> PMNode,
+        save: @escaping (PMNode) -> Void,
+        saveAsset: ((Data, String, String) -> UUID?)? = nil
+    ) {
         self.id = id
         self.load = load
         self.save = save
+        self.saveAsset = saveAsset
     }
 
     /// A whole note (the Phase-2 path).
@@ -106,6 +117,12 @@ struct EditorDocument {
             store.save(document, to: note)
             try? store.context.save()
         }
+        self.saveAsset = { data, filename, mimeType in
+            let asset = Asset(noteID: note.id, filename: filename, mimeType: mimeType, data: data)
+            store.context.insert(asset)
+            try? store.context.save()
+            return asset.id
+        }
     }
 }
 
@@ -113,6 +130,7 @@ struct EditorDocument {
 
 struct NoteEditorWebView {
     let document: EditorDocument
+    @Environment(\.modelContext) private var modelContext
 
     init(note: Note, store: NotesStore) {
         self.document = EditorDocument(note: note, store: store)
@@ -131,6 +149,11 @@ struct NoteEditorWebView {
 
         let config = WKWebViewConfiguration()
         config.userContentController = controller
+        // Image blocks load their bytes straight from the Asset store.
+        config.setURLSchemeHandler(
+            AssetSchemeHandler(context: modelContext),
+            forURLScheme: AssetSchemeHandler.scheme
+        )
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = coordinator
@@ -198,6 +221,9 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     // Token only crosses to removeObserver; safe to share.
     nonisolated(unsafe) private var insertLinkToken: (any NSObjectProtocol)?
 
+    // Token only crosses to removeObserver; safe to share.
+    nonisolated(unsafe) private var insertImageToken: (any NSObjectProtocol)?
+
     override init() {
         super.init()
         // NotesView answers a requestNoteLink / requestFileLink by posting the
@@ -214,11 +240,26 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
                 self?.insertLink(href: href, text: text ?? href)
             }
         }
+        // NotesView answers a requestImage (iOS) with the picked file's URL.
+        insertImageToken = NotificationCenter.default.addObserver(
+            forName: .unifyrInsertImageFile,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let url = notification.userInfo?["url"] as? URL
+            MainActor.assumeIsolated {
+                guard let url else { return }
+                self?.storeAndInsertImage(from: url)
+            }
+        }
     }
 
     deinit {
         if let insertLinkToken {
             NotificationCenter.default.removeObserver(insertLinkToken)
+        }
+        if let insertImageToken {
+            NotificationCenter.default.removeObserver(insertImageToken)
         }
     }
 
@@ -305,12 +346,74 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         case "requestFileLink":
             pickFileLink()
 
+        case "saveImage":
+            // Pasted/dropped image arrives as a data URL; store it as an Asset
+            // and hand back a unifyr-asset:// src (§4.2 — bytes never live in
+            // block JSON, which CloudKit caps at record size).
+            guard let dataURL = body["dataURL"] as? String else { return }
+            let filename = (body["filename"] as? String) ?? "image.png"
+            storeAndInsertImage(dataURL: dataURL, filename: filename)
+
+        case "requestImage":
+            pickImage()
+
         case "openLink":
             if let href = body["href"] as? String { openLink(href) }
 
         default:
             break
         }
+    }
+
+    // MARK: Image handling
+
+    /// "Image" slash command: macOS opens an NSOpenPanel right here; iOS has
+    /// no modal panel, so NotesView presents the photo/document picker and
+    /// posts the result back through .unifyrInsertImageFile.
+    private func pickImage() {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
+        panel.message = "Choose an image to insert"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        storeAndInsertImage(from: url)
+        #else
+        NotificationCenter.default.post(name: .unifyrRequestImageFile, object: nil)
+        #endif
+    }
+
+    /// data URL ("data:image/png;base64,…") → Asset → image block.
+    private func storeAndInsertImage(dataURL: String, filename: String) {
+        guard let comma = dataURL.firstIndex(of: ","),
+              dataURL.hasPrefix("data:"),
+              let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...]))
+        else { return }
+        let header = dataURL[dataURL.index(dataURL.startIndex, offsetBy: 5)..<comma]
+        let mimeType = String(header.split(separator: ";").first ?? "image/png")
+        insertImageAsset(data: data, filename: filename, mimeType: mimeType)
+    }
+
+    /// Picked file URL → Asset → image block.
+    private func storeAndInsertImage(from url: URL) {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else { return }
+        let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "image/png"
+        insertImageAsset(data: data, filename: url.lastPathComponent, mimeType: mimeType)
+    }
+
+    private func insertImageAsset(data: Data, filename: String, mimeType: String) {
+        guard let document, let assetID = document.saveAsset?(data, filename, mimeType) else { return }
+        let src = "\(AssetSchemeHandler.scheme)://\(assetID.uuidString)"
+        let srcLiteral = Self.jsLiteral(src)
+        let altLiteral = Self.jsLiteral(filename)
+        webView?.evaluateJavaScript(
+            "window.hyperview.insertImage(\(srcLiteral), \(altLiteral));",
+            completionHandler: nil
+        )
     }
 
     // MARK: Link handling

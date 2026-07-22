@@ -13,6 +13,51 @@ import Foundation
 
 struct BlockSerializerTests {
 
+    // MARK: Phase 2 blocks (Notion refocus)
+
+    @Test func calloutWithEmoji() {
+        expectRoundTrip([
+            BlockContent(
+                kind: .callout,
+                attrs: ["emoji": .string("⚠️")],
+                content: [PMNode(type: "paragraph", content: text("mind the gap"))]
+            ),
+        ], "callout keeps its emoji attr and paragraphs")
+    }
+
+    @Test func toggleRoundTripsSummaryAndBody() {
+        expectRoundTrip([
+            BlockContent(
+                kind: .toggle,
+                attrs: ["open": .bool(false)],
+                content: [
+                    PMNode(type: "toggleSummary", content: text("Details")),
+                    PMNode(type: "toggleBody", content: [
+                        PMNode(type: "paragraph", content: text("hidden body")),
+                        PMNode(type: "bulletList", content: [
+                            PMNode(type: "listItem", content: [PMNode(type: "paragraph", content: text("nested"))]),
+                        ]),
+                    ]),
+                ]
+            ),
+        ], "toggle passes summary+body through whole, fold state included")
+    }
+
+    @Test func imageWithAssetSrc() {
+        expectRoundTrip([
+            BlockContent(
+                kind: .image,
+                attrs: ["src": .string("unifyr-asset://ABC"), "alt": .string("photo.png")]
+            ),
+        ], "image keeps its asset src")
+    }
+
+    @Test func codeBlockKeepsLanguage() {
+        expectRoundTrip([
+            BlockContent(kind: .code, attrs: ["language": .string("swift")], content: text("let x = 1")),
+        ], "code block keeps the picked language")
+    }
+
     // MARK: Helpers
 
     /// Inline content for a plain text run.

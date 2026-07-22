@@ -51,7 +51,8 @@ final class Block {
     }
 }
 
-/// The full v1 block vocabulary (§4.2). Stored as String on `Block.kind`.
+/// The block vocabulary (§4.2 + Notion-refocus additions). Stored as String on
+/// `Block.kind` — adding a case is NOT a CloudKit schema change.
 /// `nonisolated` — a pure value type used by the (nonisolated) BlockSerializer.
 nonisolated enum BlockKind: String, Sendable, CaseIterable {
     case paragraph
@@ -67,6 +68,8 @@ nonisolated enum BlockKind: String, Sendable, CaseIterable {
     case image
     case table
     case callout
+    /// Collapsible toggle (Phase 2, 2026-07-22): content = summary + body.
+    case toggle
 }
 
 extension Block {

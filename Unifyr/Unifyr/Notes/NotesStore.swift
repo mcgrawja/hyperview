@@ -34,6 +34,12 @@ extension Notification.Name {
     /// iOS: a file:// link was clicked; userInfo: ["href": String]. NotesView
     /// previews it with Quick Look.
     static let unifyrOpenFileLink = Notification.Name("unifyr.openFileLink")
+    /// iOS: the editor asked for an image (slash "Image") — NotesView shows the
+    /// image picker (macOS uses an NSOpenPanel inside the bridge instead).
+    static let unifyrRequestImageFile = Notification.Name("unifyr.requestImageFile")
+    /// NotesView picked an image file; userInfo: ["url": URL]. The bridge
+    /// stores it as an Asset and inserts the image block.
+    static let unifyrInsertImageFile = Notification.Name("unifyr.insertImageFile")
 }
 
 @MainActor

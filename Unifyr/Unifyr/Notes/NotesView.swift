@@ -33,6 +33,7 @@ struct NotesView: View {
     // iOS file links: the editor can't open a modal panel, so this view owns
     // the document picker and the Quick Look preview.
     @State private var showingFileImporter = false
+    @State private var showingImageImporter = false
     @State private var previewURL: URL?
 
     private var store: NotesStore { NotesStore(context: context) }
@@ -125,6 +126,19 @@ struct NotesView: View {
                 name: .unifyrInsertNoteLink,
                 object: nil,
                 userInfo: ["href": url.absoluteString, "text": url.lastPathComponent]
+            )
+        }
+        // iOS "Image" slash command: the editor asks, we present the picker;
+        // the bridge stores the Asset and inserts the block.
+        .onReceive(NotificationCenter.default.publisher(for: .unifyrRequestImageFile)) { _ in
+            showingImageImporter = true
+        }
+        .fileImporter(isPresented: $showingImageImporter, allowedContentTypes: [.image]) { result in
+            guard case .success(let url) = result else { return }
+            NotificationCenter.default.post(
+                name: .unifyrInsertImageFile,
+                object: nil,
+                userInfo: ["url": url]
             )
         }
         // iOS: a clicked file link previews with Quick Look.
