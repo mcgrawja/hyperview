@@ -400,6 +400,11 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             isReady = true
             if let document { loadDocument(for: document) }
 
+        case "editorError":
+            // The JS editor failed to construct — make it loud in the app log
+            // (a silent dead editor cost a debugging round once already).
+            MailLog.log("[Editor] JS editor failed to initialize: \(body["message"] as? String ?? "unknown")")
+
         case "documentChanged":
             guard let document,
                   let docObject = body["doc"],

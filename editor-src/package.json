@@ -5,8 +5,9 @@
   "description": "TipTap editor bundle for Hyperview's WKWebView note editor (D6). Built to a single self-contained editor.js copied into Hyperview/Editor/.",
   "type": "module",
   "scripts": {
-    "build": "esbuild src/main.js --bundle --format=iife --target=safari17 --outfile=../Unifyr/Unifyr/Editor/editor.js",
-    "build:min": "esbuild src/main.js --bundle --format=iife --target=safari17 --minify --outfile=../Unifyr/Unifyr/Editor/editor.js"
+    "build": "esbuild src/main.js --bundle --format=iife --target=safari17 --outfile=../Unifyr/Unifyr/Editor/editor.js && node test/smoke.mjs",
+    "build:min": "esbuild src/main.js --bundle --format=iife --target=safari17 --minify --outfile=../Unifyr/Unifyr/Editor/editor.js && node test/smoke.mjs",
+    "test:smoke": "node test/smoke.mjs"
   },
   "dependencies": {
     "@tiptap/core": "^2.10.0",
@@ -26,6 +27,7 @@
     "lowlight": "^3.3.0"
   },
   "devDependencies": {
-    "esbuild": "^0.24.0"
+    "esbuild": "^0.24.0",
+    "jsdom": "^29.1.1"
   }
 }

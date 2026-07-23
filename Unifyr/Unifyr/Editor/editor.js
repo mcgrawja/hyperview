@@ -24418,6 +24418,11 @@ img.ProseMirror-separator {
       return [
         Suggestion({
           editor: this.editor,
+          // Explicit key: Suggestion's DEFAULT PluginKey is a single shared
+          // instance, and two keyed plugins with one key make ProseMirror throw
+          // at editor creation — which killed the whole editor when the "@"
+          // mention menu (also Suggestion-based) was added.
+          pluginKey: new PluginKey("slashCommands"),
           char: "/",
           allowSpaces: false,
           items: ({ query }) => {
@@ -39954,6 +39959,8 @@ img.ProseMirror-separator {
       return [
         Suggestion({
           editor: this.editor,
+          // Distinct from the slash menu's key — see the note there.
+          pluginKey: new PluginKey("pageMentionSuggestion"),
           char: "@",
           allowSpaces: false,
           items: ({ query }) => {
@@ -40224,61 +40231,70 @@ img.ProseMirror-separator {
     }
     return null;
   }
-  var editor = new Editor({
-    element: document.getElementById("editor"),
-    extensions: [
-      // Heading capped at 1–3 to match Unifyr's block kinds (§4.2). The stock
-      // code block yields to the lowlight-highlighted one below.
-      StarterKit.configure({ heading: { levels: [1, 2, 3] }, codeBlock: false }),
-      CodeBlock2,
-      TaskList,
-      TaskItem.configure({ nested: true }),
-      // Clicks are intercepted below and routed to Swift (note links, file
-      // links, web links) — the editor itself never navigates.
-      Link.configure({ openOnClick: false, autolink: true, linkOnPaste: true }),
-      // Cells hold block content, so task lists nest inside table cells.
-      Table.configure({ resizable: false }),
-      TableRow,
-      TableHeader,
-      TableCell,
-      Image,
-      Callout,
-      Toggle,
-      ToggleSummary,
-      ToggleBody,
-      DragHandle,
-      PageMention,
-      PageMentionSuggestion,
-      Subpage,
-      DBEmbed,
-      ColumnList,
-      Column,
-      Placeholder.configure({ placeholder: "Type \u2018/\u2019 for commands\u2026" }),
-      SlashCommands
-    ],
-    content: EMPTY_DOC,
-    autofocus: false,
-    editorProps: {
-      handlePaste(_view, event) {
-        const file = firstImageFile(event.clipboardData && event.clipboardData.items);
-        if (!file) return false;
-        event.preventDefault();
-        sendImageFile(file);
-        return true;
+  var editor = null;
+  function buildEditor() {
+    return new Editor({
+      element: document.getElementById("editor"),
+      extensions: [
+        // Heading capped at 1–3 to match Unifyr's block kinds (§4.2). The stock
+        // code block yields to the lowlight-highlighted one below.
+        StarterKit.configure({ heading: { levels: [1, 2, 3] }, codeBlock: false }),
+        CodeBlock2,
+        TaskList,
+        TaskItem.configure({ nested: true }),
+        // Clicks are intercepted below and routed to Swift (note links, file
+        // links, web links) — the editor itself never navigates.
+        Link.configure({ openOnClick: false, autolink: true, linkOnPaste: true }),
+        // Cells hold block content, so task lists nest inside table cells.
+        Table.configure({ resizable: false }),
+        TableRow,
+        TableHeader,
+        TableCell,
+        Image,
+        Callout,
+        Toggle,
+        ToggleSummary,
+        ToggleBody,
+        DragHandle,
+        PageMention,
+        PageMentionSuggestion,
+        Subpage,
+        DBEmbed,
+        ColumnList,
+        Column,
+        Placeholder.configure({ placeholder: "Type \u2018/\u2019 for commands\u2026" }),
+        SlashCommands
+      ],
+      content: EMPTY_DOC,
+      autofocus: false,
+      editorProps: {
+        handlePaste(_view, event) {
+          const file = firstImageFile(event.clipboardData && event.clipboardData.items);
+          if (!file) return false;
+          event.preventDefault();
+          sendImageFile(file);
+          return true;
+        },
+        handleDrop(_view, event, _slice, moved) {
+          if (moved) return false;
+          const file = firstImageFile(event.dataTransfer && event.dataTransfer.files);
+          if (!file) return false;
+          event.preventDefault();
+          sendImageFile(file);
+          return true;
+        }
       },
-      handleDrop(_view, event, _slice, moved) {
-        if (moved) return false;
-        const file = firstImageFile(event.dataTransfer && event.dataTransfer.files);
-        if (!file) return false;
-        event.preventDefault();
-        sendImageFile(file);
-        return true;
+      onUpdate: function({ editor: editor2 }) {
+        scheduleChange(editor2);
       }
-    },
-    onUpdate: function({ editor: editor2 }) {
-      scheduleChange(editor2);
-    }
-  });
+    });
+  }
+  try {
+    editor = buildEditor();
+  } catch (error2) {
+    console.error("Unifyr editor failed to initialize:", error2);
+    post5({ type: "editorError", message: String(error2 && error2.message || error2) });
+  }
   document.getElementById("editor").addEventListener("click", function(event) {
     const anchor = event.target.closest("a[href]");
     if (!anchor) return;
@@ -40287,6 +40303,7 @@ img.ProseMirror-separator {
   });
   window.hyperview = {
     loadDocument: function(docOrJson) {
+      if (!editor) return;
       const doc3 = typeof docOrJson === "string" ? JSON.parse(docOrJson) : docOrJson;
       const content = doc3 && Array.isArray(doc3.content) && doc3.content.length ? doc3 : EMPTY_DOC;
       editor.commands.setContent(content, false);
@@ -40297,6 +40314,7 @@ img.ProseMirror-separator {
     // results). The trailing plain space stops the mark from bleeding into
     // whatever the user types next.
     insertLink: function(href, text) {
+      if (!editor) return;
       const label = text && text.length ? text : href;
       editor.chain().focus().insertContent([
         { type: "text", text: label, marks: [{ type: "link", attrs: { href } }] },
@@ -40306,6 +40324,7 @@ img.ProseMirror-separator {
     // Swift → JS: the stored-asset URL for a saved image (saveImage /
     // requestImage results).
     insertImage: function(src, alt) {
+      if (!editor) return;
       editor.chain().focus().insertContent({ type: "image", attrs: { src, alt: alt || null } }).run();
     },
     // Swift → JS: the page list the "@" mention menu searches. Pushed on load
@@ -40316,10 +40335,12 @@ img.ProseMirror-separator {
     },
     // Swift → JS: a child page was created for "/Sub-page" — embed it here.
     insertSubpage: function(id, title, emoji2) {
+      if (!editor) return;
       editor.chain().focus().insertContent({ type: "subpage", attrs: { noteID: id, title: title || "Untitled", emoji: emoji2 || null } }).run();
     },
     // Swift → JS: the database view picked for "/Linked database".
     insertDBEmbed: function(id, viewID, title, emoji2) {
+      if (!editor) return;
       editor.chain().focus().insertContent({
         type: "dbembed",
         attrs: { noteID: id, viewID: viewID || null, title: title || "Untitled", emoji: emoji2 || null }
@@ -40332,5 +40353,7 @@ img.ProseMirror-separator {
       document.body.classList.toggle("wide", !!wide);
     }
   };
-  post5({ type: "ready" });
+  if (editor) {
+    post5({ type: "ready" });
+  }
 })();

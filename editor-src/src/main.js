@@ -71,7 +71,12 @@ function firstImageFile(list) {
   return null;
 }
 
-const editor = new Editor({
+// If editor construction throws (a bad node spec, a duplicate plugin key —
+// it has happened), surface it loudly instead of leaving a dead, silent
+// editor: the error goes to the console AND to Swift as "editorError".
+let editor = null;
+function buildEditor() {
+  return new Editor({
   element: document.getElementById("editor"),
   extensions: [
     // Heading capped at 1–3 to match Unifyr's block kinds (§4.2). The stock
@@ -125,7 +130,15 @@ const editor = new Editor({
   onUpdate: function ({ editor }) {
     scheduleChange(editor);
   },
-});
+  });
+}
+
+try {
+  editor = buildEditor();
+} catch (error) {
+  console.error("Unifyr editor failed to initialize:", error);
+  post({ type: "editorError", message: String((error && error.message) || error) });
+}
 
 // Any link click (note link, file link, web link) goes to Swift, which knows
 // how to route each scheme. preventDefault keeps the WKWebView in place.
@@ -138,6 +151,7 @@ document.getElementById("editor").addEventListener("click", function (event) {
 
 window.hyperview = {
   loadDocument: function (docOrJson) {
+    if (!editor) return;
     const doc = typeof docOrJson === "string" ? JSON.parse(docOrJson) : docOrJson;
     const content = doc && Array.isArray(doc.content) && doc.content.length ? doc : EMPTY_DOC;
     // emitUpdate=false so loading a note does not echo back a documentChanged.
@@ -151,6 +165,7 @@ window.hyperview = {
   // results). The trailing plain space stops the mark from bleeding into
   // whatever the user types next.
   insertLink: function (href, text) {
+    if (!editor) return;
     const label = text && text.length ? text : href;
     editor
       .chain()
@@ -164,6 +179,7 @@ window.hyperview = {
   // Swift → JS: the stored-asset URL for a saved image (saveImage /
   // requestImage results).
   insertImage: function (src, alt) {
+    if (!editor) return;
     editor
       .chain()
       .focus()
@@ -178,6 +194,7 @@ window.hyperview = {
   },
   // Swift → JS: a child page was created for "/Sub-page" — embed it here.
   insertSubpage: function (id, title, emoji) {
+    if (!editor) return;
     editor
       .chain()
       .focus()
@@ -186,6 +203,7 @@ window.hyperview = {
   },
   // Swift → JS: the database view picked for "/Linked database".
   insertDBEmbed: function (id, viewID, title, emoji) {
+    if (!editor) return;
     editor
       .chain()
       .focus()
@@ -203,4 +221,6 @@ window.hyperview = {
   },
 };
 
-post({ type: "ready" });
+if (editor) {
+  post({ type: "ready" });
+}

@@ -9,6 +9,7 @@
 
 import { Extension } from "@tiptap/core";
 import Suggestion from "@tiptap/suggestion";
+import { PluginKey } from "@tiptap/pm/state";
 
 function post(msg) {
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -174,6 +175,11 @@ export const SlashCommands = Extension.create({
     return [
       Suggestion({
         editor: this.editor,
+        // Explicit key: Suggestion's DEFAULT PluginKey is a single shared
+        // instance, and two keyed plugins with one key make ProseMirror throw
+        // at editor creation — which killed the whole editor when the "@"
+        // mention menu (also Suggestion-based) was added.
+        pluginKey: new PluginKey("slashCommands"),
         char: "/",
         allowSpaces: false,
         items: ({ query }) => {

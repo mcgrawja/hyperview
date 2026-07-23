@@ -10,6 +10,7 @@
 
 import { Node, Extension, mergeAttributes } from "@tiptap/core";
 import Suggestion from "@tiptap/suggestion";
+import { PluginKey } from "@tiptap/pm/state";
 import { CommandMenu } from "./slash-menu.js";
 
 function post(msg) {
@@ -77,6 +78,8 @@ export const PageMentionSuggestion = Extension.create({
     return [
       Suggestion({
         editor: this.editor,
+        // Distinct from the slash menu's key — see the note there.
+        pluginKey: new PluginKey("pageMentionSuggestion"),
         char: "@",
         allowSpaces: false,
         items: ({ query }) => {
