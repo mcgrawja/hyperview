@@ -66,7 +66,7 @@ const doc = {
       { type: "toggleBody", content: [{ type: "paragraph", content: [{ type: "text", text: "body" }] }] },
     ]},
     { type: "codeBlock", attrs: { language: "swift" }, content: [{ type: "text", text: "let x = 1" }] },
-    { type: "columnList", content: [
+    { type: "columnList", attrs: { widths: "30.0,70.0" }, content: [
       { type: "column", content: [{ type: "paragraph", content: [{ type: "text", text: "left" }] }] },
       { type: "column", content: [{ type: "paragraph", content: [{ type: "text", text: "right" }] }] },
     ]},
@@ -101,3 +101,6 @@ if (failures.length) {
   process.exit(1);
 }
 console.log("\neditor bundle smoke: all checks passed");
+// Explicit exit: nodeViews may leave timers (setTimeout width-apply, jsdom
+// rAF) in the loop — a smoke script should end when its checks end.
+process.exit(0);

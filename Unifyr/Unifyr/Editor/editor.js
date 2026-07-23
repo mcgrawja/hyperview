@@ -24749,6 +24749,45 @@ img.ProseMirror-separator {
           ]
         }).run()
       };
+    },
+    // Keyboard flow (refinement pass): Enter on the summary jumps INTO the body
+    // (opening a closed toggle on the way); Cmd-Enter folds/unfolds from
+    // anywhere inside the toggle.
+    addKeyboardShortcuts() {
+      const summaryEnter = () => {
+        const { state } = this.editor;
+        const { $from, empty: empty2 } = state.selection;
+        if (!empty2 || $from.parent.type.name !== "toggleSummary") return false;
+        const summaryDepth = $from.depth;
+        const toggleDepth = summaryDepth - 1;
+        if (toggleDepth < 1 || $from.node(toggleDepth).type.name !== "toggle") return false;
+        const toggle = $from.node(toggleDepth);
+        const togglePos = $from.before(toggleDepth);
+        const target = $from.after(summaryDepth) + 2;
+        return this.editor.chain().command(({ tr: tr2 }) => {
+          if (!toggle.attrs.open) {
+            tr2.setNodeMarkup(togglePos, void 0, { ...toggle.attrs, open: true });
+          }
+          return true;
+        }).setTextSelection(target).run();
+      };
+      const foldToggle = () => {
+        const { $from } = this.editor.state.selection;
+        for (let depth = $from.depth; depth >= 1; depth--) {
+          const node = $from.node(depth);
+          if (node.type.name !== "toggle") continue;
+          const pos = $from.before(depth);
+          return this.editor.chain().command(({ tr: tr2 }) => {
+            tr2.setNodeMarkup(pos, void 0, { ...node.attrs, open: !node.attrs.open });
+            return true;
+          }).run();
+        }
+        return false;
+      };
+      return {
+        Enter: summaryEnter,
+        "Mod-Enter": foldToggle
+      };
     }
   });
 
@@ -39995,7 +40034,8 @@ img.ProseMirror-separator {
         try {
           const inside = view.posAtDOM(hoveredBlock, 0);
           const $pos = view.state.doc.resolve(inside);
-          const before = $pos.depth ? $pos.before(1) : inside;
+          const atomHere = view.state.doc.nodeAt(inside);
+          const before = atomHere && atomHere.isBlock && atomHere.isAtom ? inside : $pos.depth ? $pos.before($pos.depth) : inside;
           const selection = NodeSelection.create(view.state.doc, before);
           view.dispatch(view.state.tr.setSelection(selection));
           view.dragging = { slice: selection.content(), move: true };
@@ -40014,9 +40054,15 @@ img.ProseMirror-separator {
       hoveredBlock = null;
     }
     function topLevelBlock(root, target) {
+      const isContainer = (el2) => el2 === root || el2.classList && (el2.classList.contains("column") || el2.classList.contains("toggle-body") || el2.classList.contains("callout-body"));
       let el = target;
-      while (el && el.parentElement !== root) el = el.parentElement;
-      return el && el.parentElement === root ? el : null;
+      while (el && el !== root) {
+        const parent = el.parentElement;
+        if (!parent) return null;
+        if (isContainer(parent)) return el;
+        el = parent;
+      }
+      return null;
     }
     function positionHandle(block) {
       const rect = block.getBoundingClientRect();
@@ -40341,6 +40387,14 @@ img.ProseMirror-separator {
     group: "block",
     content: "column{2,4}",
     defining: true,
+    addAttributes() {
+      return {
+        // Percent widths as a comma string ("30,70") — a STRING deliberately:
+        // Swift's PMValue attr codec handles scalars only, an array would be
+        // dropped in round-trip. null = equal columns.
+        widths: { default: null }
+      };
+    },
     parseHTML() {
       return [{ tag: "div.column-list" }];
     },
@@ -40356,6 +40410,83 @@ img.ProseMirror-separator {
           }
           return chain().insertContent({ type: this.name, content: columns }).run();
         }
+      };
+    },
+    // NodeView so widths apply to the column children and the gaps between
+    // columns are draggable resize grips (refinement pass).
+    addNodeView() {
+      return ({ node, editor: editor2, getPos }) => {
+        let current = node;
+        const dom = document.createElement("div");
+        dom.className = "column-list";
+        const columnsOf = () => Array.from(dom.children).filter((el) => el.classList.contains("column"));
+        const applyWidths = () => {
+          const children = columnsOf();
+          const parsed = (current.attrs.widths || "").split(",").map((part) => parseFloat(part)).filter((part) => !Number.isNaN(part) && part > 0);
+          children.forEach((el, index) => {
+            if (parsed.length === children.length) {
+              el.style.flex = `0 0 calc(${parsed[index]}% - 14px)`;
+            } else {
+              el.style.flex = "1 1 0px";
+            }
+          });
+        };
+        const gapAt = (clientX) => {
+          const children = columnsOf();
+          for (let i = 0; i < children.length - 1; i++) {
+            const leftRect = children[i].getBoundingClientRect();
+            const rightRect = children[i + 1].getBoundingClientRect();
+            if (clientX >= leftRect.right - 3 && clientX <= rightRect.left + 3) {
+              return { index: i, left: children[i], right: children[i + 1] };
+            }
+          }
+          return null;
+        };
+        dom.addEventListener("mousemove", (event) => {
+          dom.style.cursor = gapAt(event.clientX) ? "col-resize" : "";
+        });
+        dom.addEventListener("mousedown", (event) => {
+          const gap = gapAt(event.clientX);
+          if (!gap) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const startX = event.clientX;
+          const leftStart = gap.left.getBoundingClientRect().width;
+          const rightStart = gap.right.getBoundingClientRect().width;
+          const pairTotal = leftStart + rightStart;
+          const onMove = (moveEvent) => {
+            const delta = Math.min(
+              rightStart - 60,
+              Math.max(60 - leftStart, moveEvent.clientX - startX)
+            );
+            gap.left.style.flex = `0 0 ${leftStart + delta}px`;
+            gap.right.style.flex = `0 0 ${rightStart - delta}px`;
+          };
+          const onUp = () => {
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            const children = columnsOf();
+            const total = children.reduce((sum, el) => sum + el.getBoundingClientRect().width, 0);
+            const widths = children.map((el) => (el.getBoundingClientRect().width / Math.max(total, 1) * 100).toFixed(1)).join(",");
+            editor2.chain().command(({ tr: tr2 }) => {
+              tr2.setNodeMarkup(getPos(), void 0, { ...current.attrs, widths });
+              return true;
+            }).run();
+          };
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup", onUp);
+        });
+        setTimeout(applyWidths, 0);
+        return {
+          dom,
+          contentDOM: dom,
+          update(updated) {
+            if (updated.type.name !== "columnList") return false;
+            current = updated;
+            setTimeout(applyWidths, 0);
+            return true;
+          }
+        };
       };
     }
   });

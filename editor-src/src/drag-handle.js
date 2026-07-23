@@ -37,7 +37,13 @@ function dragHandlePlugin() {
       try {
         const inside = view.posAtDOM(hoveredBlock, 0);
         const $pos = view.state.doc.resolve(inside);
-        const before = $pos.depth ? $pos.before(1) : inside;
+        // Atoms (image/subpage/dbembed) resolve to the position BEFORE the
+        // node; text blocks resolve to a position inside — select whichever
+        // block the hovered element actually is, at any nesting depth.
+        const atomHere = view.state.doc.nodeAt(inside);
+        const before = atomHere && atomHere.isBlock && atomHere.isAtom
+          ? inside
+          : ($pos.depth ? $pos.before($pos.depth) : inside);
         const selection = NodeSelection.create(view.state.doc, before);
         view.dispatch(view.state.tr.setSelection(selection));
         view.dragging = { slice: selection.content(), move: true };
@@ -59,12 +65,24 @@ function dragHandlePlugin() {
     hoveredBlock = null;
   }
 
-  /// The top-level block element containing `target` (direct child of the
-  /// ProseMirror root), or null.
+  /// The nearest draggable block element containing `target`: a direct child
+  /// of the ProseMirror root — or of a column / toggle body / callout body,
+  /// so blocks INSIDE those containers get handles too (refinement pass).
   function topLevelBlock(root, target) {
+    const isContainer = (el) =>
+      el === root
+      || (el.classList
+        && (el.classList.contains("column")
+          || el.classList.contains("toggle-body")
+          || el.classList.contains("callout-body")));
     let el = target;
-    while (el && el.parentElement !== root) el = el.parentElement;
-    return el && el.parentElement === root ? el : null;
+    while (el && el !== root) {
+      const parent = el.parentElement;
+      if (!parent) return null;
+      if (isContainer(parent)) return el;
+      el = parent;
+    }
+    return null;
   }
 
   function positionHandle(block) {

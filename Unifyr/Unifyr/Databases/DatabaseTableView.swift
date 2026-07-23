@@ -30,9 +30,16 @@ struct DatabaseTableView: View {
     private var store: DatabaseStore { DatabaseStore(context: context) }
     private var titleProperty: DBProperty? { store.titleProperty(among: properties) }
 
-    /// The title column is the anchor — wider than an ordinary text column.
+    /// Live width while a header edge is being dragged (committed to the
+    /// property's config — synced — on release). `start` anchors the drag.
+    @State private var resizing: (id: UUID, start: CGFloat, width: CGFloat)?
+
+    /// Stored width if the user resized the column, else the kind's default
+    /// (title column anchors wider).
     private func width(of property: DBProperty) -> CGFloat {
-        property.id == titleProperty?.id ? 230 : property.propertyKind.columnWidth
+        if let resizing, resizing.id == property.id { return resizing.width }
+        if let stored = store.config(of: property).width { return max(80, CGFloat(stored)) }
+        return property.id == titleProperty?.id ? 230 : property.propertyKind.columnWidth
     }
 
     private var tableWidth: CGFloat {
@@ -130,9 +137,42 @@ struct DatabaseTableView: View {
             ForEach(properties) { property in
                 headerCell(property)
                     .frame(width: width(of: property), alignment: .leading)
+                    .overlay(alignment: .trailing) { resizeGrip(property) }
             }
             addPropertyButton
         }
+    }
+
+    /// The draggable right edge of a column header (refinement pass).
+    private func resizeGrip(_ property: DBProperty) -> some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: 8)
+            .overlay(
+                Rectangle()
+                    .fill(resizing?.id == property.id ? Theme.Palette.primary : Theme.Palette.separator)
+                    .frame(width: resizing?.id == property.id ? 2 : 1)
+            )
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        // First tick anchors on the pre-drag width (width(of:)
+                        // ignores `resizing` while the ids don't match yet).
+                        let start = resizing?.id == property.id
+                            ? resizing!.start
+                            : width(of: property)
+                        resizing = (property.id, start, max(80, start + value.translation.width))
+                    }
+                    .onEnded { _ in
+                        guard let resizing, resizing.id == property.id else { return }
+                        var config = store.config(of: property)
+                        config.width = Double(resizing.width)
+                        store.setConfig(config, on: property)
+                        try? context.save()
+                        self.resizing = nil
+                    }
+            )
     }
 
     private func headerCell(_ property: DBProperty) -> some View {

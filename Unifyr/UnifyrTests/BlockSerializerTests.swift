@@ -61,7 +61,9 @@ struct BlockSerializerTests {
 
     @Test func columnsRoundTripWholeLayout() {
         expectRoundTrip([
-            BlockContent(kind: .columns, content: [
+            // widths = the drag-resized percents, a comma STRING (PMValue has
+            // no array case — an array attr would be silently dropped).
+            BlockContent(kind: .columns, attrs: ["widths": .string("30.0,70.0")], content: [
                 PMNode(type: "column", content: [PMNode(type: "paragraph", content: text("left"))]),
                 PMNode(type: "column", content: [
                     PMNode(type: "paragraph", content: text("right")),

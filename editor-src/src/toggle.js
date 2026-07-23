@@ -118,4 +118,54 @@ export const Toggle = Node.create({
             .run(),
     };
   },
+
+  // Keyboard flow (refinement pass): Enter on the summary jumps INTO the body
+  // (opening a closed toggle on the way); Cmd-Enter folds/unfolds from
+  // anywhere inside the toggle.
+  addKeyboardShortcuts() {
+    const summaryEnter = () => {
+      const { state } = this.editor;
+      const { $from, empty } = state.selection;
+      if (!empty || $from.parent.type.name !== "toggleSummary") return false;
+      const summaryDepth = $from.depth;
+      const toggleDepth = summaryDepth - 1;
+      if (toggleDepth < 1 || $from.node(toggleDepth).type.name !== "toggle") return false;
+      const toggle = $from.node(toggleDepth);
+      const togglePos = $from.before(toggleDepth);
+      // after(summary) + 1 enters the body, + 1 enters its first block.
+      const target = $from.after(summaryDepth) + 2;
+      return this.editor
+        .chain()
+        .command(({ tr }) => {
+          if (!toggle.attrs.open) {
+            tr.setNodeMarkup(togglePos, undefined, { ...toggle.attrs, open: true });
+          }
+          return true;
+        })
+        .setTextSelection(target)
+        .run();
+    };
+
+    const foldToggle = () => {
+      const { $from } = this.editor.state.selection;
+      for (let depth = $from.depth; depth >= 1; depth--) {
+        const node = $from.node(depth);
+        if (node.type.name !== "toggle") continue;
+        const pos = $from.before(depth);
+        return this.editor
+          .chain()
+          .command(({ tr }) => {
+            tr.setNodeMarkup(pos, undefined, { ...node.attrs, open: !node.attrs.open });
+            return true;
+          })
+          .run();
+      }
+      return false;
+    };
+
+    return {
+      Enter: summaryEnter,
+      "Mod-Enter": foldToggle,
+    };
+  },
 });

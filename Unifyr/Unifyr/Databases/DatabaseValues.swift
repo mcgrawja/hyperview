@@ -98,6 +98,9 @@ nonisolated struct DBPropertyConfig: Codable, Equatable {
     var relationTargetID: UUID? = nil
     /// The database's title property (exactly one; created with the database).
     var isTitle: Bool? = nil
+    /// User-resized table column width in points (nil = the kind's default).
+    /// Synced — a column you widen on the Mac is wide on the iPad.
+    var width: Double? = nil
 
     static func decode(_ data: Data?) -> DBPropertyConfig {
         guard let data else { return DBPropertyConfig() }
