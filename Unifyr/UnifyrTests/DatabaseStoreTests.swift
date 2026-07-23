@@ -326,12 +326,77 @@ struct DatabaseStoreTests {
         let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         #expect(payload["title"] as? String == "Tracker")
         #expect(payload["view"] as? String == "Active")
-        #expect((payload["rows"] as? [[String]])?.count == 1)
-        #expect((payload["rows"] as? [[String]])?.first?.first == "Alpha")
+        #expect(payload["editable"] as? Bool == true)
         #expect(payload["more"] as? Int == 0)
+
+        // v2 (editable) shape: columns carry metadata, rows carry raw+display.
+        let columns = try #require(payload["columns"] as? [[String: Any]])
+        #expect(columns.map { $0["name"] as? String } == ["Name", "Status", "Date"])
+        let statusColumn = try #require(columns.first { $0["name"] as? String == "Status" })
+        #expect((statusColumn["options"] as? [[String: Any]])?.count == 3)
+
+        let rows = try #require(payload["rows"] as? [[String: Any]])
+        #expect(rows.count == 1)
+        let nameColumnID = try #require(columns[0]["id"] as? String)
+        let cells = try #require(rows[0]["cells"] as? [String: Any])
+        let nameCell = try #require(cells[nameColumnID] as? [String: Any])
+        #expect(nameCell["display"] as? String == "Alpha")
+        #expect(nameCell["raw"] as? String == "Alpha")
 
         // Unknown database → nil (deleted on another device).
         #expect(store.embedSnapshotJSON(databaseID: UUID(), viewID: nil) == nil)
+    }
+
+    @Test func embedEditsApplyByID() {
+        let context = makeContext()
+        let (store, note, name, status, date) = makePopulated(context)
+        let rows = store.fetchRows(databaseNoteID: note.id)
+        let alpha = rows[1] // "Alpha"
+        let done = (store.config(of: status).options ?? [])[2]
+
+        // Text, select (by option id), date, clear.
+        #expect(store.applyEmbedEdit(databaseID: note.id, rowID: alpha.id, propertyID: name.id, raw: "Alpha 2"))
+        #expect(store.value(rowID: alpha.id, propertyID: name.id).text == "Alpha 2")
+
+        #expect(store.applyEmbedEdit(databaseID: note.id, rowID: alpha.id, propertyID: status.id, raw: [done.id.uuidString]))
+        #expect(store.value(rowID: alpha.id, propertyID: status.id).optionIDs == [done.id])
+
+        #expect(store.applyEmbedEdit(databaseID: note.id, rowID: alpha.id, propertyID: date.id, raw: "2026-09-01"))
+        #expect(store.value(rowID: alpha.id, propertyID: date.id).date == "2026-09-01")
+
+        #expect(store.applyEmbedEdit(databaseID: note.id, rowID: alpha.id, propertyID: name.id, raw: ""))
+        #expect(store.value(rowID: alpha.id, propertyID: name.id).isEmpty)
+
+        // Unknown select option ids are dropped, not stored.
+        #expect(store.applyEmbedEdit(databaseID: note.id, rowID: alpha.id, propertyID: status.id, raw: [UUID().uuidString]))
+        #expect(store.value(rowID: alpha.id, propertyID: status.id).isEmpty)
+
+        // Wrong database / unknown row → refused.
+        #expect(!store.applyEmbedEdit(databaseID: UUID(), rowID: alpha.id, propertyID: name.id, raw: "x"))
+        #expect(!store.applyEmbedEdit(databaseID: note.id, rowID: UUID(), propertyID: name.id, raw: "x"))
+    }
+
+    @Test func embedAddRowPrefillsViewFilters() throws {
+        let context = makeContext()
+        let (store, note, _, status, _) = makePopulated(context)
+        let inProgress = (store.config(of: status).options ?? [])[1]
+
+        var view = DBViewConfig()
+        var filter = DBFilter()
+        filter.propertyID = status.id
+        filter.filterOp = .hasOption
+        filter.optionID = inProgress.id
+        view.filters = [filter]
+        store.upsertView(view, on: note)
+
+        // A row added "into" the filtered view lands in that column, so it
+        // shows up in the embed it was created from.
+        let rowID = try #require(store.embedAddRow(databaseID: note.id, viewID: view.id))
+        #expect(store.value(rowID: rowID, propertyID: status.id).optionIDs == [inProgress.id])
+
+        // Without a view: a blank row.
+        let plainRowID = try #require(store.embedAddRow(databaseID: note.id, viewID: nil))
+        #expect(store.value(rowID: plainRowID, propertyID: status.id).isEmpty)
     }
 
     // MARK: Tool value coercion (Phase 6 MCP)

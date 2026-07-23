@@ -32,7 +32,7 @@ import { CodeBlock } from "./code-block.js";
 import { DragHandle } from "./drag-handle.js";
 import { PageMention, PageMentionSuggestion, pageIndex } from "./page-mention.js";
 import { Subpage } from "./subpage.js";
-import { DBEmbed, deliverDBEmbed } from "./dbembed.js";
+import { DBEmbed, deliverDBEmbed, refreshDBEmbeds } from "./dbembed.js";
 import { ColumnList, Column } from "./columns.js";
 
 function post(msg) {
@@ -215,6 +215,8 @@ window.hyperview = {
   },
   // Swift → JS: a dbembed snapshot answering requestDBEmbed.
   deliverDBEmbed: deliverDBEmbed,
+  // Swift → JS: after an embed write, every embed of that database refetches.
+  refreshDBEmbeds: refreshDBEmbeds,
   // Swift → JS: centered column (default) vs full-width (PageProps.wideLayout).
   setWide: function (wide) {
     document.body.classList.toggle("wide", !!wide);

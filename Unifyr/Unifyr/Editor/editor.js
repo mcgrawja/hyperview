@@ -40267,12 +40267,17 @@ img.ProseMirror-separator {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
   }
-  var dbEmbedRequests = { pending: {}, counter: 0 };
+  var dbEmbedRequests = { pending: {}, counter: 0, mounted: /* @__PURE__ */ new Map() };
   function deliverDBEmbed(ref, snapshotJSON) {
     const render = dbEmbedRequests.pending[ref];
     if (!render) return;
     delete dbEmbedRequests.pending[ref];
     render(snapshotJSON ? JSON.parse(snapshotJSON) : null);
+  }
+  function refreshDBEmbeds(databaseID) {
+    for (const entry of dbEmbedRequests.mounted.values()) {
+      if (entry.databaseID === databaseID) entry.request();
+    }
   }
   var DBEmbed = Node2.create({
     name: "dbembed",
@@ -40313,7 +40318,12 @@ img.ProseMirror-separator {
         body.textContent = "Loading\u2026";
         dom.appendChild(header);
         dom.appendChild(body);
-        if (node.attrs.noteID) {
+        const mountKey = `dbembed-mount-${++dbEmbedRequests.counter}`;
+        const request = () => {
+          if (!node.attrs.noteID) {
+            body.textContent = "No database selected.";
+            return;
+          }
           const ref = `dbembed-${++dbEmbedRequests.counter}`;
           dbEmbedRequests.pending[ref] = (snapshot) => renderSnapshot(header, body, node, snapshot);
           post4({
@@ -40322,16 +40332,29 @@ img.ProseMirror-separator {
             viewID: node.attrs.viewID || null,
             ref
           });
-        } else {
-          body.textContent = "No database selected.";
-        }
-        return { dom };
+        };
+        dbEmbedRequests.mounted.set(mountKey, { databaseID: node.attrs.noteID, request });
+        request();
+        return {
+          dom,
+          // The embed's inputs/popups own their events — ProseMirror must not
+          // treat clicks/keys inside the body as document edits.
+          stopEvent(event) {
+            return body.contains(event.target);
+          },
+          ignoreMutation() {
+            return true;
+          },
+          destroy() {
+            dbEmbedRequests.mounted.delete(mountKey);
+          }
+        };
       };
     }
   });
   function renderSnapshot(header, body, node, snapshot) {
     if (!snapshot) {
-      body.textContent = "Database not found (deleted?). Click to try opening it.";
+      body.textContent = "Database not found (deleted?). Click the header to try opening it.";
       return;
     }
     const viewSuffix = snapshot.view ? ` \xB7 ${snapshot.view}` : "";
@@ -40340,33 +40363,242 @@ img.ProseMirror-separator {
     const table = document.createElement("table");
     table.className = "dbembed-table";
     const head = document.createElement("tr");
+    const openTh = document.createElement("th");
+    openTh.className = "dbembed-open-col";
+    head.appendChild(openTh);
     for (const column of snapshot.columns || []) {
       const th = document.createElement("th");
-      th.textContent = column;
+      th.textContent = column.name;
       head.appendChild(th);
     }
     table.appendChild(head);
     for (const row of snapshot.rows || []) {
-      const tr2 = document.createElement("tr");
-      for (const cell of row) {
-        const td = document.createElement("td");
-        td.textContent = cell;
-        tr2.appendChild(td);
-      }
-      table.appendChild(tr2);
+      table.appendChild(renderRow(node, snapshot, row));
     }
     body.appendChild(table);
+    const footer = document.createElement("div");
+    footer.className = "dbembed-footer";
+    const addButton = document.createElement("button");
+    addButton.type = "button";
+    addButton.className = "dbembed-add";
+    addButton.textContent = "+ New";
+    addButton.addEventListener("click", () => {
+      post4({ type: "dbAddRowEmbed", databaseID: node.attrs.noteID, viewID: node.attrs.viewID || null });
+    });
+    footer.appendChild(addButton);
     if ((snapshot.rows || []).length === 0) {
-      const empty2 = document.createElement("div");
+      const empty2 = document.createElement("span");
       empty2.className = "dbembed-more";
       empty2.textContent = "No rows match this view.";
-      body.appendChild(empty2);
+      footer.appendChild(empty2);
     } else if (snapshot.more > 0) {
-      const more = document.createElement("div");
+      const more = document.createElement("span");
       more.className = "dbembed-more";
-      more.textContent = `+ ${snapshot.more} more`;
-      body.appendChild(more);
+      more.textContent = `+ ${snapshot.more} more in the database`;
+      footer.appendChild(more);
     }
+    body.appendChild(footer);
+  }
+  function renderRow(node, snapshot, row) {
+    const tr2 = document.createElement("tr");
+    const openTd = document.createElement("td");
+    openTd.className = "dbembed-open-col";
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.className = "dbembed-open";
+    openButton.textContent = "\u2197";
+    openButton.title = "Open as page";
+    openButton.addEventListener("click", () => {
+      post4({ type: "openDBRow", databaseID: node.attrs.noteID, rowID: row.id });
+    });
+    openTd.appendChild(openButton);
+    tr2.appendChild(openTd);
+    for (const column of snapshot.columns || []) {
+      const td = document.createElement("td");
+      const cell = (row.cells || {})[column.id] || { display: "", raw: null };
+      td.appendChild(cellEditor(node, column, row, cell));
+      tr2.appendChild(td);
+    }
+    return tr2;
+  }
+  function commit(node, row, column, value) {
+    post4({
+      type: "dbSetCell",
+      databaseID: node.attrs.noteID,
+      rowID: row.id,
+      propertyID: column.id,
+      value
+    });
+  }
+  function cellEditor(node, column, row, cell) {
+    switch (column.kind) {
+      case "checkbox": {
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.className = "dbembed-check";
+        input.checked = cell.raw === true;
+        input.addEventListener("change", () => commit(node, row, column, input.checked));
+        return input;
+      }
+      case "date": {
+        const input = document.createElement("input");
+        input.type = "date";
+        input.className = "dbembed-input";
+        input.value = typeof cell.raw === "string" ? cell.raw : "";
+        input.addEventListener("change", () => commit(node, row, column, input.value));
+        return input;
+      }
+      case "number": {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "dbembed-input dbembed-number";
+        input.value = cell.raw === null || cell.raw === void 0 ? "" : String(cell.raw);
+        const send = () => {
+          const parsed = parseFloat(input.value.replace(/,/g, ""));
+          commit(node, row, column, Number.isNaN(parsed) ? "" : parsed);
+        };
+        input.addEventListener("change", send);
+        input.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") input.blur();
+        });
+        return input;
+      }
+      case "select":
+      case "multiSelect":
+        return optionChips(node, column, row, cell, column.kind === "multiSelect");
+      case "relation":
+        return relationChips(node, column, row, cell);
+      case "rollup": {
+        const span = document.createElement("span");
+        span.className = "dbembed-readonly";
+        span.textContent = "\u2014";
+        return span;
+      }
+      default: {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "dbembed-input";
+        input.value = typeof cell.raw === "string" ? cell.raw : cell.display || "";
+        input.addEventListener("change", () => commit(node, row, column, input.value));
+        input.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") input.blur();
+        });
+        return input;
+      }
+    }
+  }
+  function optionChips(node, column, row, cell, multiple) {
+    const wrap2 = document.createElement("div");
+    wrap2.className = "dbembed-chips";
+    const selected = Array.isArray(cell.raw) ? cell.raw : [];
+    const options = column.options || [];
+    const selectedOptions = selected.map((id) => options.find((option) => option.id === id)).filter(Boolean);
+    if (selectedOptions.length === 0) {
+      const hint = document.createElement("span");
+      hint.className = "dbembed-empty-hint";
+      hint.textContent = "\u2014";
+      wrap2.appendChild(hint);
+    }
+    for (const option of selectedOptions) {
+      const chip = document.createElement("span");
+      chip.className = "dbembed-chip";
+      chip.textContent = option.name;
+      chip.style.background = `color-mix(in srgb, ${option.color} 22%, transparent)`;
+      wrap2.appendChild(chip);
+    }
+    wrap2.addEventListener("click", () => {
+      openPickPopup(wrap2, options.map((option) => ({
+        id: option.id,
+        label: option.name,
+        color: option.color,
+        selected: selected.includes(option.id)
+      })), multiple, (ids) => commit(node, row, column, ids));
+    });
+    return wrap2;
+  }
+  function relationChips(node, column, row, cell) {
+    const wrap2 = document.createElement("div");
+    wrap2.className = "dbembed-chips";
+    const selected = Array.isArray(cell.raw) ? cell.raw : [];
+    const targets = column.targets || [];
+    const label = selected.map((id) => (targets.find((target) => target.id === id) || {}).title).filter(Boolean).join(", ");
+    const span = document.createElement("span");
+    span.className = label ? "dbembed-relation" : "dbembed-empty-hint";
+    span.textContent = label || "\u2014";
+    wrap2.appendChild(span);
+    wrap2.addEventListener("click", () => {
+      openPickPopup(wrap2, targets.map((target) => ({
+        id: target.id,
+        label: target.title,
+        color: null,
+        selected: selected.includes(target.id)
+      })), true, (ids) => commit(node, row, column, ids));
+    });
+    return wrap2;
+  }
+  var activePickPopup = null;
+  function closePickPopup() {
+    if (!activePickPopup) return;
+    document.removeEventListener("mousedown", activePickPopup.dismiss, true);
+    activePickPopup.element.remove();
+    activePickPopup = null;
+  }
+  function openPickPopup(anchor, items, multiple, onCommit) {
+    closePickPopup();
+    const popup = document.createElement("div");
+    popup.className = "dbembed-popup";
+    const state = new Set(items.filter((item) => item.selected).map((item) => item.id));
+    const rerender = () => {
+      popup.innerHTML = "";
+      if (items.length === 0) {
+        const empty2 = document.createElement("div");
+        empty2.className = "dbembed-more";
+        empty2.textContent = "No options.";
+        popup.appendChild(empty2);
+      }
+      for (const item of items) {
+        const rowEl = document.createElement("div");
+        rowEl.className = "dbembed-popup-row";
+        const label = document.createElement("span");
+        label.className = "dbembed-chip";
+        if (item.color) {
+          label.style.background = `color-mix(in srgb, ${item.color} 22%, transparent)`;
+        }
+        label.textContent = item.label;
+        rowEl.appendChild(label);
+        if (state.has(item.id)) {
+          const mark = document.createElement("span");
+          mark.className = "dbembed-popup-mark";
+          mark.textContent = "\u2713";
+          rowEl.appendChild(mark);
+        }
+        rowEl.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          if (multiple) {
+            state.has(item.id) ? state.delete(item.id) : state.add(item.id);
+            onCommit(Array.from(state));
+            rerender();
+          } else {
+            const next = state.has(item.id) ? [] : [item.id];
+            onCommit(next);
+            closePickPopup();
+          }
+        });
+        popup.appendChild(rowEl);
+      }
+    };
+    rerender();
+    document.body.appendChild(popup);
+    const rect = anchor.getBoundingClientRect();
+    const below = rect.bottom + 4;
+    const top = below + popup.offsetHeight > window.innerHeight ? Math.max(6, rect.top - popup.offsetHeight - 4) : below;
+    popup.style.top = `${top}px`;
+    popup.style.left = `${Math.max(6, Math.min(rect.left, window.innerWidth - popup.offsetWidth - 6))}px`;
+    const dismiss = (event) => {
+      if (!popup.contains(event.target)) closePickPopup();
+    };
+    setTimeout(() => document.addEventListener("mousedown", dismiss, true), 0);
+    activePickPopup = { element: popup, dismiss };
   }
 
   // src/columns.js
@@ -40636,6 +40868,8 @@ img.ProseMirror-separator {
     },
     // Swift → JS: a dbembed snapshot answering requestDBEmbed.
     deliverDBEmbed,
+    // Swift → JS: after an embed write, every embed of that database refetches.
+    refreshDBEmbeds,
     // Swift → JS: centered column (default) vs full-width (PageProps.wideLayout).
     setWide: function(wide) {
       document.body.classList.toggle("wide", !!wide);

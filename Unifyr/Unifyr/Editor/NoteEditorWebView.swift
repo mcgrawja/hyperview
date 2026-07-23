@@ -108,9 +108,13 @@ struct EditorDocument {
     /// "/Sub-page": create a child page of this document's page and return it
     /// for inline embedding. nil = sub-pages unsupported (database row pages).
     let createSubpage: (() -> EditorPageRef?)?
-    /// dbembed blocks: (databaseID, viewID) → snapshot JSON for the read-only
-    /// preview, nil when the database is gone.
+    /// dbembed blocks: (databaseID, viewID) → snapshot JSON (editable payload),
+    /// nil when the database is gone.
     let dbEmbedSnapshot: ((UUID, UUID?) -> String?)?
+    /// An embed cell edit: (databaseID, rowID, propertyID, raw) → applied?
+    let dbEmbedEdit: ((UUID, UUID, UUID, Any) -> Bool)?
+    /// An embed "New" row: (databaseID, viewID) → the new row's id.
+    let dbEmbedAddRow: ((UUID, UUID?) -> UUID?)?
     /// Full-width editing (PageProps.wideLayout); default is a centered column.
     var wide: Bool = false
 
@@ -122,6 +126,8 @@ struct EditorDocument {
         pageList: (() -> [EditorPageRef])? = nil,
         createSubpage: (() -> EditorPageRef?)? = nil,
         dbEmbedSnapshot: ((UUID, UUID?) -> String?)? = nil,
+        dbEmbedEdit: ((UUID, UUID, UUID, Any) -> Bool)? = nil,
+        dbEmbedAddRow: ((UUID, UUID?) -> UUID?)? = nil,
         wide: Bool = false
     ) {
         self.id = id
@@ -131,6 +137,8 @@ struct EditorDocument {
         self.pageList = pageList
         self.createSubpage = createSubpage
         self.dbEmbedSnapshot = dbEmbedSnapshot
+        self.dbEmbedEdit = dbEmbedEdit
+        self.dbEmbedAddRow = dbEmbedAddRow
         self.wide = wide
     }
 
@@ -161,6 +169,14 @@ struct EditorDocument {
         self.dbEmbedSnapshot = { databaseID, viewID in
             DatabaseStore(context: store.context)
                 .embedSnapshotJSON(databaseID: databaseID, viewID: viewID)
+        }
+        self.dbEmbedEdit = { databaseID, rowID, propertyID, raw in
+            DatabaseStore(context: store.context)
+                .applyEmbedEdit(databaseID: databaseID, rowID: rowID, propertyID: propertyID, raw: raw)
+        }
+        self.dbEmbedAddRow = { databaseID, viewID in
+            DatabaseStore(context: store.context)
+                .embedAddRow(databaseID: databaseID, viewID: viewID)
         }
         self.wide = note.pageProps.wideLayout ?? false
     }
@@ -453,6 +469,36 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
                 completionHandler: nil
             )
 
+        case "dbSetCell":
+            // An embed input committed a cell edit.
+            guard let document,
+                  let databaseID = (body["databaseID"] as? String).flatMap(UUID.init(uuidString:)),
+                  let rowID = (body["rowID"] as? String).flatMap(UUID.init(uuidString:)),
+                  let propertyID = (body["propertyID"] as? String).flatMap(UUID.init(uuidString:)),
+                  let raw = body["value"]
+            else { return }
+            if document.dbEmbedEdit?(databaseID, rowID, propertyID, raw) == true {
+                refreshDBEmbeds(databaseID: databaseID)
+            }
+
+        case "dbAddRowEmbed":
+            guard let document,
+                  let databaseID = (body["databaseID"] as? String).flatMap(UUID.init(uuidString:))
+            else { return }
+            let viewID = (body["viewID"] as? String).flatMap(UUID.init(uuidString:))
+            if document.dbEmbedAddRow?(databaseID, viewID) != nil {
+                refreshDBEmbeds(databaseID: databaseID)
+            }
+
+        case "openDBRow":
+            // The embed's ↗: navigate to the database AND latch the row so
+            // DatabaseView opens its page once mounted.
+            guard let databaseID = (body["databaseID"] as? String).flatMap(UUID.init(uuidString:)),
+                  let rowID = (body["rowID"] as? String).flatMap(UUID.init(uuidString:))
+            else { return }
+            DeepLink.send(.unifyrOpenDBRow, userInfo: ["db": databaseID, "row": rowID])
+            NotificationCenter.default.post(name: .unifyrOpenNote, object: nil, userInfo: ["id": databaseID])
+
         case "createSubpage":
             // "/Sub-page": Swift creates the child page, the editor embeds it.
             guard let document, let child = document.createSubpage?() else { return }
@@ -510,6 +556,16 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         guard let data = try? Data(contentsOf: url) else { return }
         let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "image/png"
         insertImageAsset(data: data, filename: url.lastPathComponent, mimeType: mimeType)
+    }
+
+    /// After a write through an embed, every embed of that database on the
+    /// page re-requests its snapshot so they all stay consistent.
+    private func refreshDBEmbeds(databaseID: UUID) {
+        let literal = Self.jsLiteral(databaseID.uuidString)
+        webView?.evaluateJavaScript(
+            "window.hyperview.refreshDBEmbeds(\(literal));",
+            completionHandler: nil
+        )
     }
 
     private func insertDBEmbed(id: UUID, viewID: UUID?, title: String, emoji: String?) {

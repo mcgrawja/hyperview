@@ -106,6 +106,14 @@ struct DatabaseRowPage: View {
                 dbEmbedSnapshot: { [context] databaseID, viewID in
                     DatabaseStore(context: context)
                         .embedSnapshotJSON(databaseID: databaseID, viewID: viewID)
+                },
+                dbEmbedEdit: { [context] databaseID, rowID, propertyID, raw in
+                    DatabaseStore(context: context)
+                        .applyEmbedEdit(databaseID: databaseID, rowID: rowID, propertyID: propertyID, raw: raw)
+                },
+                dbEmbedAddRow: { [context] databaseID, viewID in
+                    DatabaseStore(context: context)
+                        .embedAddRow(databaseID: databaseID, viewID: viewID)
                 }
             ))
             .frame(maxWidth: .infinity, maxHeight: .infinity)

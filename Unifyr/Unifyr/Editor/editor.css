@@ -432,3 +432,90 @@ body.wide .ProseMirror {
 }
 .ProseMirror .image-block:hover .image-resize-handle,
 .ProseMirror .image-block.ProseMirror-selectednode .image-resize-handle { opacity: 1; }
+
+/* ---------- Editable embeds ---------- */
+.ProseMirror .dbembed-table td { padding: 2px 8px; }
+.ProseMirror .dbembed-open-col { width: 26px; padding: 2px 0 2px 6px; }
+.ProseMirror .dbembed-open {
+  border: none;
+  background: transparent;
+  color: var(--hv-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  opacity: 0;
+}
+.ProseMirror .dbembed-table tr:hover .dbembed-open { opacity: 1; }
+.ProseMirror .dbembed-open:hover { background: var(--hv-code-bg); }
+.ProseMirror .dbembed-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: var(--hv-text);
+  outline: none;
+  padding: 3px 0;
+}
+.ProseMirror .dbembed-input:focus { background: var(--hv-code-bg); border-radius: 4px; }
+.ProseMirror .dbembed-number { text-align: right; }
+.ProseMirror .dbembed-check { accent-color: var(--hv-accent); }
+.ProseMirror .dbembed-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  min-height: 22px;
+  align-items: center;
+}
+.ProseMirror .dbembed-chip {
+  font-size: 0.85em;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--hv-code-bg);
+  white-space: nowrap;
+}
+.ProseMirror .dbembed-empty-hint { color: var(--hv-secondary); }
+.ProseMirror .dbembed-relation { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ProseMirror .dbembed-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+}
+.ProseMirror .dbembed-add {
+  border: none;
+  background: transparent;
+  color: var(--hv-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9em;
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+.ProseMirror .dbembed-add:hover { background: var(--hv-code-bg); }
+.dbembed-popup {
+  position: fixed;
+  z-index: 60;
+  background: Canvas;
+  border: 1px solid var(--hv-rule);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  min-width: 160px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.dbembed-popup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.dbembed-popup-row:hover { background: var(--hv-code-bg); }
+.dbembed-popup-mark { color: var(--hv-accent); font-size: 12px; }
+.dbembed-popup .dbembed-chip { background: var(--hv-code-bg); }

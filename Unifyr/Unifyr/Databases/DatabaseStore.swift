@@ -613,9 +613,10 @@ struct DatabaseStore {
 
     // MARK: - Embed snapshots (dbembed blocks, Phase 4)
 
-    /// The read-only preview payload a `dbembed` editor block renders:
-    /// {title, view, columns, rows (display strings), more}. nil if the
-    /// database is gone/trashed.
+    /// The payload a `dbembed` editor block renders — EDITABLE since the
+    /// embeds round: column metadata (kind, options, relation targets) plus
+    /// raw + display values per cell, so the embed can host real inputs and
+    /// write back through the bridge. nil if the database is gone/trashed.
     func embedSnapshotJSON(databaseID: UUID, viewID: UUID?, rowLimit: Int = 8) -> String? {
         let kind = NoteKind.database.rawValue
         var descriptor = FetchDescriptor<Note>(
@@ -636,21 +637,137 @@ struct DatabaseStore {
         let view = viewID.flatMap { id in views(of: note).first { $0.id == id } }
         let visible = apply(view, rows: rows, values: values, properties: properties)
 
-        // First 4 columns keep the preview readable; the full table is a click
+        // First 6 columns keep the embed readable; the full table is a click
         // away.
-        let columns = Array(properties.prefix(4))
+        let columns = Array(properties.prefix(6))
+        let columnPayload: [[String: Any]] = columns.map { property in
+            var out: [String: Any] = [
+                "id": property.id.uuidString,
+                "name": property.name,
+                "kind": property.kind,
+            ]
+            let config = config(of: property)
+            if let options = config.options, !options.isEmpty {
+                out["options"] = options.map { ["id": $0.id.uuidString, "name": $0.name, "color": $0.colorHex] }
+            }
+            if property.propertyKind == .relation, let targetID = config.relationTargetID {
+                out["targets"] = rowTitles(databaseNoteID: targetID).map {
+                    ["id": $0.id.uuidString, "title": $0.title]
+                }
+            }
+            return out
+        }
+
+        let rowPayload: [[String: Any]] = visible.prefix(rowLimit).map { row in
+            var cells: [String: Any] = [:]
+            for property in columns {
+                let cell = values[row.id]?[property.id] ?? DBCellValue()
+                cells[property.id.uuidString] = [
+                    "display": displayText(cell, property: property),
+                    "raw": rawEmbedValue(cell, property: property),
+                ]
+            }
+            return ["id": row.id.uuidString, "cells": cells]
+        }
+
         let payload: [String: Any] = [
             "title": note.title.isEmpty ? "Untitled" : note.title,
             "emoji": note.emoji ?? "📊",
             "view": view?.name ?? "",
-            "columns": columns.map(\.name),
-            "rows": visible.prefix(rowLimit).map { row in
-                columns.map { displayText(values[row.id]?[$0.id] ?? DBCellValue(), property: $0) }
-            },
+            "columns": columnPayload,
+            "rows": rowPayload,
             "more": max(0, visible.count - rowLimit),
+            "editable": true,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// The JSON-friendly editable form of a cell, per kind (what the embed's
+    /// inputs hold and send back).
+    private func rawEmbedValue(_ cell: DBCellValue, property: DBProperty) -> Any {
+        switch property.propertyKind {
+        case .text: cell.text ?? ""
+        case .url: cell.url ?? ""
+        case .person: (cell.people ?? []).joined(separator: ", ")
+        case .number: cell.number ?? NSNull()
+        case .checkbox: cell.checked ?? false
+        case .date: cell.date ?? ""
+        case .select, .multiSelect: (cell.optionIDs ?? []).map(\.uuidString)
+        case .relation: (cell.rowIDs ?? []).map(\.uuidString)
+        case .rollup: NSNull()
+        }
+    }
+
+    /// Coerce an embed edit back onto a cell. ID-based (unlike the MCP
+    /// `toolCellValue`, which is name-based) — the embed UI works with the
+    /// option/row ids the snapshot handed it.
+    func embedCellValue(_ raw: Any, property: DBProperty) -> DBCellValue {
+        var cell = DBCellValue()
+        if raw is NSNull { return cell }
+        let text = ((raw as? String) ?? "").trimmingCharacters(in: .whitespaces)
+        let ids = (raw as? [Any])?.compactMap { ($0 as? String).flatMap(UUID.init(uuidString:)) } ?? []
+
+        switch property.propertyKind {
+        case .text: cell.text = text.isEmpty ? nil : text
+        case .url: cell.url = text.isEmpty ? nil : text
+        case .person:
+            let names = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            cell.people = names.isEmpty ? nil : names
+        case .number:
+            cell.number = (raw as? Double) ?? (raw as? Int).map(Double.init) ?? Double(text.replacingOccurrences(of: ",", with: ""))
+        case .checkbox:
+            cell.checked = (raw as? Bool) == true ? true : nil
+        case .date:
+            cell.date = text.isEmpty ? nil : String(text.prefix(10))
+        case .select, .multiSelect:
+            let valid = Set((config(of: property).options ?? []).map(\.id))
+            var kept = ids.filter { valid.contains($0) }
+            if property.propertyKind == .select { kept = Array(kept.prefix(1)) }
+            cell.optionIDs = kept.isEmpty ? nil : kept
+        case .relation:
+            cell.rowIDs = ids.isEmpty ? nil : ids
+        case .rollup:
+            break
+        }
+        return cell
+    }
+
+    /// One embed cell edit, end to end. Returns false when the target is gone
+    /// (deleted on another device while the page was open).
+    @discardableResult
+    func applyEmbedEdit(databaseID: UUID, rowID: UUID, propertyID: UUID, raw: Any) -> Bool {
+        guard let (row, note) = rowWithDatabase(id: rowID), note.id == databaseID,
+              let property = fetchProperties(databaseNoteID: databaseID).first(where: { $0.id == propertyID })
+        else { return false }
+        setValue(embedCellValue(raw, property: property), rowID: row.id, propertyID: property.id, in: note)
+        try? context.save()
+        return true
+    }
+
+    /// "New" from an embed: the row pre-fills the view's select filters so it
+    /// actually APPEARS in the filtered embed it was created from.
+    @discardableResult
+    func embedAddRow(databaseID: UUID, viewID: UUID?) -> UUID? {
+        let kind = NoteKind.database.rawValue
+        var descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { $0.id == databaseID && $0.noteKind == kind && $0.deletedAt == nil }
+        )
+        descriptor.fetchLimit = 1
+        guard let note = ((try? context.fetch(descriptor)) ?? []).first else { return nil }
+        let row = addRow(to: note)
+        if let view = viewID.flatMap({ id in views(of: note).first { $0.id == id } }) {
+            let properties = fetchProperties(databaseNoteID: databaseID)
+            for filter in view.filters ?? [] where filter.filterOp == .hasOption {
+                guard let propertyID = filter.propertyID, let optionID = filter.optionID,
+                      properties.contains(where: { $0.id == propertyID }) else { continue }
+                var cell = DBCellValue()
+                cell.optionIDs = [optionID]
+                setValue(cell, rowID: row.id, propertyID: propertyID, in: note)
+            }
+        }
+        try? context.save()
+        return row.id
     }
 
     // MARK: - Database settings (Note.schemaJSON)

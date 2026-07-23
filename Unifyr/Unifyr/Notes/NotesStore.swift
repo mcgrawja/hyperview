@@ -39,6 +39,10 @@ extension Notification.Name {
     static let unifyrRequestImageFile = Notification.Name("unifyr.requestImageFile")
     /// "/Linked database": NotesView presents the database/view picker.
     static let unifyrRequestDBEmbedPicker = Notification.Name("unifyr.requestDBEmbedPicker")
+    /// An embed's ↗ asked to open a row's page; userInfo: ["db": UUID,
+    /// "row": UUID]. NotesView navigates to the database; DatabaseView opens
+    /// the row (DeepLink-latched — the database view mounts after navigation).
+    static let unifyrOpenDBRow = Notification.Name("unifyr.openDBRow")
     /// The picker's choice; userInfo: ["id": UUID, "viewID": UUID?, "title":
     /// String, "emoji": String?]. The bridge inserts the dbembed block.
     static let unifyrInsertDBEmbed = Notification.Name("unifyr.insertDBEmbed")

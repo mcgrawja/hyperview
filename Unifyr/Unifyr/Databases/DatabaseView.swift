@@ -131,6 +131,21 @@ struct DatabaseView: View {
             }
         }
         .background(Theme.Palette.background)
+        // An embed's ↗ deep-links to a specific row; the latch covers the
+        // mount-after-navigation case, onReceive covers already-mounted.
+        .task(id: note.id) {
+            if let info = DeepLink.take(.unifyrOpenDBRow),
+               info["db"] as? UUID == note.id,
+               let rowID = info["row"] as? UUID {
+                openRowID = rowID
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .unifyrOpenDBRow)) { notification in
+            guard notification.userInfo?["db"] as? UUID == note.id,
+                  let rowID = notification.userInfo?["row"] as? UUID else { return }
+            DeepLink.take(.unifyrOpenDBRow)
+            openRowID = rowID
+        }
     }
 
     // No title row here — the Notes module's PageHost owns breadcrumbs, icon,
