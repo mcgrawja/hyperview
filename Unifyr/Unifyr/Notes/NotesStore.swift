@@ -39,6 +39,13 @@ extension Notification.Name {
     static let unifyrRequestImageFile = Notification.Name("unifyr.requestImageFile")
     /// "/Linked database": NotesView presents the database/view picker.
     static let unifyrRequestDBEmbedPicker = Notification.Name("unifyr.requestDBEmbedPicker")
+    /// "/Embed page": NotesView presents the page picker; the choice returns
+    /// via .unifyrInsertPageEmbed {id, title, emoji}.
+    static let unifyrRequestPageEmbedPicker = Notification.Name("unifyr.requestPageEmbedPicker")
+    static let unifyrInsertPageEmbed = Notification.Name("unifyr.insertPageEmbed")
+    /// Content changed OUTSIDE the editor (version restore) — the bridge
+    /// re-issues loadDocument for the current document.
+    static let unifyrReloadEditor = Notification.Name("unifyr.reloadEditor")
     /// A non-page mention chip was clicked; userInfo: ["kind": String,
     /// "id": String?, "date": Date?]. ContentView switches modules.
     static let unifyrOpenMention = Notification.Name("unifyr.openMention")

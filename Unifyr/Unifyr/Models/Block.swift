@@ -82,6 +82,9 @@ nonisolated enum BlockKind: String, Sendable, CaseIterable {
     /// Live agenda slice (integration round 2): attrs = scope; data is
     /// fetched fresh on every load, never persisted.
     case agenda
+    /// Live page transclusion (round 5): attrs = noteID + cached title/emoji;
+    /// content is fetched fresh, read-only, on every load.
+    case pageembed
 }
 
 extension Block {

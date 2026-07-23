@@ -79,6 +79,7 @@ const doc = {
     { type: "image", attrs: { src: "unifyr-asset://X", width: 320 } },
     { type: "bookmark", attrs: { url: "https://example.com", title: "Example" } },
     { type: "agenda", attrs: { scope: "today" } },
+    { type: "pageembed", attrs: { noteID: "D", title: "Mirror" } },
   ],
 };
 
@@ -99,6 +100,7 @@ check("subpage rendered", !!window.document.querySelector(".subpage-block"));
 check("dbembed rendered", !!window.document.querySelector(".dbembed"));
 check("bookmark rendered", !!window.document.querySelector(".bookmark-block"));
 check("agenda rendered", !!window.document.querySelector(".agenda-block"));
+check("pageembed rendered", !!window.document.querySelector(".pageembed"));
 
 if (failures.length) {
   console.error(`\n${failures.length} smoke check(s) FAILED`);

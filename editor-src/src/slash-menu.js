@@ -58,6 +58,8 @@ const ITEMS = [
     run: (e, r) => { e.chain().focus().deleteRange(r).run(); post({ type: "createInlineDatabase" }); } },
   { title: "Linked database", hint: "Embed an existing database view", keywords: "database table view embed linked db",
     run: (e, r) => { e.chain().focus().deleteRange(r).run(); post({ type: "requestDBEmbedPicker" }); } },
+  { title: "Embed page", hint: "Live preview of another page", keywords: "embed page synced transclude include mirror",
+    run: (e, r) => { e.chain().focus().deleteRange(r).run(); post({ type: "requestPageEmbedPicker" }); } },
   { title: "Link to note", hint: "Link to another Hyperview note", keywords: "link note wiki [[",
     run: (e, r) => { e.chain().focus().deleteRange(r).run(); post({ type: "requestNoteLink" }); } },
   { title: "Link to file", hint: "Link to a file on this Mac", keywords: "link file attach finder",

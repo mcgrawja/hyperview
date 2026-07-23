@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import SwiftData
 
 enum EditorIntegrations {
 
@@ -50,6 +51,55 @@ enum EditorIntegrations {
         }
 
         guard let data = try? JSONSerialization.data(withJSONObject: entries) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    // MARK: "/embed page" (round 5)
+
+    /// The source page's blocks as read-only preview lines:
+    /// {title, emoji, lines:[{kind,text,checked}], more}. nil = gone/trashed.
+    @MainActor
+    static func pageEmbedJSON(sourceID: UUID, store: NotesStore, lineLimit: Int = 12) -> String? {
+        var descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { $0.id == sourceID && $0.deletedAt == nil }
+        )
+        descriptor.fetchLimit = 1
+        guard let source = ((try? store.context.fetch(descriptor)) ?? []).first else { return nil }
+
+        let document = store.loadDocument(source)
+        var lines: [[String: Any]] = []
+        var total = 0
+        for node in document.content ?? [] {
+            // Lists explode into one line per item so counts read honestly.
+            let items: [(kind: String, node: PMNode)]
+            switch node.type {
+            case "bulletList", "orderedList", "taskList":
+                let kind = node.type == "taskList" ? "todo" : (node.type == "orderedList" ? "numbered" : "bullet")
+                items = (node.content ?? []).map { (kind, $0) }
+            default:
+                items = [(node.type, node)]
+            }
+            for (kind, item) in items {
+                total += 1
+                guard lines.count < lineLimit else { continue }
+                var line: [String: Any] = [
+                    "kind": kind == "heading" ? "heading" : kind,
+                    "text": String(plainText(of: item).replacingOccurrences(of: "\n", with: " ").prefix(200)),
+                ]
+                if kind == "todo" {
+                    line["checked"] = item.attrs?["checked"]?.boolValue ?? false
+                }
+                lines.append(line)
+            }
+        }
+
+        let payload: [String: Any] = [
+            "title": source.title.isEmpty ? "Untitled" : source.title,
+            "emoji": source.emoji ?? "📄",
+            "lines": lines,
+            "more": max(0, total - lines.count),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
         return String(decoding: data, as: UTF8.self)
     }
 

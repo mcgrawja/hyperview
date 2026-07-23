@@ -14,6 +14,9 @@ import SwiftUI
 import SwiftData
 import QuickLook
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
 
 struct NotesView: View {
     @Environment(\.modelContext) private var context
@@ -37,6 +40,7 @@ struct NotesView: View {
     @State private var showingFileImporter = false
     @State private var showingImageImporter = false
     @State private var showingDBEmbedPicker = false
+    @State private var showingPageEmbedPicker = false
     @State private var previewURL: URL?
 
     private var store: NotesStore { NotesStore(context: context) }
@@ -143,6 +147,21 @@ struct NotesView: View {
                 object: nil,
                 userInfo: ["href": url.absoluteString, "text": url.lastPathComponent]
             )
+        }
+        // "/Embed page": pick a page to transclude; the bridge inserts the
+        // pageembed block.
+        .onReceive(NotificationCenter.default.publisher(for: .unifyrRequestPageEmbedPicker)) { _ in
+            showingPageEmbedPicker = true
+        }
+        .sheet(isPresented: $showingPageEmbedPicker) {
+            NoteLinkPicker(notes: notes.filter { !$0.isArchived && !$0.isTrashed && $0.id != selectedNote?.id }) { note in
+                var userInfo: [String: Any] = [
+                    "id": note.id,
+                    "title": note.title.isEmpty ? "Untitled" : note.title,
+                ]
+                if let emoji = note.emoji { userInfo["emoji"] = emoji }
+                NotificationCenter.default.post(name: .unifyrInsertPageEmbed, object: nil, userInfo: userInfo)
+            }
         }
         // "/Linked database": pick a database (and optionally a saved view)
         // to embed; the bridge inserts the dbembed block.
@@ -617,6 +636,8 @@ private struct PageHost: View {
     @State private var showingIconPicker = false
     @State private var showingCoverPicker = false
     @State private var showingCoverImporter = false
+    @State private var showingCSVImporter = false
+    @State private var showingVersions = false
     /// Drag-to-reposition mode for image covers.
     @State private var repositioningCover = false
     /// Pages whose content links here (link hrefs, @-mentions, subpage
@@ -790,6 +811,17 @@ private struct PageHost: View {
                         try? context.save()
                         open(copy)
                     }
+                    #if os(macOS)
+                    Divider()
+                    if note.kind == .page {
+                        Button("Export as Markdown…") { exportMarkdown() }
+                    } else {
+                        Button("Export CSV…") { exportCSV() }
+                        Button("Import CSV…") { showingCSVImporter = true }
+                    }
+                    #endif
+                    Divider()
+                    Button("Version History…") { showingVersions = true }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.title3)
@@ -878,7 +910,35 @@ private struct PageHost: View {
         .task(id: note.id) {
             backlinks = NotesStore(context: context).backlinkSources(to: note.id)
         }
+        .fileImporter(isPresented: $showingCSVImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+            guard case .success(let url) = result else { return }
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+            PageExporter.importCSV(text, into: note, store: DatabaseStore(context: context))
+        }
+        .sheet(isPresented: $showingVersions) {
+            VersionHistorySheet(note: note)
+        }
     }
+
+    #if os(macOS)
+    private func exportMarkdown() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(note.title.isEmpty ? "Untitled" : note.title).md"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let markdown = PageExporter.markdown(for: note, store: NotesStore(context: context))
+        try? markdown.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func exportCSV() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(note.title.isEmpty ? "Untitled" : note.title).csv"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let csv = PageExporter.csv(databaseID: note.id, store: DatabaseStore(context: context))
+        try? csv.write(to: url, atomically: true, encoding: .utf8)
+    }
+    #endif
 
     /// The "Linked from" chip row — standalone for pages, embedded in the
     /// database control row for databases.

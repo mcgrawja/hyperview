@@ -336,7 +336,15 @@ struct DatabaseView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Button(
+                PinStore.isPinned(databaseView: note.id, viewID: view?.id)
+                    ? "Unpin from Dashboard"
+                    : "Pin to Dashboard"
+            ) {
+                PinStore.toggle(databaseView: note.id, viewID: view?.id)
+            }
             if let view {
+                Divider()
                 Button("Edit View…") { editingView = view }
                 Divider()
                 Button("Delete View", role: .destructive) {

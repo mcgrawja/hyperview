@@ -126,6 +126,8 @@ struct EditorDocument {
     /// "/ask": run the prompt against the page and append the answer.
     /// Returns an error message, or nil on success. nil closure = disabled.
     var askClaude: ((String) async -> String?)? = nil
+    /// "/embed page": the source page's blocks as a read-only snapshot JSON.
+    var pageEmbedSnapshot: ((UUID) -> String?)? = nil
     /// Full-width editing (PageProps.wideLayout); default is a centered column.
     var wide: Bool = false
 
@@ -234,6 +236,9 @@ struct EditorDocument {
                 .embedAddRow(databaseID: databaseID, viewID: viewID)
         }
         self.wide = note.pageProps.wideLayout ?? false
+        self.pageEmbedSnapshot = { sourceID in
+            EditorIntegrations.pageEmbedJSON(sourceID: sourceID, store: store)
+        }
     }
 }
 
@@ -335,6 +340,8 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     // Tokens only cross to removeObserver; safe to share.
     nonisolated(unsafe) private var insertImageToken: (any NSObjectProtocol)?
     nonisolated(unsafe) private var insertDBEmbedToken: (any NSObjectProtocol)?
+    nonisolated(unsafe) private var reloadToken: (any NSObjectProtocol)?
+    nonisolated(unsafe) private var insertPageEmbedToken: (any NSObjectProtocol)?
 
     override init() {
         super.init()
@@ -364,6 +371,38 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
                 self?.storeAndInsertImage(from: url)
             }
         }
+        // NotesView answers a requestPageEmbedPicker with the picked page.
+        insertPageEmbedToken = NotificationCenter.default.addObserver(
+            forName: .unifyrInsertPageEmbed,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let id = notification.userInfo?["id"] as? UUID
+            let title = notification.userInfo?["title"] as? String
+            let emoji = notification.userInfo?["emoji"] as? String
+            MainActor.assumeIsolated {
+                guard let self, let id else { return }
+                let idLiteral = Self.jsLiteral(id.uuidString)
+                let titleLiteral = Self.jsLiteral(title ?? "Untitled")
+                let emojiLiteral = emoji.map(Self.jsLiteral) ?? "null"
+                self.webView?.evaluateJavaScript(
+                    "window.hyperview.insertPageEmbed(\(idLiteral), \(titleLiteral), \(emojiLiteral));",
+                    completionHandler: nil
+                )
+            }
+        }
+        // Content changed outside the editor (version restore): reload.
+        reloadToken = NotificationCenter.default.addObserver(
+            forName: .unifyrReloadEditor,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let document = self.document else { return }
+                self.pendingDocument = nil
+                self.loadDocument(for: document)
+            }
+        }
         // NotesView answers a requestDBEmbedPicker with the picked view.
         insertDBEmbedToken = NotificationCenter.default.addObserver(
             forName: .unifyrInsertDBEmbed,
@@ -390,6 +429,12 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         }
         if let insertDBEmbedToken {
             NotificationCenter.default.removeObserver(insertDBEmbedToken)
+        }
+        if let reloadToken {
+            NotificationCenter.default.removeObserver(reloadToken)
+        }
+        if let insertPageEmbedToken {
+            NotificationCenter.default.removeObserver(insertPageEmbedToken)
         }
     }
 
@@ -452,6 +497,8 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         pendingDocument = nil
         saveDebounce?.cancel()
         pending.document.save(BlockSerializer.decodeDocument(pending.data))
+        // Version history rides the save path (throttled inside).
+        PageVersions.maybeSnapshot(docID: pending.id, data: pending.data)
     }
 
     // MARK: JS -> Swift
@@ -504,6 +551,22 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
         case "requestImage":
             pickImage()
+
+        case "requestPageEmbedPicker":
+            NotificationCenter.default.post(name: .unifyrRequestPageEmbedPicker, object: nil)
+
+        case "requestPageEmbed":
+            // A mounted page-embed block wants the source page's blocks.
+            guard let idString = body["noteID"] as? String,
+                  let noteID = UUID(uuidString: idString),
+                  let ref = body["ref"] as? String else { return }
+            let json = document?.pageEmbedSnapshot?(noteID)
+            let refLiteral = Self.jsLiteral(ref)
+            let jsonLiteral = json.map(Self.jsLiteral) ?? "null"
+            webView?.evaluateJavaScript(
+                "window.hyperview.deliverPageEmbed(\(refLiteral), \(jsonLiteral));",
+                completionHandler: nil
+            )
 
         case "requestDBEmbedPicker":
             // The picker lives in NotesView (it has the sheet infrastructure).
@@ -811,6 +874,9 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         loadedDocumentID = document.id
         pushPages(for: document)
         applyWide(document.wide)
+        // Baseline snapshot so the pre-edit state of an old page is always
+        // restorable from Version History.
+        PageVersions.baseline(docID: document.id, data: BlockSerializer.encode(node))
     }
 
     /// Refresh the "@" mention menu's page index (per document load, so it

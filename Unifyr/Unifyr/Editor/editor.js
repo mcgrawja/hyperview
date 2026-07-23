@@ -24576,6 +24576,15 @@ img.ProseMirror-separator {
       }
     },
     {
+      title: "Embed page",
+      hint: "Live preview of another page",
+      keywords: "embed page synced transclude include mirror",
+      run: (e, r2) => {
+        e.chain().focus().deleteRange(r2).run();
+        post3({ type: "requestPageEmbedPicker" });
+      }
+    },
+    {
       title: "Link to note",
       hint: "Link to another Hyperview note",
       keywords: "link note wiki [[",
@@ -41115,8 +41124,105 @@ img.ProseMirror-separator {
     }
   }
 
-  // src/main.js
+  // src/pageembed.js
   function post8(msg) {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
+      window.webkit.messageHandlers.hyperview.postMessage(msg);
+    }
+  }
+  var pageEmbedRequests = { pending: {}, counter: 0 };
+  function deliverPageEmbed(ref, json2) {
+    const render2 = pageEmbedRequests.pending[ref];
+    if (!render2) return;
+    delete pageEmbedRequests.pending[ref];
+    render2(json2 ? JSON.parse(json2) : null);
+  }
+  var PageEmbed = Node2.create({
+    name: "pageembed",
+    group: "block",
+    atom: true,
+    selectable: true,
+    addAttributes() {
+      return {
+        noteID: { default: null },
+        title: { default: "Untitled" },
+        emoji: { default: null }
+      };
+    },
+    parseHTML() {
+      return [{ tag: "div.pageembed" }];
+    },
+    renderHTML({ node, HTMLAttributes }) {
+      const label = `${node.attrs.emoji || "\u{1F4C4}"} ${node.attrs.title || "Untitled"}`;
+      return ["div", mergeAttributes(HTMLAttributes, { class: "pageembed" }), label];
+    },
+    addNodeView() {
+      return ({ node }) => {
+        const dom = document.createElement("div");
+        dom.className = "pageembed";
+        const open = () => {
+          if (node.attrs.noteID) {
+            post8({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
+          }
+        };
+        const header = document.createElement("div");
+        header.className = "pageembed-header";
+        header.textContent = `${node.attrs.emoji || "\u{1F4C4}"} ${node.attrs.title || "Untitled"}`;
+        header.title = "Open page";
+        header.addEventListener("click", (event) => {
+          event.preventDefault();
+          open();
+        });
+        const body = document.createElement("div");
+        body.className = "pageembed-body";
+        body.textContent = "Loading\u2026";
+        dom.appendChild(header);
+        dom.appendChild(body);
+        if (node.attrs.noteID) {
+          const ref = `pageembed-${++pageEmbedRequests.counter}`;
+          pageEmbedRequests.pending[ref] = (snapshot) => {
+            body.innerHTML = "";
+            if (!snapshot) {
+              body.textContent = "Page not found (deleted?).";
+              return;
+            }
+            for (const line of snapshot.lines || []) {
+              const row = document.createElement("div");
+              row.className = `pageembed-line kind-${line.kind || "paragraph"}`;
+              let prefix = "";
+              if (line.kind === "bullet" || line.kind === "numbered") prefix = "\u2022 ";
+              if (line.kind === "todo") prefix = line.checked ? "\u2611 " : "\u2610 ";
+              row.textContent = prefix + (line.text || "");
+              row.addEventListener("click", open);
+              body.appendChild(row);
+            }
+            if (snapshot.more > 0) {
+              const more = document.createElement("div");
+              more.className = "pageembed-more";
+              more.textContent = `+ ${snapshot.more} more \u2014 open the page`;
+              more.addEventListener("click", open);
+              body.appendChild(more);
+            }
+            if ((snapshot.lines || []).length === 0) {
+              body.textContent = "Empty page.";
+            }
+          };
+          post8({ type: "requestPageEmbed", noteID: node.attrs.noteID, ref });
+        } else {
+          body.textContent = "No page selected.";
+        }
+        return {
+          dom,
+          ignoreMutation() {
+            return true;
+          }
+        };
+      };
+    }
+  });
+
+  // src/main.js
+  function post9(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -41126,13 +41232,13 @@ img.ProseMirror-separator {
   function scheduleChange(editor2) {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function() {
-      post8({ type: "documentChanged", doc: editor2.getJSON() });
+      post9({ type: "documentChanged", doc: editor2.getJSON() });
     }, 500);
   }
   function sendImageFile(file) {
     const reader = new FileReader();
     reader.onload = function() {
-      post8({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
+      post9({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
     };
     reader.readAsDataURL(file);
   }
@@ -41176,6 +41282,7 @@ img.ProseMirror-separator {
         Column,
         Bookmark,
         Agenda,
+        PageEmbed,
         Placeholder.configure({ placeholder: "Type \u2018/\u2019 for commands\u2026" }),
         SlashCommands
       ],
@@ -41207,13 +41314,13 @@ img.ProseMirror-separator {
     editor = buildEditor();
   } catch (error2) {
     console.error("Unifyr editor failed to initialize:", error2);
-    post8({ type: "editorError", message: String(error2 && error2.message || error2) });
+    post9({ type: "editorError", message: String(error2 && error2.message || error2) });
   }
   document.getElementById("editor").addEventListener("click", function(event) {
     const anchor = event.target.closest("a[href]");
     if (!anchor) return;
     event.preventDefault();
-    post8({ type: "openLink", href: anchor.getAttribute("href") });
+    post9({ type: "openLink", href: anchor.getAttribute("href") });
   });
   window.hyperview = {
     loadDocument: function(docOrJson) {
@@ -41276,12 +41383,19 @@ img.ProseMirror-separator {
     deliverAgenda,
     // Swift → JS: /ask finished (null = success; the reload shows the answer).
     askDone,
+    // Swift → JS: a page-embed snapshot answering requestPageEmbed.
+    deliverPageEmbed,
+    // Swift → JS: the page picked for "/embed page".
+    insertPageEmbed: function(id, title, emoji2) {
+      if (!editor) return;
+      editor.chain().focus().insertContent({ type: "pageembed", attrs: { noteID: id, title: title || "Untitled", emoji: emoji2 || null } }).run();
+    },
     // Swift → JS: centered column (default) vs full-width (PageProps.wideLayout).
     setWide: function(wide) {
       document.body.classList.toggle("wide", !!wide);
     }
   };
   if (editor) {
-    post8({ type: "ready" });
+    post9({ type: "ready" });
   }
 })();

@@ -44,6 +44,7 @@ struct DashboardView: View {
                     // Notes/Reminders: "Pin to Dashboard").
                     PinnedNotesCard()
                     PinnedRemindersCard()
+                    PinnedDatabaseCards()
                 }
             }
             .padding(Theme.Spacing.xl)

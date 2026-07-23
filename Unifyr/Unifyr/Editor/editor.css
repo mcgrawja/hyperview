@@ -629,3 +629,32 @@ body.wide .ProseMirror {
 }
 .ProseMirror .bookmark-block:hover .bookmark-edit { opacity: 1; }
 .ProseMirror .bookmark-edit:hover { background: var(--hv-code-bg); }
+
+/* ---------- Page embeds (transclusion) ---------- */
+.ProseMirror .pageembed {
+  border: 1px solid var(--hv-rule);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ProseMirror .pageembed-header {
+  padding: 8px 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 1px solid var(--hv-rule);
+}
+.ProseMirror .pageembed-header:hover { background: var(--hv-code-bg); }
+.ProseMirror .pageembed-body { padding: 8px 12px; }
+.ProseMirror .pageembed-line {
+  padding: 1px 0;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ProseMirror .pageembed-line.kind-heading { font-weight: 600; }
+.ProseMirror .pageembed-more {
+  color: var(--hv-secondary);
+  font-size: 0.85em;
+  padding-top: 4px;
+  cursor: pointer;
+}

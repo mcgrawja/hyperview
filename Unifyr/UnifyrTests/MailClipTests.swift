@@ -45,4 +45,16 @@ struct MailClipTests {
         #expect(EditorIntegrations.inlineContent(for: "plain words").count == 1)
         #expect(EditorIntegrations.inlineContent(for: "").isEmpty)
     }
+
+    @Test func csvEscapeAndParseRoundTrip() {
+        // Fields with commas, quotes, and newlines survive escape → parse.
+        let fields = ["plain", "a,b", "say \"hi\"", "two\nlines"]
+        let line = fields.map(PageExporter.escapeCSV).joined(separator: ",")
+        let parsed = PageExporter.parseCSV(line + "\nnext,row,here,too\n")
+        #expect(parsed.count == 2)
+        #expect(parsed[0] == fields)
+        #expect(parsed[1] == ["next", "row", "here", "too"])
+        // CRLF input and trailing newline tolerated.
+        #expect(PageExporter.parseCSV("a,b\r\nc,d\r\n") == [["a", "b"], ["c", "d"]])
+    }
 }

@@ -24,6 +24,34 @@ extension Notification.Name {
 enum PinStore {
     private static let notesKey = "dashboard.pinnedNotes"
     private static let remindersKey = "dashboard.pinnedReminders"
+    private static let dbViewsKey = "dashboard.pinnedDBViews"
+
+    // MARK: Database views ("db|view" or "db|" for the All view — round 5)
+
+    static func pinnedDBViews() -> [(databaseID: UUID, viewID: UUID?)] {
+        let raw = UserDefaults.standard.stringArray(forKey: dbViewsKey) ?? []
+        return raw.compactMap { entry in
+            let parts = entry.split(separator: "|", omittingEmptySubsequences: false)
+            guard let databaseID = UUID(uuidString: String(parts.first ?? "")) else { return nil }
+            let viewID = parts.count > 1 ? UUID(uuidString: String(parts[1])) : nil
+            return (databaseID, viewID)
+        }
+    }
+
+    static func isPinned(databaseView databaseID: UUID, viewID: UUID?) -> Bool {
+        pinnedDBViews().contains { $0.databaseID == databaseID && $0.viewID == viewID }
+    }
+
+    static func toggle(databaseView databaseID: UUID, viewID: UUID?) {
+        let key = "\(databaseID.uuidString)|\(viewID?.uuidString ?? "")"
+        var raw = UserDefaults.standard.stringArray(forKey: dbViewsKey) ?? []
+        if let index = raw.firstIndex(of: key) {
+            raw.remove(at: index)
+        } else {
+            raw.append(key)
+        }
+        UserDefaults.standard.set(raw, forKey: dbViewsKey)
+    }
 
     static var pinnedNoteIDs: Set<String> {
         Set(UserDefaults.standard.stringArray(forKey: notesKey) ?? [])
@@ -102,6 +130,104 @@ struct PinnedNotesCard: View {
 }
 
 // MARK: - Pinned Reminders card
+
+/// One card per pinned database view: the view's first rows, live (round 5).
+/// Tapping opens the database in Notes.
+struct PinnedDatabaseCards: View {
+    @Environment(\.modelContext) private var context
+    /// Re-read on every dashboard appearance; pins change rarely.
+    @State private var pins: [(databaseID: UUID, viewID: UUID?)] = []
+
+    var body: some View {
+        ForEach(Array(pins.enumerated()), id: \.offset) { _, pin in
+            PinnedDatabaseCard(databaseID: pin.databaseID, viewID: pin.viewID)
+        }
+        .onAppear { pins = PinStore.pinnedDBViews() }
+    }
+}
+
+private struct PinnedDatabaseCard: View {
+    let databaseID: UUID
+    let viewID: UUID?
+
+    @Environment(\.modelContext) private var context
+
+    var body: some View {
+        let store = DatabaseStore(context: context)
+        let database = store.databaseNotes().first { $0.id == databaseID }
+
+        if let database {
+            let properties = store.fetchProperties(databaseNoteID: databaseID)
+            let title = store.titleProperty(among: properties)
+            let view = viewID.flatMap { id in store.views(of: database).first { $0.id == id } }
+            let rows = store.fetchRows(databaseNoteID: databaseID)
+            let values = Self.cellValues(store: store, properties: properties, rows: rows)
+            let visible = store.apply(view, rows: rows, values: values, properties: properties)
+            // The status-ish second line: first non-title column with content.
+            let secondary = properties.first { $0.id != title?.id }
+
+            DashboardCard(
+                title: (database.title.isEmpty ? "Untitled" : database.title)
+                    + (view.map { " · \($0.name)" } ?? ""),
+                systemImage: "tablecells",
+                content: {
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    if visible.isEmpty {
+                        EmptyStateLine(text: "No rows match this view.")
+                    }
+                    ForEach(visible.prefix(5)) { row in
+                        Button {
+                            NotificationCenter.default.post(
+                                name: .unifyrRevealNote, object: nil, userInfo: ["id": databaseID]
+                            )
+                        } label: {
+                            HStack(spacing: Theme.Spacing.sm) {
+                                Text(store.rowTitle(row.id, titleProperty: title))
+                                    .font(Theme.Font.cardBody)
+                                    .lineLimit(1)
+                                Spacer()
+                                if let secondary {
+                                    Text(store.displayText(values[row.id]?[secondary.id] ?? DBCellValue(), property: secondary))
+                                        .font(Theme.Font.cardCaption)
+                                        .foregroundStyle(Theme.Palette.textSecondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                },
+                accessory: {
+                    Text("\(visible.count)")
+                        .font(Theme.Font.cardCaption)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                }
+            )
+            .contextMenu {
+                Button("Unpin from Dashboard") {
+                    PinStore.toggle(databaseView: databaseID, viewID: viewID)
+                }
+            }
+        }
+    }
+
+    private static func cellValues(
+        store: DatabaseStore,
+        properties: [DBProperty],
+        rows: [DBRow]
+    ) -> [UUID: [UUID: DBCellValue]] {
+        var values: [UUID: [UUID: DBCellValue]] = [:]
+        for row in rows {
+            for property in properties {
+                let cell = store.value(rowID: row.id, propertyID: property.id)
+                if !cell.isEmpty { values[row.id, default: [:]][property.id] = cell }
+            }
+        }
+        return values
+    }
+}
 
 struct PinnedRemindersCard: View {
     @Environment(\.brokers) private var brokers

@@ -37,6 +37,7 @@ import { ColumnList, Column } from "./columns.js";
 import { Bookmark, deliverBookmark } from "./bookmark.js";
 import { Agenda, deliverAgenda } from "./agenda.js";
 import { askDone, hideToast } from "./ask.js";
+import { PageEmbed, deliverPageEmbed } from "./pageembed.js";
 
 function post(msg) {
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -110,6 +111,7 @@ function buildEditor() {
     Column,
     Bookmark,
     Agenda,
+    PageEmbed,
     Placeholder.configure({ placeholder: "Type ‘/’ for commands…" }),
     SlashCommands,
   ],
@@ -234,6 +236,17 @@ window.hyperview = {
   deliverAgenda: deliverAgenda,
   // Swift → JS: /ask finished (null = success; the reload shows the answer).
   askDone: askDone,
+  // Swift → JS: a page-embed snapshot answering requestPageEmbed.
+  deliverPageEmbed: deliverPageEmbed,
+  // Swift → JS: the page picked for "/embed page".
+  insertPageEmbed: function (id, title, emoji) {
+    if (!editor) return;
+    editor
+      .chain()
+      .focus()
+      .insertContent({ type: "pageembed", attrs: { noteID: id, title: title || "Untitled", emoji: emoji || null } })
+      .run();
+  },
   // Swift → JS: centered column (default) vs full-width (PageProps.wideLayout).
   setWide: function (wide) {
     document.body.classList.toggle("wide", !!wide);
