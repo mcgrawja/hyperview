@@ -76,7 +76,7 @@ const doc = {
     ]},
     { type: "subpage", attrs: { noteID: "B", title: "Child" } },
     { type: "dbembed", attrs: { noteID: "C", title: "Tracker" } },
-    { type: "image", attrs: { src: "unifyr-asset://X" } },
+    { type: "image", attrs: { src: "unifyr-asset://X", width: 320 } },
   ],
 };
 

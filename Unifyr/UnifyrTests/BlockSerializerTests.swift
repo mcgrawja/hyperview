@@ -47,9 +47,10 @@ struct BlockSerializerTests {
         expectRoundTrip([
             BlockContent(
                 kind: .image,
-                attrs: ["src": .string("unifyr-asset://ABC"), "alt": .string("photo.png")]
+                // width = the resize handle's px value; rides in attrs.
+                attrs: ["src": .string("unifyr-asset://ABC"), "alt": .string("photo.png"), "width": .int(320)]
             ),
-        ], "image keeps its asset src")
+        ], "image keeps its asset src and resized width")
     }
 
     @Test func codeBlockKeepsLanguage() {

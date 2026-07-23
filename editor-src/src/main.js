@@ -24,7 +24,7 @@ import Table from "@tiptap/extension-table";
 import TableRow from "@tiptap/extension-table-row";
 import TableHeader from "@tiptap/extension-table-header";
 import TableCell from "@tiptap/extension-table-cell";
-import Image from "@tiptap/extension-image";
+import { ResizableImage } from "./image-block.js";
 import { SlashCommands } from "./slash-menu.js";
 import { Callout } from "./callout.js";
 import { Toggle, ToggleSummary, ToggleBody } from "./toggle.js";
@@ -93,7 +93,7 @@ function buildEditor() {
     TableRow,
     TableHeader,
     TableCell,
-    Image,
+    ResizableImage,
     Callout,
     Toggle,
     ToggleSummary,

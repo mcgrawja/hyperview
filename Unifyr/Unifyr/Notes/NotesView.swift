@@ -603,6 +603,8 @@ private struct PageHost: View {
     @State private var showingIconPicker = false
     @State private var showingCoverPicker = false
     @State private var showingCoverImporter = false
+    /// Drag-to-reposition mode for image covers.
+    @State private var repositioningCover = false
     /// Pages whose content links here (link hrefs, @-mentions, subpage
     /// embeds). Computed on page open, not live — cheap and good enough.
     @State private var backlinks: [Note] = []
@@ -631,24 +633,55 @@ private struct PageHost: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if note.pageProps.hasCover {
-                PageCoverView(note: note)
-                    .frame(height: 140)
-                    .frame(maxWidth: .infinity)
-                    .clipped()
-                    .contentShape(Rectangle())
-                    .onTapGesture { showingCoverPicker = true }
-                    .contextMenu {
-                        Button("Change Cover…") { showingCoverPicker = true }
-                        Button("Remove Cover", role: .destructive) {
-                            var props = note.pageProps
-                            props.coverKind = nil
-                            props.coverHex = nil
-                            props.coverHex2 = nil
-                            props.coverAssetID = nil
-                            note.pageProps = props
-                            try? context.save()
-                        }
+                PageCoverView(
+                    note: note,
+                    repositioning: repositioningCover,
+                    onCommitOffset: { fraction in
+                        var props = note.pageProps
+                        props.coverOffsetY = abs(fraction - 0.5) < 0.01 ? nil : fraction
+                        note.pageProps = props
+                        try? context.save()
                     }
+                )
+                .frame(height: 140)
+                .frame(maxWidth: .infinity)
+                .clipped()
+                .overlay(alignment: .bottomTrailing) {
+                    if repositioningCover {
+                        HStack(spacing: Theme.Spacing.sm) {
+                            Text("Drag the photo to position it")
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textOnAccent)
+                            Button("Done") { repositioningCover = false }
+                                .buttonStyle(.borderedProminent)
+                                .tint(Theme.Palette.primary)
+                                .controlSize(.small)
+                        }
+                        .padding(Theme.Spacing.sm)
+                        .background(Color.black.opacity(0.45), in: Capsule())
+                        .padding(Theme.Spacing.md)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if !repositioningCover { showingCoverPicker = true }
+                }
+                .contextMenu {
+                    Button("Change Cover…") { showingCoverPicker = true }
+                    if note.pageProps.coverKind == "asset" {
+                        Button("Reposition Cover") { repositioningCover = true }
+                    }
+                    Button("Remove Cover", role: .destructive) {
+                        var props = note.pageProps
+                        props.coverKind = nil
+                        props.coverHex = nil
+                        props.coverHex2 = nil
+                        props.coverAssetID = nil
+                        props.coverOffsetY = nil
+                        note.pageProps = props
+                        try? context.save()
+                    }
+                }
             }
 
             if !breadcrumbs.isEmpty {
@@ -713,6 +746,9 @@ private struct PageHost: View {
                     Button(note.pageProps.hasCover ? "Change Cover…" : "Add Cover…") {
                         showingCoverPicker = true
                     }
+                    if note.pageProps.coverKind == "asset" {
+                        Button("Reposition Cover") { repositioningCover = true }
+                    }
                     if note.pageProps.hasCover {
                         Button("Remove Cover", role: .destructive) {
                             var props = note.pageProps
@@ -720,6 +756,7 @@ private struct PageHost: View {
                             props.coverHex = nil
                             props.coverHex2 = nil
                             props.coverAssetID = nil
+                            props.coverOffsetY = nil
                             note.pageProps = props
                             try? context.save()
                         }
@@ -858,12 +895,20 @@ private struct PageHost: View {
     }
 }
 
-// MARK: - Page covers (Phase 5)
+// MARK: - Page covers (Phase 5; repositioning added on Jason's request)
 
-/// The cover band: preset color, gradient, or an Asset image.
+/// The cover band: preset color, gradient, or an Asset image. Image covers
+/// honor `coverOffsetY` (which slice of the photo the band shows), and in
+/// repositioning mode a vertical drag adjusts it live.
 private struct PageCoverView: View {
     let note: Note
+    var repositioning = false
+    /// Called with the final offset when a reposition drag ends.
+    var onCommitOffset: ((Double) -> Void)? = nil
+
     @Environment(\.modelContext) private var context
+    /// Live value while dragging (committed on release).
+    @State private var dragFraction: Double?
 
     var body: some View {
         let props = note.pageProps
@@ -882,15 +927,54 @@ private struct PageCoverView: View {
             .opacity(0.85)
         case "asset":
             if let assetID = props.coverAssetID, let image = coverImage(assetID) {
-                Image(platformImage: image)
-                    .resizable()
-                    .scaledToFill()
+                positionedImage(image, storedFraction: props.coverOffsetY ?? 0.5)
             } else {
                 Theme.Palette.surfaceRaised
             }
         default:
             Theme.Palette.surfaceRaised
         }
+    }
+
+    /// scaledToFill by hand so the vertical crop is controllable: the image
+    /// covers the band, and `fraction` picks which slice shows (0 top, 1
+    /// bottom). SwiftUI's own scaledToFill always center-crops.
+    private func positionedImage(_ image: PlatformImage, storedFraction: Double) -> some View {
+        GeometryReader { geo in
+            let bandHeight = geo.size.height
+            let imageSize = image.size
+            let scale = max(
+                geo.size.width / max(imageSize.width, 1),
+                bandHeight / max(imageSize.height, 1)
+            )
+            let displayedWidth = imageSize.width * scale
+            let displayedHeight = imageSize.height * scale
+            let range = max(0, displayedHeight - bandHeight)
+            let fraction = dragFraction ?? storedFraction
+
+            Image(platformImage: image)
+                .resizable()
+                .frame(width: displayedWidth, height: displayedHeight)
+                .offset(
+                    x: (geo.size.width - displayedWidth) / 2,
+                    y: -fraction * range
+                )
+                .gesture(repositioning ? repositionGesture(startFraction: storedFraction, range: range) : nil)
+        }
+    }
+
+    private func repositionGesture(startFraction: Double, range: CGFloat) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                guard range > 0 else { return }
+                // Dragging DOWN reveals more of the top → smaller fraction.
+                let delta = Double(-value.translation.height / range)
+                dragFraction = min(1, max(0, startFraction + delta))
+            }
+            .onEnded { _ in
+                if let dragFraction { onCommitOffset?(dragFraction) }
+                dragFraction = nil
+            }
     }
 
     private func coverImage(_ id: UUID) -> PlatformImage? {

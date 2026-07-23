@@ -373,3 +373,62 @@ body.wide .ProseMirror {
   min-width: 0;
 }
 .ProseMirror .column > * + * { margin-top: 0.55em; }
+
+/* ---------- Polish round: emoji popup + image resize ---------- */
+.emoji-popup {
+  position: fixed;
+  z-index: 60;
+  background: Canvas;
+  border: 1px solid var(--hv-rule);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  padding: 8px;
+  width: 264px;
+}
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+}
+.emoji-cell {
+  border: none;
+  background: transparent;
+  font-size: 17px;
+  padding: 3px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.emoji-cell:hover { background: var(--hv-code-bg); }
+.emoji-input {
+  margin-top: 8px;
+  width: 100%;
+  border: 1px solid var(--hv-rule);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: 13px -apple-system, system-ui, sans-serif;
+  background: transparent;
+  color: var(--hv-text);
+  outline: none;
+}
+
+.ProseMirror .image-block {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+.ProseMirror .image-block img { max-width: 100%; }
+.ProseMirror .image-resize-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--hv-accent);
+  border: 2px solid Canvas;
+  cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.ProseMirror .image-block:hover .image-resize-handle,
+.ProseMirror .image-block.ProseMirror-selectednode .image-resize-handle { opacity: 1; }

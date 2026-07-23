@@ -1,13 +1,13 @@
 //
 // Callout block (Notion-style): an emoji badge + rich paragraphs on a tinted
-// panel. The emoji is a node attr; clicking it cycles a small palette.
+// panel. The emoji is a node attr; clicking it opens the emoji picker (it
+// used to cycle a fixed palette — Jason asked to choose freely).
 // Serialized as {type:"callout", attrs:{emoji}, content:[paragraph…]} — the
 // Swift BlockSerializer passes attrs+content through (kind .callout).
 //
 
 import { Node, mergeAttributes } from "@tiptap/core";
-
-const EMOJIS = ["💡", "⚠️", "📌", "✅", "❓", "🔥", "💭", "🚧"];
+import { showEmojiPicker } from "./emoji-popup.js";
 
 export const Callout = Node.create({
   name: "callout",
@@ -42,15 +42,15 @@ export const Callout = Node.create({
       emoji.title = "Change emoji";
       emoji.addEventListener("mousedown", (event) => {
         event.preventDefault();
-        const index = EMOJIS.indexOf(current.attrs.emoji);
-        const next = EMOJIS[(index + 1 + EMOJIS.length) % EMOJIS.length] || EMOJIS[0];
-        editor
-          .chain()
-          .command(({ tr }) => {
-            tr.setNodeMarkup(getPos(), undefined, { ...current.attrs, emoji: next });
-            return true;
-          })
-          .run();
+        showEmojiPicker(emoji.getBoundingClientRect(), (picked) => {
+          editor
+            .chain()
+            .command(({ tr }) => {
+              tr.setNodeMarkup(getPos(), undefined, { ...current.attrs, emoji: picked });
+              return true;
+            })
+            .run();
+        });
       });
 
       const body = document.createElement("div");

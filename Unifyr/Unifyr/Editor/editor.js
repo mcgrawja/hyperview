@@ -23922,6 +23922,74 @@ img.ProseMirror-separator {
     }
   });
 
+  // src/image-block.js
+  var ResizableImage = Image.extend({
+    addAttributes() {
+      return {
+        ...this.parent?.(),
+        width: {
+          default: null,
+          parseHTML: (element) => {
+            const style2 = element.style && element.style.width;
+            return style2 ? parseInt(style2, 10) || null : null;
+          },
+          renderHTML: (attributes) => attributes.width ? { style: `width: ${attributes.width}px` } : {}
+        }
+      };
+    },
+    addNodeView() {
+      return ({ node, editor: editor2, getPos }) => {
+        let current = node;
+        const dom = document.createElement("div");
+        dom.className = "image-block";
+        const img = document.createElement("img");
+        img.src = current.attrs.src || "";
+        if (current.attrs.alt) img.alt = current.attrs.alt;
+        if (current.attrs.width) img.style.width = `${current.attrs.width}px`;
+        const handle = document.createElement("div");
+        handle.className = "image-resize-handle";
+        handle.contentEditable = "false";
+        handle.title = "Drag to resize";
+        handle.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const startX = event.clientX;
+          const startWidth = img.getBoundingClientRect().width;
+          const maxWidth = dom.parentElement ? dom.parentElement.getBoundingClientRect().width : 2e3;
+          const onMove = (moveEvent) => {
+            const width = Math.round(
+              Math.min(maxWidth, Math.max(80, startWidth + (moveEvent.clientX - startX)))
+            );
+            img.style.width = `${width}px`;
+          };
+          const onUp = () => {
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            const width = Math.round(img.getBoundingClientRect().width);
+            editor2.chain().command(({ tr: tr2 }) => {
+              tr2.setNodeMarkup(getPos(), void 0, { ...current.attrs, width });
+              return true;
+            }).run();
+          };
+          document.addEventListener("mousemove", onMove);
+          document.addEventListener("mouseup", onUp);
+        });
+        dom.appendChild(img);
+        dom.appendChild(handle);
+        return {
+          dom,
+          update(updated) {
+            if (updated.type.name !== current.type.name) return false;
+            current = updated;
+            if (img.src !== updated.attrs.src) img.src = updated.attrs.src || "";
+            img.style.width = updated.attrs.width ? `${updated.attrs.width}px` : "";
+            return true;
+          }
+        };
+      };
+    }
+  });
+
   // node_modules/@tiptap/suggestion/dist/index.js
   function findSuggestionMatch(config) {
     var _a;
@@ -24452,8 +24520,97 @@ img.ProseMirror-separator {
     }
   });
 
+  // src/emoji-popup.js
+  var COMMON = [
+    "\u{1F4A1}",
+    "\u26A0\uFE0F",
+    "\u{1F4CC}",
+    "\u2705",
+    "\u2753",
+    "\u{1F525}",
+    "\u{1F4AD}",
+    "\u{1F6A7}",
+    "\u{1F4DD}",
+    "\u{1F4DA}",
+    "\u{1F3AF}",
+    "\u{1F680}",
+    "\u2B50\uFE0F",
+    "\u{1F9E0}",
+    "\u{1F6E0}\uFE0F",
+    "\u2764\uFE0F",
+    "\u{1F3E0}",
+    "\u{1F4B0}",
+    "\u{1F4C8}",
+    "\u{1F5D3}\uFE0F",
+    "\u23F0",
+    "\u{1F37D}\uFE0F",
+    "\u2708\uFE0F",
+    "\u{1F697}",
+    "\u{1F5A8}\uFE0F",
+    "\u{1F3B5}",
+    "\u{1F3AC}",
+    "\u{1F331}",
+    "\u{1F381}",
+    "\u{1F512}",
+    "\u{1F440}",
+    "\u{1F389}"
+  ];
+  var activePopup = null;
+  function showEmojiPicker(anchorRect, onPick) {
+    closeEmojiPicker();
+    const popup = document.createElement("div");
+    popup.className = "emoji-popup";
+    const grid = document.createElement("div");
+    grid.className = "emoji-grid";
+    for (const emoji2 of COMMON) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "emoji-cell";
+      button.textContent = emoji2;
+      button.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        onPick(emoji2);
+        closeEmojiPicker();
+      });
+      grid.appendChild(button);
+    }
+    popup.appendChild(grid);
+    const input = document.createElement("input");
+    input.className = "emoji-input";
+    input.placeholder = "Any emoji\u2026";
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeEmojiPicker();
+        return;
+      }
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      const value = input.value.trim();
+      if (!value) return;
+      onPick(Array.from(value)[0]);
+      closeEmojiPicker();
+    });
+    popup.appendChild(input);
+    document.body.appendChild(popup);
+    const below = anchorRect.bottom + 6;
+    const top = below + popup.offsetHeight > window.innerHeight ? Math.max(6, anchorRect.top - popup.offsetHeight - 6) : below;
+    popup.style.top = `${top}px`;
+    popup.style.left = `${Math.max(6, Math.min(anchorRect.left, window.innerWidth - popup.offsetWidth - 6))}px`;
+    const dismiss = (event) => {
+      if (!popup.contains(event.target)) closeEmojiPicker();
+    };
+    setTimeout(() => document.addEventListener("mousedown", dismiss, true), 0);
+    activePopup = { element: popup, dismiss };
+    input.focus();
+  }
+  function closeEmojiPicker() {
+    if (!activePopup) return;
+    document.removeEventListener("mousedown", activePopup.dismiss, true);
+    activePopup.element.remove();
+    activePopup = null;
+  }
+
   // src/callout.js
-  var EMOJIS = ["\u{1F4A1}", "\u26A0\uFE0F", "\u{1F4CC}", "\u2705", "\u2753", "\u{1F525}", "\u{1F4AD}", "\u{1F6A7}"];
   var Callout = Node2.create({
     name: "callout",
     group: "block",
@@ -24481,12 +24638,12 @@ img.ProseMirror-separator {
         emoji2.title = "Change emoji";
         emoji2.addEventListener("mousedown", (event) => {
           event.preventDefault();
-          const index = EMOJIS.indexOf(current.attrs.emoji);
-          const next = EMOJIS[(index + 1 + EMOJIS.length) % EMOJIS.length] || EMOJIS[0];
-          editor2.chain().command(({ tr: tr2 }) => {
-            tr2.setNodeMarkup(getPos(), void 0, { ...current.attrs, emoji: next });
-            return true;
-          }).run();
+          showEmojiPicker(emoji2.getBoundingClientRect(), (picked) => {
+            editor2.chain().command(({ tr: tr2 }) => {
+              tr2.setNodeMarkup(getPos(), void 0, { ...current.attrs, emoji: picked });
+              return true;
+            }).run();
+          });
         });
         const body = document.createElement("div");
         body.className = "callout-body";
@@ -40250,7 +40407,7 @@ img.ProseMirror-separator {
         TableRow,
         TableHeader,
         TableCell,
-        Image,
+        ResizableImage,
         Callout,
         Toggle,
         ToggleSummary,
