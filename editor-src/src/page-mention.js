@@ -19,8 +19,10 @@ function post(msg) {
   }
 }
 
-// Populated by Swift via window.hyperview.setPages([{id,title,emoji}, …]).
-export const pageIndex = { pages: [] };
+// Populated by Swift via window.hyperview.setPages([{id,title,emoji}, …]) and
+// setMentionSources([{kind,id,title,icon,dateISO?}, …]) — contacts, events,
+// reminders (integration round 2).
+export const pageIndex = { pages: [], sources: [] };
 
 export const PageMention = Node.create({
   name: "pageMention",
@@ -34,6 +36,10 @@ export const PageMention = Node.create({
       noteID: { default: null },
       title: { default: "Untitled" },
       emoji: { default: null },
+      // "page" | "contact" | "event" | "reminder" — non-page chips route
+      // through openMention instead of the note link path.
+      refKind: { default: "page" },
+      dateISO: { default: null },
     };
   },
 
@@ -53,8 +59,16 @@ export const PageMention = Node.create({
       dom.textContent = `${node.attrs.emoji || "📄"} ${node.attrs.title || "Untitled"}`;
       dom.addEventListener("click", (event) => {
         event.preventDefault();
-        if (node.attrs.noteID) {
+        if (!node.attrs.noteID) return;
+        if ((node.attrs.refKind || "page") === "page") {
           post({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
+        } else {
+          post({
+            type: "openMention",
+            kind: node.attrs.refKind,
+            id: node.attrs.noteID,
+            dateISO: node.attrs.dateISO || null,
+          });
         }
       });
       return {
@@ -84,27 +98,47 @@ export const PageMentionSuggestion = Extension.create({
         allowSpaces: false,
         items: ({ query }) => {
           const q = query.toLowerCase();
-          return pageIndex.pages
+          const insert = (editor, range, attrs) =>
+            editor
+              .chain()
+              .focus()
+              .deleteRange(range)
+              .insertContent([
+                { type: "pageMention", attrs: attrs },
+                { type: "text", text: " " },
+              ])
+              .run();
+
+          const pages = pageIndex.pages
             .filter((page) => (page.title || "Untitled").toLowerCase().includes(q))
-            .slice(0, 8)
+            .slice(0, 6)
             .map((page) => ({
               title: `${page.emoji || "📄"} ${page.title || "Untitled"}`,
-              hint: "Link page",
-              page: page,
+              hint: "Page",
               run: (editor, range) =>
-                editor
-                  .chain()
-                  .focus()
-                  .deleteRange(range)
-                  .insertContent([
-                    {
-                      type: "pageMention",
-                      attrs: { noteID: page.id, title: page.title, emoji: page.emoji || null },
-                    },
-                    { type: "text", text: " " },
-                  ])
-                  .run(),
+                insert(editor, range, {
+                  noteID: page.id, title: page.title, emoji: page.emoji || null, refKind: "page",
+                }),
             }));
+
+          const kindLabel = { contact: "Contact", event: "Event", reminder: "Reminder" };
+          const sources = pageIndex.sources
+            .filter((item) => (item.title || "").toLowerCase().includes(q))
+            .slice(0, q ? 9 : 3) // an empty "@" leads with pages
+            .map((item) => ({
+              title: `${item.icon || "🔗"} ${item.title}`,
+              hint: kindLabel[item.kind] || item.kind,
+              run: (editor, range) =>
+                insert(editor, range, {
+                  noteID: item.id,
+                  title: item.title,
+                  emoji: item.icon || null,
+                  refKind: item.kind,
+                  dateISO: item.dateISO || null,
+                }),
+            }));
+
+          return pages.concat(sources);
         },
         command: ({ editor, range, props }) => props.run(editor, range),
         render: () => ({

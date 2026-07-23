@@ -79,6 +79,9 @@ nonisolated enum BlockKind: String, Sendable, CaseIterable {
     case columns
     /// Web bookmark card (integration round): attrs = url + fetched title.
     case bookmark
+    /// Live agenda slice (integration round 2): attrs = scope; data is
+    /// fetched fresh on every load, never persisted.
+    case agenda
 }
 
 extension Block {

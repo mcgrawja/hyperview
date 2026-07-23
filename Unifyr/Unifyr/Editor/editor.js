@@ -24033,9 +24033,9 @@ img.ProseMirror-separator {
     return null;
   }
   var SuggestionPluginKey = new PluginKey("suggestion");
-  function Suggestion({ pluginKey = SuggestionPluginKey, editor: editor2, char = "@", allowSpaces = false, allowToIncludeChar = false, allowedPrefixes = [" "], startOfLine = false, decorationTag = "span", decorationClass = "suggestion", decorationContent = "", decorationEmptyClass = "is-empty", command: command2 = () => null, items = () => [], render = () => ({}), allow = () => true, findSuggestionMatch: findSuggestionMatch$1 = findSuggestionMatch }) {
+  function Suggestion({ pluginKey = SuggestionPluginKey, editor: editor2, char = "@", allowSpaces = false, allowToIncludeChar = false, allowedPrefixes = [" "], startOfLine = false, decorationTag = "span", decorationClass = "suggestion", decorationContent = "", decorationEmptyClass = "is-empty", command: command2 = () => null, items = () => [], render: render2 = () => ({}), allow = () => true, findSuggestionMatch: findSuggestionMatch$1 = findSuggestionMatch }) {
     let props;
-    const renderer = render === null || render === void 0 ? void 0 : render();
+    const renderer = render2 === null || render2 === void 0 ? void 0 : render2();
     const plugin = new Plugin({
       key: pluginKey,
       view() {
@@ -24503,6 +24503,15 @@ img.ProseMirror-separator {
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
         promptBookmark(e);
+      }
+    },
+    {
+      title: "Agenda",
+      hint: "Today's events + due reminders, live",
+      keywords: "agenda today calendar schedule reminders",
+      run: (e, r2) => {
+        e.chain().focus().deleteRange(r2).run();
+        e.commands.insertAgenda();
       }
     },
     // Table editing — these only apply with the cursor inside a table; type
@@ -40258,7 +40267,7 @@ img.ProseMirror-separator {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
   }
-  var pageIndex = { pages: [] };
+  var pageIndex = { pages: [], sources: [] };
   var PageMention = Node2.create({
     name: "pageMention",
     group: "inline",
@@ -40269,7 +40278,11 @@ img.ProseMirror-separator {
       return {
         noteID: { default: null },
         title: { default: "Untitled" },
-        emoji: { default: null }
+        emoji: { default: null },
+        // "page" | "contact" | "event" | "reminder" — non-page chips route
+        // through openMention instead of the note link path.
+        refKind: { default: "page" },
+        dateISO: { default: null }
       };
     },
     parseHTML() {
@@ -40286,8 +40299,16 @@ img.ProseMirror-separator {
         dom.textContent = `${node.attrs.emoji || "\u{1F4C4}"} ${node.attrs.title || "Untitled"}`;
         dom.addEventListener("click", (event) => {
           event.preventDefault();
-          if (node.attrs.noteID) {
+          if (!node.attrs.noteID) return;
+          if ((node.attrs.refKind || "page") === "page") {
             post3({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
+          } else {
+            post3({
+              type: "openMention",
+              kind: node.attrs.refKind,
+              id: node.attrs.noteID,
+              dateISO: node.attrs.dateISO || null
+            });
           }
         });
         return {
@@ -40315,18 +40336,33 @@ img.ProseMirror-separator {
           allowSpaces: false,
           items: ({ query }) => {
             const q = query.toLowerCase();
-            return pageIndex.pages.filter((page) => (page.title || "Untitled").toLowerCase().includes(q)).slice(0, 8).map((page) => ({
+            const insert = (editor2, range, attrs) => editor2.chain().focus().deleteRange(range).insertContent([
+              { type: "pageMention", attrs },
+              { type: "text", text: " " }
+            ]).run();
+            const pages = pageIndex.pages.filter((page) => (page.title || "Untitled").toLowerCase().includes(q)).slice(0, 6).map((page) => ({
               title: `${page.emoji || "\u{1F4C4}"} ${page.title || "Untitled"}`,
-              hint: "Link page",
-              page,
-              run: (editor2, range) => editor2.chain().focus().deleteRange(range).insertContent([
-                {
-                  type: "pageMention",
-                  attrs: { noteID: page.id, title: page.title, emoji: page.emoji || null }
-                },
-                { type: "text", text: " " }
-              ]).run()
+              hint: "Page",
+              run: (editor2, range) => insert(editor2, range, {
+                noteID: page.id,
+                title: page.title,
+                emoji: page.emoji || null,
+                refKind: "page"
+              })
             }));
+            const kindLabel = { contact: "Contact", event: "Event", reminder: "Reminder" };
+            const sources = pageIndex.sources.filter((item) => (item.title || "").toLowerCase().includes(q)).slice(0, q ? 9 : 3).map((item) => ({
+              title: `${item.icon || "\u{1F517}"} ${item.title}`,
+              hint: kindLabel[item.kind] || item.kind,
+              run: (editor2, range) => insert(editor2, range, {
+                noteID: item.id,
+                title: item.title,
+                emoji: item.icon || null,
+                refKind: item.kind,
+                dateISO: item.dateISO || null
+              })
+            }));
+            return pages.concat(sources);
           },
           command: ({ editor: editor2, range, props }) => props.run(editor2, range),
           render: () => ({
@@ -40416,10 +40452,10 @@ img.ProseMirror-separator {
   }
   var dbEmbedRequests = { pending: {}, counter: 0, mounted: /* @__PURE__ */ new Map() };
   function deliverDBEmbed(ref, snapshotJSON) {
-    const render = dbEmbedRequests.pending[ref];
-    if (!render) return;
+    const render2 = dbEmbedRequests.pending[ref];
+    if (!render2) return;
     delete dbEmbedRequests.pending[ref];
-    render(snapshotJSON ? JSON.parse(snapshotJSON) : null);
+    render2(snapshotJSON ? JSON.parse(snapshotJSON) : null);
   }
   function refreshDBEmbeds(databaseID) {
     for (const entry of dbEmbedRequests.mounted.values()) {
@@ -40870,8 +40906,111 @@ img.ProseMirror-separator {
     }
   });
 
-  // src/main.js
+  // src/agenda.js
   function post6(msg) {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
+      window.webkit.messageHandlers.hyperview.postMessage(msg);
+    }
+  }
+  var agendaRequests = { pending: {}, counter: 0 };
+  function deliverAgenda(ref, json2) {
+    const render2 = agendaRequests.pending[ref];
+    if (!render2) return;
+    delete agendaRequests.pending[ref];
+    render2(json2 ? JSON.parse(json2) : null);
+  }
+  var Agenda = Node2.create({
+    name: "agenda",
+    group: "block",
+    atom: true,
+    selectable: true,
+    addAttributes() {
+      return { scope: { default: "today" } };
+    },
+    parseHTML() {
+      return [{ tag: "div.agenda-block" }];
+    },
+    renderHTML({ HTMLAttributes }) {
+      return ["div", { ...HTMLAttributes, class: "agenda-block" }, "Agenda"];
+    },
+    addNodeView() {
+      return ({ node }) => {
+        const dom = document.createElement("div");
+        dom.className = "agenda-block";
+        dom.textContent = "Loading agenda\u2026";
+        const ref = `agenda-${++agendaRequests.counter}`;
+        agendaRequests.pending[ref] = (snapshot) => render(dom, snapshot);
+        post6({ type: "requestAgenda", scope: node.attrs.scope || "today", ref });
+        return {
+          dom,
+          stopEvent(event) {
+            return dom.contains(event.target) && event.type === "click";
+          },
+          ignoreMutation() {
+            return true;
+          }
+        };
+      };
+    },
+    addCommands() {
+      return {
+        insertAgenda: () => ({ chain }) => chain().insertContent({ type: this.name, attrs: { scope: "today" } }).run()
+      };
+    }
+  });
+  function render(dom, snapshot) {
+    dom.innerHTML = "";
+    if (!snapshot) {
+      dom.textContent = "Agenda unavailable (calendar access?).";
+      return;
+    }
+    const header = document.createElement("div");
+    header.className = "agenda-header";
+    header.textContent = `\u{1F4C6} ${snapshot.date || "Today"}`;
+    dom.appendChild(header);
+    const addRow2 = (icon, label, meta, onClick) => {
+      const row = document.createElement("div");
+      row.className = "agenda-row";
+      const iconEl = document.createElement("span");
+      iconEl.textContent = icon;
+      const labelEl = document.createElement("span");
+      labelEl.className = "agenda-label";
+      labelEl.textContent = label;
+      const metaEl = document.createElement("span");
+      metaEl.className = "agenda-meta";
+      metaEl.textContent = meta;
+      row.appendChild(iconEl);
+      row.appendChild(labelEl);
+      row.appendChild(metaEl);
+      row.addEventListener("click", onClick);
+      dom.appendChild(row);
+    };
+    for (const event of snapshot.events || []) {
+      addRow2(
+        "\u{1F5D3}\uFE0F",
+        event.title,
+        event.time,
+        () => post6({ type: "openMention", kind: "event", id: event.id, dateISO: event.dateISO })
+      );
+    }
+    for (const reminder of snapshot.reminders || []) {
+      addRow2(
+        "\u2705",
+        reminder.title,
+        reminder.due,
+        () => post6({ type: "openMention", kind: "reminder", id: reminder.id })
+      );
+    }
+    if ((snapshot.events || []).length === 0 && (snapshot.reminders || []).length === 0) {
+      const empty2 = document.createElement("div");
+      empty2.className = "agenda-meta";
+      empty2.textContent = "Nothing scheduled \u2014 clear day.";
+      dom.appendChild(empty2);
+    }
+  }
+
+  // src/main.js
+  function post7(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -40881,13 +41020,13 @@ img.ProseMirror-separator {
   function scheduleChange(editor2) {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function() {
-      post6({ type: "documentChanged", doc: editor2.getJSON() });
+      post7({ type: "documentChanged", doc: editor2.getJSON() });
     }, 500);
   }
   function sendImageFile(file) {
     const reader = new FileReader();
     reader.onload = function() {
-      post6({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
+      post7({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
     };
     reader.readAsDataURL(file);
   }
@@ -40930,6 +41069,7 @@ img.ProseMirror-separator {
         ColumnList,
         Column,
         Bookmark,
+        Agenda,
         Placeholder.configure({ placeholder: "Type \u2018/\u2019 for commands\u2026" }),
         SlashCommands
       ],
@@ -40961,13 +41101,13 @@ img.ProseMirror-separator {
     editor = buildEditor();
   } catch (error2) {
     console.error("Unifyr editor failed to initialize:", error2);
-    post6({ type: "editorError", message: String(error2 && error2.message || error2) });
+    post7({ type: "editorError", message: String(error2 && error2.message || error2) });
   }
   document.getElementById("editor").addEventListener("click", function(event) {
     const anchor = event.target.closest("a[href]");
     if (!anchor) return;
     event.preventDefault();
-    post6({ type: "openLink", href: anchor.getAttribute("href") });
+    post7({ type: "openLink", href: anchor.getAttribute("href") });
   });
   window.hyperview = {
     loadDocument: function(docOrJson) {
@@ -41020,12 +41160,19 @@ img.ProseMirror-separator {
     refreshDBEmbeds,
     // Swift → JS: a fetched page <title> answering resolveBookmark.
     deliverBookmark,
+    // Swift → JS: contacts/events/reminders for the "@" mention menu.
+    setMentionSources: function(sourcesOrJson) {
+      const sources = typeof sourcesOrJson === "string" ? JSON.parse(sourcesOrJson) : sourcesOrJson;
+      pageIndex.sources = Array.isArray(sources) ? sources : [];
+    },
+    // Swift → JS: an agenda snapshot answering requestAgenda.
+    deliverAgenda,
     // Swift → JS: centered column (default) vs full-width (PageProps.wideLayout).
     setWide: function(wide) {
       document.body.classList.toggle("wide", !!wide);
     }
   };
   if (editor) {
-    post6({ type: "ready" });
+    post7({ type: "ready" });
   }
 })();

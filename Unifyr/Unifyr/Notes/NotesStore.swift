@@ -39,6 +39,9 @@ extension Notification.Name {
     static let unifyrRequestImageFile = Notification.Name("unifyr.requestImageFile")
     /// "/Linked database": NotesView presents the database/view picker.
     static let unifyrRequestDBEmbedPicker = Notification.Name("unifyr.requestDBEmbedPicker")
+    /// A non-page mention chip was clicked; userInfo: ["kind": String,
+    /// "id": String?, "date": Date?]. ContentView switches modules.
+    static let unifyrOpenMention = Notification.Name("unifyr.openMention")
     /// An embed's ↗ asked to open a row's page; userInfo: ["db": UUID,
     /// "row": UUID]. NotesView navigates to the database; DatabaseView opens
     /// the row (DeepLink-latched — the database view mounts after navigation).

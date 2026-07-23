@@ -606,6 +606,7 @@ struct NotesView: View {
 
 private struct PageHost: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.brokers) private var brokers
     @Bindable var note: Note
     let allNotes: [Note]
     let open: (Note) -> Void
@@ -869,7 +870,7 @@ private struct PageHost: View {
                 // No .id(note.id): the bridge swaps documents into the EXISTING
                 // web view (EditorBridge.show) — re-creating the WKWebView per
                 // note would reload TipTap on every selection.
-                NoteEditorWebView(note: note, store: NotesStore(context: context))
+                NoteEditorWebView(note: note, store: NotesStore(context: context), brokers: brokers)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

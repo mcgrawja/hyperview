@@ -569,3 +569,25 @@ body.wide .ProseMirror {
   color: var(--hv-secondary);
   margin-bottom: 8px;
 }
+
+/* ---------- Agenda block ---------- */
+.ProseMirror .agenda-block {
+  border: 1px solid var(--hv-rule);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.ProseMirror .agenda-header {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.ProseMirror .agenda-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.ProseMirror .agenda-row:hover { background: var(--hv-code-bg); }
+.ProseMirror .agenda-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ProseMirror .agenda-meta { color: var(--hv-secondary); font-size: 0.85em; margin-left: auto; white-space: nowrap; }

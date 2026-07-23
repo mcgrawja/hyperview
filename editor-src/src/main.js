@@ -35,6 +35,7 @@ import { Subpage } from "./subpage.js";
 import { DBEmbed, deliverDBEmbed, refreshDBEmbeds } from "./dbembed.js";
 import { ColumnList, Column } from "./columns.js";
 import { Bookmark, deliverBookmark } from "./bookmark.js";
+import { Agenda, deliverAgenda } from "./agenda.js";
 
 function post(msg) {
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -107,6 +108,7 @@ function buildEditor() {
     ColumnList,
     Column,
     Bookmark,
+    Agenda,
     Placeholder.configure({ placeholder: "Type ‘/’ for commands…" }),
     SlashCommands,
   ],
@@ -221,6 +223,13 @@ window.hyperview = {
   refreshDBEmbeds: refreshDBEmbeds,
   // Swift → JS: a fetched page <title> answering resolveBookmark.
   deliverBookmark: deliverBookmark,
+  // Swift → JS: contacts/events/reminders for the "@" mention menu.
+  setMentionSources: function (sourcesOrJson) {
+    const sources = typeof sourcesOrJson === "string" ? JSON.parse(sourcesOrJson) : sourcesOrJson;
+    pageIndex.sources = Array.isArray(sources) ? sources : [];
+  },
+  // Swift → JS: an agenda snapshot answering requestAgenda.
+  deliverAgenda: deliverAgenda,
   // Swift → JS: centered column (default) vs full-width (PageProps.wideLayout).
   setWide: function (wide) {
     document.body.classList.toggle("wide", !!wide);

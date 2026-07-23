@@ -118,6 +118,11 @@ struct EditorDocument {
     let dbEmbedEdit: ((UUID, UUID, UUID, Any) -> Bool)?
     /// An embed "New" row: (databaseID, viewID) → the new row's id.
     let dbEmbedAddRow: ((UUID, UUID?) -> UUID?)?
+    /// Universal "@" mention sources beyond pages (contacts/events/reminders)
+    /// as ready-to-push JSON. nil = pages only.
+    var mentionSources: (() async -> String?)? = nil
+    /// "/agenda" block snapshot for a scope, as JSON. nil = agenda unsupported.
+    var agendaSnapshot: ((String) async -> String?)? = nil
     /// Full-width editing (PageProps.wideLayout); default is a centered column.
     var wide: Bool = false
 
@@ -145,6 +150,16 @@ struct EditorDocument {
         self.dbEmbedEdit = dbEmbedEdit
         self.dbEmbedAddRow = dbEmbedAddRow
         self.wide = wide
+    }
+
+    /// A whole note (the Phase-2 path). `brokers` unlocks universal mentions
+    /// and the agenda block.
+    init(note: Note, store: NotesStore, brokers: Brokers? = nil) {
+        self.init(note: note, store: store)
+        if let brokers {
+            self.mentionSources = { await EditorIntegrations.mentionSourcesJSON(brokers: brokers) }
+            self.agendaSnapshot = { scope in await EditorIntegrations.agendaJSON(brokers: brokers, scope: scope) }
+        }
     }
 
     /// A whole note (the Phase-2 path).
@@ -200,8 +215,8 @@ struct NoteEditorWebView {
     let document: EditorDocument
     @Environment(\.modelContext) private var modelContext
 
-    init(note: Note, store: NotesStore) {
-        self.document = EditorDocument(note: note, store: store)
+    init(note: Note, store: NotesStore, brokers: Brokers? = nil) {
+        self.document = EditorDocument(note: note, store: store, brokers: brokers)
     }
 
     init(document: EditorDocument) {
@@ -502,6 +517,35 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
                 refreshDBEmbeds(databaseID: databaseID)
             }
 
+        case "requestAgenda":
+            // A mounted "/agenda" block wants its snapshot.
+            guard let document,
+                  let agendaSnapshot = document.agendaSnapshot,
+                  let ref = body["ref"] as? String else { return }
+            let scope = (body["scope"] as? String) ?? "today"
+            Task { [weak self] in
+                let json = await agendaSnapshot(scope)
+                guard let self else { return }
+                let refLiteral = Self.jsLiteral(ref)
+                let jsonLiteral = json.map(Self.jsLiteral) ?? "null"
+                self.webView?.evaluateJavaScript(
+                    "window.hyperview.deliverAgenda(\(refLiteral), \(jsonLiteral));",
+                    completionHandler: nil
+                )
+            }
+
+        case "openMention":
+            // A non-page mention chip (contact/event/reminder) or an agenda
+            // item was clicked — ContentView routes it to the right module.
+            guard let kind = body["kind"] as? String else { return }
+            var userInfo: [String: Any] = ["kind": kind]
+            if let id = body["id"] as? String { userInfo["id"] = id }
+            if let dateISO = body["dateISO"] as? String,
+               let date = ISO8601DateFormatter().date(from: dateISO) {
+                userInfo["date"] = date
+            }
+            NotificationCenter.default.post(name: .unifyrOpenMention, object: nil, userInfo: userInfo)
+
         case "resolveBookmark":
             // Fetch the page's <title> for a bookmark card (the WKWebView's
             // file origin can't fetch cross-origin itself).
@@ -727,12 +771,25 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     /// Refresh the "@" mention menu's page index (per document load, so it
     /// tracks creates/renames without a live feed).
     private func pushPages(for document: EditorDocument) {
-        guard let pages = document.pageList?() else { return }
-        let array: [[String: String]] = pages.map {
-            ["id": $0.id.uuidString, "title": $0.title, "emoji": $0.emoji ?? ""]
+        if let pages = document.pageList?() {
+            let array: [[String: String]] = pages.map {
+                ["id": $0.id.uuidString, "title": $0.title, "emoji": $0.emoji ?? ""]
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: array) {
+                let literal = Self.jsLiteral(String(decoding: data, as: UTF8.self))
+                webView?.evaluateJavaScript("window.hyperview.setPages(\(literal));", completionHandler: nil)
+            }
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: array) else { return }
-        let literal = Self.jsLiteral(String(decoding: data, as: UTF8.self))
-        webView?.evaluateJavaScript("window.hyperview.setPages(\(literal));", completionHandler: nil)
+        // Contacts/events/reminders arrive async from the brokers.
+        if let mentionSources = document.mentionSources {
+            Task { [weak self] in
+                guard let json = await mentionSources(), let self else { return }
+                let literal = Self.jsLiteral(json)
+                self.webView?.evaluateJavaScript(
+                    "window.hyperview.setMentionSources(\(literal));",
+                    completionHandler: nil
+                )
+            }
+        }
     }
 }

@@ -136,6 +136,26 @@ struct ContentView: View {
                 selection = .reminders
                 DeepLink.send(.unifyrOpenReminder, userInfo: ["id": id])
             }
+            // Universal @-mention chips (contact/event/reminder) route to
+            // their module, latching the specific item where one exists.
+            .onReceive(NotificationCenter.default.publisher(for: .unifyrOpenMention)) { notification in
+                switch notification.userInfo?["kind"] as? String {
+                case "contact":
+                    selection = .contacts
+                case "event":
+                    selection = .calendar
+                    if let date = notification.userInfo?["date"] as? Date {
+                        DeepLink.send(.unifyrOpenCalendarDate, userInfo: ["date": date])
+                    }
+                case "reminder":
+                    selection = .reminders
+                    if let id = notification.userInfo?["id"] as? String {
+                        DeepLink.send(.unifyrOpenReminder, userInfo: ["id": id])
+                    }
+                default:
+                    break
+                }
+            }
             // Tapping a Unifyr notification opens its module.
             .onReceive(NotificationCenter.default.publisher(for: .unifyrOpenModule)) { notification in
                 guard let raw = notification.userInfo?["module"] as? String,

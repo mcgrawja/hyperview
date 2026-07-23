@@ -128,6 +128,9 @@ nonisolated enum BlockSerializer {
             case "bookmark":
                 result.append(BlockContent(kind: .bookmark, attrs: node.attrs))
 
+            case "agenda":
+                result.append(BlockContent(kind: .agenda, attrs: node.attrs))
+
             default:
                 // Unknown node: preserve its inline content as a paragraph so no
                 // text is silently dropped.
@@ -243,6 +246,8 @@ nonisolated enum BlockSerializer {
             return PMNode(type: "columnList", attrs: block.attrs, content: block.content)
         case .bookmark:
             return PMNode(type: "bookmark", attrs: block.attrs)
+        case .agenda:
+            return PMNode(type: "agenda", attrs: block.attrs)
         case .bullet, .numbered, .todo:
             // Handled by the list-grouping path in `document(from:)`; a lone list
             // block still serializes sensibly as a single-item list.

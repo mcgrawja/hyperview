@@ -78,6 +78,7 @@ const doc = {
     { type: "dbembed", attrs: { noteID: "C", title: "Tracker" } },
     { type: "image", attrs: { src: "unifyr-asset://X", width: 320 } },
     { type: "bookmark", attrs: { url: "https://example.com", title: "Example" } },
+    { type: "agenda", attrs: { scope: "today" } },
   ],
 };
 
@@ -97,6 +98,7 @@ check("mention rendered", !!window.document.querySelector(".page-mention"));
 check("subpage rendered", !!window.document.querySelector(".subpage-block"));
 check("dbembed rendered", !!window.document.querySelector(".dbembed"));
 check("bookmark rendered", !!window.document.querySelector(".bookmark-block"));
+check("agenda rendered", !!window.document.querySelector(".agenda-block"));
 
 if (failures.length) {
   console.error(`\n${failures.length} smoke check(s) FAILED`);

@@ -63,6 +63,8 @@ const ITEMS = [
     run: (e, r) => { e.chain().focus().deleteRange(r).run(); post({ type: "requestFileLink" }); } },
   { title: "Bookmark", hint: "Web link as a titled card", keywords: "bookmark web url website card",
     run: (e, r) => { e.chain().focus().deleteRange(r).run(); promptBookmark(e); } },
+  { title: "Agenda", hint: "Today's events + due reminders, live", keywords: "agenda today calendar schedule reminders",
+    run: (e, r) => { e.chain().focus().deleteRange(r).run(); e.commands.insertAgenda(); } },
   // Table editing — these only apply with the cursor inside a table; type
   // "/table" in a cell to filter down to them.
   { title: "Table: add row", hint: "Insert a row below", keywords: "table row insert below",
