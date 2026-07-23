@@ -37,6 +37,11 @@ extension Notification.Name {
     /// iOS: the editor asked for an image (slash "Image") — NotesView shows the
     /// image picker (macOS uses an NSOpenPanel inside the bridge instead).
     static let unifyrRequestImageFile = Notification.Name("unifyr.requestImageFile")
+    /// "/Linked database": NotesView presents the database/view picker.
+    static let unifyrRequestDBEmbedPicker = Notification.Name("unifyr.requestDBEmbedPicker")
+    /// The picker's choice; userInfo: ["id": UUID, "viewID": UUID?, "title":
+    /// String, "emoji": String?]. The bridge inserts the dbembed block.
+    static let unifyrInsertDBEmbed = Notification.Name("unifyr.insertDBEmbed")
     /// NotesView picked an image file; userInfo: ["url": URL]. The bridge
     /// stores it as an Asset and inserts the image block.
     static let unifyrInsertImageFile = Notification.Name("unifyr.insertImageFile")

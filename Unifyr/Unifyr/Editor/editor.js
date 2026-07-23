@@ -24246,6 +24246,15 @@ img.ProseMirror-separator {
       }
     },
     {
+      title: "Linked database",
+      hint: "Embed a database view",
+      keywords: "database table view embed linked db",
+      run: (e, r2) => {
+        e.chain().focus().deleteRange(r2).run();
+        post({ type: "requestDBEmbedPicker" });
+      }
+    },
+    {
       title: "Link to note",
       hint: "Link to another Hyperview note",
       keywords: "link note wiki [[",
@@ -40024,8 +40033,116 @@ img.ProseMirror-separator {
     }
   });
 
-  // src/main.js
+  // src/dbembed.js
   function post4(msg) {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
+      window.webkit.messageHandlers.hyperview.postMessage(msg);
+    }
+  }
+  var dbEmbedRequests = { pending: {}, counter: 0 };
+  function deliverDBEmbed(ref, snapshotJSON) {
+    const render = dbEmbedRequests.pending[ref];
+    if (!render) return;
+    delete dbEmbedRequests.pending[ref];
+    render(snapshotJSON ? JSON.parse(snapshotJSON) : null);
+  }
+  var DBEmbed = Node2.create({
+    name: "dbembed",
+    group: "block",
+    atom: true,
+    selectable: true,
+    addAttributes() {
+      return {
+        noteID: { default: null },
+        viewID: { default: null },
+        title: { default: "Untitled" },
+        emoji: { default: null }
+      };
+    },
+    parseHTML() {
+      return [{ tag: "div.dbembed" }];
+    },
+    renderHTML({ node, HTMLAttributes }) {
+      const label = `${node.attrs.emoji || "\u{1F4CA}"} ${node.attrs.title || "Untitled"}`;
+      return ["div", mergeAttributes(HTMLAttributes, { class: "dbembed" }), label];
+    },
+    addNodeView() {
+      return ({ node }) => {
+        const dom = document.createElement("div");
+        dom.className = "dbembed";
+        const header = document.createElement("div");
+        header.className = "dbembed-header";
+        header.textContent = `${node.attrs.emoji || "\u{1F4CA}"} ${node.attrs.title || "Untitled"}`;
+        header.title = "Open database";
+        header.addEventListener("click", (event) => {
+          event.preventDefault();
+          if (node.attrs.noteID) {
+            post4({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
+          }
+        });
+        const body = document.createElement("div");
+        body.className = "dbembed-body";
+        body.textContent = "Loading\u2026";
+        dom.appendChild(header);
+        dom.appendChild(body);
+        if (node.attrs.noteID) {
+          const ref = `dbembed-${++dbEmbedRequests.counter}`;
+          dbEmbedRequests.pending[ref] = (snapshot) => renderSnapshot(header, body, node, snapshot);
+          post4({
+            type: "requestDBEmbed",
+            databaseID: node.attrs.noteID,
+            viewID: node.attrs.viewID || null,
+            ref
+          });
+        } else {
+          body.textContent = "No database selected.";
+        }
+        return { dom };
+      };
+    }
+  });
+  function renderSnapshot(header, body, node, snapshot) {
+    if (!snapshot) {
+      body.textContent = "Database not found (deleted?). Click to try opening it.";
+      return;
+    }
+    const viewSuffix = snapshot.view ? ` \xB7 ${snapshot.view}` : "";
+    header.textContent = `${snapshot.emoji || "\u{1F4CA}"} ${snapshot.title}${viewSuffix}`;
+    body.innerHTML = "";
+    const table = document.createElement("table");
+    table.className = "dbembed-table";
+    const head = document.createElement("tr");
+    for (const column of snapshot.columns || []) {
+      const th = document.createElement("th");
+      th.textContent = column;
+      head.appendChild(th);
+    }
+    table.appendChild(head);
+    for (const row of snapshot.rows || []) {
+      const tr2 = document.createElement("tr");
+      for (const cell of row) {
+        const td = document.createElement("td");
+        td.textContent = cell;
+        tr2.appendChild(td);
+      }
+      table.appendChild(tr2);
+    }
+    body.appendChild(table);
+    if ((snapshot.rows || []).length === 0) {
+      const empty2 = document.createElement("div");
+      empty2.className = "dbembed-more";
+      empty2.textContent = "No rows match this view.";
+      body.appendChild(empty2);
+    } else if (snapshot.more > 0) {
+      const more = document.createElement("div");
+      more.className = "dbembed-more";
+      more.textContent = `+ ${snapshot.more} more`;
+      body.appendChild(more);
+    }
+  }
+
+  // src/main.js
+  function post5(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -40035,13 +40152,13 @@ img.ProseMirror-separator {
   function scheduleChange(editor2) {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function() {
-      post4({ type: "documentChanged", doc: editor2.getJSON() });
+      post5({ type: "documentChanged", doc: editor2.getJSON() });
     }, 500);
   }
   function sendImageFile(file) {
     const reader = new FileReader();
     reader.onload = function() {
-      post4({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
+      post5({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
     };
     reader.readAsDataURL(file);
   }
@@ -40078,6 +40195,7 @@ img.ProseMirror-separator {
       PageMention,
       PageMentionSuggestion,
       Subpage,
+      DBEmbed,
       Placeholder.configure({ placeholder: "Type \u2018/\u2019 for commands\u2026" }),
       SlashCommands
     ],
@@ -40108,7 +40226,7 @@ img.ProseMirror-separator {
     const anchor = event.target.closest("a[href]");
     if (!anchor) return;
     event.preventDefault();
-    post4({ type: "openLink", href: anchor.getAttribute("href") });
+    post5({ type: "openLink", href: anchor.getAttribute("href") });
   });
   window.hyperview = {
     loadDocument: function(docOrJson) {
@@ -40142,7 +40260,16 @@ img.ProseMirror-separator {
     // Swift → JS: a child page was created for "/Sub-page" — embed it here.
     insertSubpage: function(id, title, emoji2) {
       editor.chain().focus().insertContent({ type: "subpage", attrs: { noteID: id, title: title || "Untitled", emoji: emoji2 || null } }).run();
-    }
+    },
+    // Swift → JS: the database view picked for "/Linked database".
+    insertDBEmbed: function(id, viewID, title, emoji2) {
+      editor.chain().focus().insertContent({
+        type: "dbembed",
+        attrs: { noteID: id, viewID: viewID || null, title: title || "Untitled", emoji: emoji2 || null }
+      }).run();
+    },
+    // Swift → JS: a dbembed snapshot answering requestDBEmbed.
+    deliverDBEmbed
   };
-  post4({ type: "ready" });
+  post5({ type: "ready" });
 })();

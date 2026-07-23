@@ -72,6 +72,9 @@ nonisolated enum BlockKind: String, Sendable, CaseIterable {
     case toggle
     /// Inline child-page embed (Phase 3): attrs = noteID + cached title/emoji.
     case subpage
+    /// Inline database-view embed (Phase 4): attrs = noteID (the database
+    /// note) + viewID + cached title/emoji. Preview data is fetched live.
+    case dbembed
 }
 
 extension Block {

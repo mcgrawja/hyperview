@@ -206,6 +206,134 @@ struct DatabaseStoreTests {
         #expect(remaining.filter { $0.rowID != nil }.isEmpty)
     }
 
+    // MARK: Saved views (Phase 4)
+
+    /// Name + Status + Date seeded database with three populated rows.
+    private func makePopulated(_ context: ModelContext) -> (DatabaseStore, Note, name: DBProperty, status: DBProperty, date: DBProperty) {
+        let (store, note) = makeDatabase(context)
+        let properties = store.fetchProperties(databaseNoteID: note.id)
+        let (name, status, date) = (properties[0], properties[1], properties[2])
+        let options = store.config(of: status).options ?? []
+        let rows = store.fetchRows(databaseNoteID: note.id)
+        let seed: [(String, Int, String)] = [("Bravo", 0, "2026-07-30"), ("Alpha", 1, "2026-07-01"), ("Charlie", 2, "2026-08-15")]
+        for (index, row) in rows.enumerated() {
+            var cell = DBCellValue()
+            cell.text = seed[index].0
+            store.setValue(cell, rowID: row.id, propertyID: name.id, in: note)
+            var statusCell = DBCellValue()
+            statusCell.optionIDs = [options[seed[index].1].id]
+            store.setValue(statusCell, rowID: row.id, propertyID: status.id, in: note)
+            var dateCell = DBCellValue()
+            dateCell.date = seed[index].2
+            store.setValue(dateCell, rowID: row.id, propertyID: date.id, in: note)
+        }
+        try? context.save()
+        return (store, note, name, status, date)
+    }
+
+    private func values(_ store: DatabaseStore, _ note: Note) -> [UUID: [UUID: DBCellValue]] {
+        let properties = store.fetchProperties(databaseNoteID: note.id)
+        var result: [UUID: [UUID: DBCellValue]] = [:]
+        for row in store.fetchRows(databaseNoteID: note.id) {
+            for property in properties {
+                let cell = store.value(rowID: row.id, propertyID: property.id)
+                if !cell.isEmpty { result[row.id, default: [:]][property.id] = cell }
+            }
+        }
+        return result
+    }
+
+    @Test func viewFiltersAndSorts() {
+        let context = makeContext()
+        let (store, note, name, status, date) = makePopulated(context)
+        let properties = store.fetchProperties(databaseNoteID: note.id)
+        let rows = store.fetchRows(databaseNoteID: note.id)
+        let vals = values(store, note)
+        let inProgress = (store.config(of: status).options ?? [])[1]
+
+        // Filter: Status is "In progress" → only Alpha.
+        var view = DBViewConfig()
+        var filter = DBFilter()
+        filter.propertyID = status.id
+        filter.filterOp = .hasOption
+        filter.optionID = inProgress.id
+        view.filters = [filter]
+        var out = store.apply(view, rows: rows, values: vals, properties: properties)
+        #expect(out.map { store.rowTitle($0.id, titleProperty: name) } == ["Alpha"])
+
+        // Sort: by name ascending.
+        view.filters = nil
+        var sort = DBSort()
+        sort.propertyID = name.id
+        view.sorts = [sort]
+        out = store.apply(view, rows: rows, values: vals, properties: properties)
+        #expect(out.map { store.rowTitle($0.id, titleProperty: name) } == ["Alpha", "Bravo", "Charlie"])
+
+        // Sort: by date descending.
+        sort.propertyID = date.id
+        sort.ascending = false
+        view.sorts = [sort]
+        out = store.apply(view, rows: rows, values: vals, properties: properties)
+        #expect(out.map { store.rowTitle($0.id, titleProperty: name) } == ["Charlie", "Bravo", "Alpha"])
+
+        // Date filter: before 2026-08-01.
+        var dateFilter = DBFilter()
+        dateFilter.propertyID = date.id
+        dateFilter.filterOp = .beforeDate
+        dateFilter.date = "2026-08-01"
+        view.filters = [dateFilter]
+        out = store.apply(view, rows: rows, values: vals, properties: properties)
+        #expect(Set(out.map { store.rowTitle($0.id, titleProperty: name) }) == ["Alpha", "Bravo"])
+    }
+
+    @Test func viewCRUDPersistsInSettings() {
+        let context = makeContext()
+        let (store, note) = makeDatabase(context)
+
+        var view = DBViewConfig()
+        view.name = "Open items"
+        store.upsertView(view, on: note)
+        #expect(store.views(of: note).map(\.name) == ["Open items"])
+
+        view.name = "Renamed"
+        store.upsertView(view, on: note)
+        #expect(store.views(of: note).map(\.name) == ["Renamed"])
+
+        // Round-trips through the schemaJSON bytes.
+        let decoded = DatabaseSettings.decode(note.schemaJSON)
+        #expect(decoded.views?.first?.name == "Renamed")
+
+        store.deleteView(view.id, on: note)
+        #expect(store.views(of: note).isEmpty)
+    }
+
+    @Test func embedSnapshotRespectsViewAndLimit() throws {
+        let context = makeContext()
+        let (store, note, _, status, _) = makePopulated(context)
+        let inProgress = (store.config(of: status).options ?? [])[1]
+
+        var view = DBViewConfig()
+        view.name = "Active"
+        var filter = DBFilter()
+        filter.propertyID = status.id
+        filter.filterOp = .hasOption
+        filter.optionID = inProgress.id
+        view.filters = [filter]
+        store.upsertView(view, on: note)
+        try context.save()
+
+        let json = try #require(store.embedSnapshotJSON(databaseID: note.id, viewID: view.id))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(payload["title"] as? String == "Tracker")
+        #expect(payload["view"] as? String == "Active")
+        #expect((payload["rows"] as? [[String]])?.count == 1)
+        #expect((payload["rows"] as? [[String]])?.first?.first == "Alpha")
+        #expect(payload["more"] as? Int == 0)
+
+        // Unknown database → nil (deleted on another device).
+        #expect(store.embedSnapshotJSON(databaseID: UUID(), viewID: nil) == nil)
+    }
+
     // MARK: Purge
 
     @Test func purgeRemovesEverythingTheNoteOwns() {

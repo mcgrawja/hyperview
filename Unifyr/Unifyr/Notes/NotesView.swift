@@ -34,6 +34,7 @@ struct NotesView: View {
     // the document picker and the Quick Look preview.
     @State private var showingFileImporter = false
     @State private var showingImageImporter = false
+    @State private var showingDBEmbedPicker = false
     @State private var previewURL: URL?
 
     private var store: NotesStore { NotesStore(context: context) }
@@ -127,6 +128,19 @@ struct NotesView: View {
                 object: nil,
                 userInfo: ["href": url.absoluteString, "text": url.lastPathComponent]
             )
+        }
+        // "/Linked database": pick a database (and optionally a saved view)
+        // to embed; the bridge inserts the dbembed block.
+        .onReceive(NotificationCenter.default.publisher(for: .unifyrRequestDBEmbedPicker)) { _ in
+            showingDBEmbedPicker = true
+        }
+        .sheet(isPresented: $showingDBEmbedPicker) {
+            DatabaseEmbedPicker { databaseID, viewID, title, emoji in
+                var userInfo: [String: Any] = ["id": databaseID, "title": title]
+                if let viewID { userInfo["viewID"] = viewID }
+                if let emoji { userInfo["emoji"] = emoji }
+                NotificationCenter.default.post(name: .unifyrInsertDBEmbed, object: nil, userInfo: userInfo)
+            }
         }
         // iOS "Image" slash command: the editor asks, we present the picker;
         // the bridge stores the Asset and inserts the block.

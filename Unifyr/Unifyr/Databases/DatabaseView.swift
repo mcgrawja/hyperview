@@ -40,10 +40,13 @@ struct DatabaseView: View {
     // makes the in-memory pass cheap.
     @Query private var allValues: [DBValue]
 
-    /// Table vs board — a per-device view preference (like folder collapse),
-    /// NOT synced state.
+    /// Table vs board for the default "All" view — a per-device preference.
     @AppStorage private var viewModeRaw: String
+    /// Which tab is active: "all" or a saved view's uuid — per-device.
+    @AppStorage private var selectedViewRaw: String
     @State private var openRowID: UUID?
+    /// Saved view being edited in the sheet.
+    @State private var editingView: DBViewConfig?
 
     init(note: Note) {
         self.note = note
@@ -58,12 +61,29 @@ struct DatabaseView: View {
         )
         _allValues = Query()
         _viewModeRaw = AppStorage(wrappedValue: DatabaseViewMode.table.rawValue, "db.viewMode.\(note.id.uuidString)")
+        _selectedViewRaw = AppStorage(wrappedValue: "all", "db.view.\(note.id.uuidString)")
     }
 
     private var store: DatabaseStore { DatabaseStore(context: context) }
 
+    private var savedViews: [DBViewConfig] { store.views(of: note) }
+
+    /// The active saved view, or nil for "All".
+    private var selectedView: DBViewConfig? {
+        guard let id = UUID(uuidString: selectedViewRaw) else { return nil }
+        return savedViews.first { $0.id == id }
+    }
+
     private var viewMode: DatabaseViewMode {
-        get { DatabaseViewMode(rawValue: viewModeRaw) ?? .table }
+        if let selectedView {
+            return DatabaseViewMode(rawValue: selectedView.mode) ?? .table
+        }
+        return DatabaseViewMode(rawValue: viewModeRaw) ?? .table
+    }
+
+    /// Rows after the active view's filters and sorts.
+    private var displayRows: [DBRow] {
+        store.apply(selectedView, rows: rows, values: valuesByRow, properties: properties)
     }
 
     /// rowID → propertyID → decoded cell, for this database's rows only.
@@ -82,11 +102,12 @@ struct DatabaseView: View {
         properties.filter { $0.propertyKind == .select }
     }
 
-    /// Board grouping: the synced setting when it still resolves, else the
-    /// first select property.
+    /// Board grouping: the active view's override, else the synced database
+    /// default, else the first select property.
     private var groupProperty: DBProperty? {
         let settings = store.settings(of: note)
-        return selectProperties.first { $0.id == settings.boardGroupPropertyID }
+        return selectProperties.first { $0.id == selectedView?.groupPropertyID }
+            ?? selectProperties.first { $0.id == settings.boardGroupPropertyID }
             ?? selectProperties.first
     }
 
@@ -116,20 +137,55 @@ struct DatabaseView: View {
     // and title for every page kind (2026-07-22 Notion refocus).
     private var databaseBody: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: Theme.Spacing.md) {
-                Picker("View", selection: .init(
-                    get: { viewMode },
-                    set: { viewModeRaw = $0.rawValue }
-                )) {
-                    ForEach(DatabaseViewMode.allCases, id: \.rawValue) { mode in
-                        Label(mode.displayName, systemImage: mode.systemImage).tag(mode)
+            // View tabs: All + saved views (Phase 4).
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.Spacing.xs) {
+                    viewTab(nil)
+                    ForEach(savedViews) { view in
+                        viewTab(view)
                     }
+                    Menu {
+                        Button("New Table View") { createView(mode: .table) }
+                        Button("New Board View") { createView(mode: .board) }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(Theme.Font.cardCaption)
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                            .padding(Theme.Spacing.xs)
+                    }
+                    .menuIndicator(.hidden)
+                    .fixedSize()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
+            }
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.top, Theme.Spacing.xs)
 
-                if viewMode == .board, selectProperties.count > 1 {
+            HStack(spacing: Theme.Spacing.md) {
+                if let selectedView {
+                    Button {
+                        editingView = selectedView
+                    } label: {
+                        Label(filterSortSummary(selectedView), systemImage: "line.3.horizontal.decrease.circle")
+                            .font(Theme.Font.cardCaption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.Palette.primary)
+                    .help("Edit filters & sorts")
+                } else {
+                    Picker("View", selection: .init(
+                        get: { viewMode },
+                        set: { viewModeRaw = $0.rawValue }
+                    )) {
+                        ForEach(DatabaseViewMode.allCases, id: \.rawValue) { mode in
+                            Label(mode.displayName, systemImage: mode.systemImage).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+
+                if viewMode == .board, selectProperties.count > 1, selectedView == nil {
                     Menu {
                         ForEach(selectProperties) { property in
                             Button {
@@ -155,7 +211,7 @@ struct DatabaseView: View {
 
                 Spacer()
 
-                Text("\(rows.count) row\(rows.count == 1 ? "" : "s")")
+                Text(rowCountLabel)
                     .font(Theme.Font.cardCaption)
                     .foregroundStyle(Theme.Palette.textSecondary)
             }
@@ -169,7 +225,7 @@ struct DatabaseView: View {
                 DatabaseTableView(
                     note: note,
                     properties: properties,
-                    rows: rows,
+                    rows: displayRows,
                     values: valuesByRow
                 ) { row in
                     openRowID = row.id
@@ -178,7 +234,7 @@ struct DatabaseView: View {
                 DatabaseBoardView(
                     note: note,
                     properties: properties,
-                    rows: rows,
+                    rows: displayRows,
                     values: valuesByRow,
                     groupProperty: groupProperty
                 ) { row in
@@ -186,5 +242,80 @@ struct DatabaseView: View {
                 }
             }
         }
+        .sheet(item: $editingView) { view in
+            DatabaseViewEditor(
+                note: note,
+                properties: properties,
+                initial: view,
+                onSave: { updated in
+                    store.upsertView(updated, on: note)
+                    try? context.save()
+                },
+                onDelete: {
+                    store.deleteView(view.id, on: note)
+                    try? context.save()
+                    selectedViewRaw = "all"
+                }
+            )
+        }
+    }
+
+    private var rowCountLabel: String {
+        let visible = displayRows.count
+        if visible != rows.count { return "\(visible) of \(rows.count) rows" }
+        return "\(visible) row\(visible == 1 ? "" : "s")"
+    }
+
+    private func filterSortSummary(_ view: DBViewConfig) -> String {
+        let filters = view.filters?.count ?? 0
+        let sorts = view.sorts?.count ?? 0
+        var parts: [String] = []
+        if filters > 0 { parts.append("\(filters) filter\(filters == 1 ? "" : "s")") }
+        if sorts > 0 { parts.append("\(sorts) sort\(sorts == 1 ? "" : "s")") }
+        return parts.isEmpty ? "Filter & Sort" : parts.joined(separator: " · ")
+    }
+
+    private func viewTab(_ view: DBViewConfig?) -> some View {
+        let isActive = selectedView?.id == view?.id
+        return Button {
+            selectedViewRaw = view?.id.uuidString ?? "all"
+        } label: {
+            HStack(spacing: Theme.Spacing.xs) {
+                Image(systemName: view.flatMap { DatabaseViewMode(rawValue: $0.mode) }?.systemImage ?? "tray.full")
+                    .font(.caption2)
+                Text(view?.name ?? "All")
+                    .font(Theme.Font.cardCaption)
+            }
+            .padding(.horizontal, Theme.Spacing.sm)
+            .padding(.vertical, Theme.Spacing.xs)
+            .background(
+                isActive ? Theme.Palette.primary.softFill(0.14) : Color.clear,
+                in: Capsule()
+            )
+            .foregroundStyle(isActive ? Theme.Palette.textPrimary : Theme.Palette.textSecondary)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if let view {
+                Button("Edit View…") { editingView = view }
+                Divider()
+                Button("Delete View", role: .destructive) {
+                    store.deleteView(view.id, on: note)
+                    try? context.save()
+                    if selectedView?.id == view.id { selectedViewRaw = "all" }
+                }
+            }
+        }
+    }
+
+    private func createView(mode: DatabaseViewMode) {
+        var view = DBViewConfig()
+        view.name = mode == .table ? "Table view" : "Board view"
+        view.mode = mode.rawValue
+        store.upsertView(view, on: note)
+        try? context.save()
+        selectedViewRaw = view.id.uuidString
+        editingView = view
     }
 }

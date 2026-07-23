@@ -187,20 +187,6 @@ struct DatabaseBoardView: View {
     }
 
     private func summaryText(property: DBProperty, cell: DBCellValue) -> String {
-        switch property.propertyKind {
-        case .text: cell.text ?? ""
-        case .number: cell.number.map(DatabaseCellEditor.numberText) ?? ""
-        case .date: cell.dateValue.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? ""
-        case .checkbox: (cell.checked ?? false) ? "\(property.name) ✓" : ""
-        case .url: cell.url ?? ""
-        case .person: (cell.people ?? []).joined(separator: ", ")
-        case .select, .multiSelect:
-            (cell.optionIDs ?? []).compactMap { id in
-                (store.config(of: property).options ?? []).first { $0.id == id }?.name
-            }.joined(separator: ", ")
-        case .relation:
-            "\(cell.rowIDs?.count ?? 0) linked"
-        case .rollup: ""
-        }
+        store.displayText(cell, property: property)
     }
 }

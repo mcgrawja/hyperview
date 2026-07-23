@@ -32,6 +32,7 @@ import { CodeBlock } from "./code-block.js";
 import { DragHandle } from "./drag-handle.js";
 import { PageMention, PageMentionSuggestion, pageIndex } from "./page-mention.js";
 import { Subpage } from "./subpage.js";
+import { DBEmbed, deliverDBEmbed } from "./dbembed.js";
 
 function post(msg) {
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -95,6 +96,7 @@ const editor = new Editor({
     PageMention,
     PageMentionSuggestion,
     Subpage,
+    DBEmbed,
     Placeholder.configure({ placeholder: "Type ‘/’ for commands…" }),
     SlashCommands,
   ],
@@ -179,6 +181,19 @@ window.hyperview = {
       .insertContent({ type: "subpage", attrs: { noteID: id, title: title || "Untitled", emoji: emoji || null } })
       .run();
   },
+  // Swift → JS: the database view picked for "/Linked database".
+  insertDBEmbed: function (id, viewID, title, emoji) {
+    editor
+      .chain()
+      .focus()
+      .insertContent({
+        type: "dbembed",
+        attrs: { noteID: id, viewID: viewID || null, title: title || "Untitled", emoji: emoji || null },
+      })
+      .run();
+  },
+  // Swift → JS: a dbembed snapshot answering requestDBEmbed.
+  deliverDBEmbed: deliverDBEmbed,
 };
 
 post({ type: "ready" });

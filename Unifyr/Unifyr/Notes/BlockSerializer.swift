@@ -119,6 +119,9 @@ nonisolated enum BlockSerializer {
             case "subpage":
                 result.append(BlockContent(kind: .subpage, attrs: node.attrs))
 
+            case "dbembed":
+                result.append(BlockContent(kind: .dbembed, attrs: node.attrs))
+
             default:
                 // Unknown node: preserve its inline content as a paragraph so no
                 // text is silently dropped.
@@ -228,6 +231,8 @@ nonisolated enum BlockSerializer {
             return PMNode(type: "toggle", attrs: block.attrs, content: block.content)
         case .subpage:
             return PMNode(type: "subpage", attrs: block.attrs)
+        case .dbembed:
+            return PMNode(type: "dbembed", attrs: block.attrs)
         case .bullet, .numbered, .todo:
             // Handled by the list-grouping path in `document(from:)`; a lone list
             // block still serializes sensibly as a single-item list.
@@ -272,7 +277,7 @@ nonisolated extension BlockSerializer {
         resolve: (UUID) -> (title: String, emoji: String?)?
     ) -> PMNode {
         var out = node
-        if node.type == "subpage" || node.type == "pageMention",
+        if node.type == "subpage" || node.type == "pageMention" || node.type == "dbembed",
            let idString = node.attrs?["noteID"]?.stringValue,
            let id = UUID(uuidString: idString),
            let live = resolve(id) {

@@ -102,6 +102,10 @@ struct DatabaseRowPage: View {
                 pageList: { [context] in
                     NotesStore(context: context).mentionablePages()
                         .map { EditorPageRef(id: $0.id, title: $0.title, emoji: $0.emoji) }
+                },
+                dbEmbedSnapshot: { [context] databaseID, viewID in
+                    DatabaseStore(context: context)
+                        .embedSnapshotJSON(databaseID: databaseID, viewID: viewID)
                 }
             ))
             .frame(maxWidth: .infinity, maxHeight: .infinity)

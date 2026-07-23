@@ -308,3 +308,44 @@ html, body {
 }
 .ProseMirror .subpage-block:hover { background: var(--hv-code-bg); }
 .ProseMirror .subpage-block .subpage-title { text-decoration: underline; text-decoration-color: var(--hv-rule); text-underline-offset: 3px; }
+
+/* ---------- Phase 4: inline database embeds ---------- */
+.ProseMirror .dbembed {
+  border: 1px solid var(--hv-rule);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ProseMirror .dbembed-header {
+  padding: 8px 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 1px solid var(--hv-rule);
+}
+.ProseMirror .dbembed-header:hover { background: var(--hv-code-bg); }
+.ProseMirror .dbembed-body { overflow-x: auto; }
+.ProseMirror table.dbembed-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9em;
+}
+.ProseMirror .dbembed-table th,
+.ProseMirror .dbembed-table td {
+  text-align: left;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--hv-rule);
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ProseMirror .dbembed-table th {
+  color: var(--hv-secondary);
+  font-weight: 500;
+  font-size: 0.85em;
+}
+.ProseMirror .dbembed-table tr:last-child td { border-bottom: none; }
+.ProseMirror .dbembed-more {
+  padding: 6px 12px;
+  color: var(--hv-secondary);
+  font-size: 0.85em;
+}

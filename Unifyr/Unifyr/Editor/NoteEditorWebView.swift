@@ -108,6 +108,9 @@ struct EditorDocument {
     /// "/Sub-page": create a child page of this document's page and return it
     /// for inline embedding. nil = sub-pages unsupported (database row pages).
     let createSubpage: (() -> EditorPageRef?)?
+    /// dbembed blocks: (databaseID, viewID) → snapshot JSON for the read-only
+    /// preview, nil when the database is gone.
+    let dbEmbedSnapshot: ((UUID, UUID?) -> String?)?
 
     init(
         id: UUID,
@@ -115,7 +118,8 @@ struct EditorDocument {
         save: @escaping (PMNode) -> Void,
         saveAsset: ((Data, String, String) -> UUID?)? = nil,
         pageList: (() -> [EditorPageRef])? = nil,
-        createSubpage: (() -> EditorPageRef?)? = nil
+        createSubpage: (() -> EditorPageRef?)? = nil,
+        dbEmbedSnapshot: ((UUID, UUID?) -> String?)? = nil
     ) {
         self.id = id
         self.load = load
@@ -123,6 +127,7 @@ struct EditorDocument {
         self.saveAsset = saveAsset
         self.pageList = pageList
         self.createSubpage = createSubpage
+        self.dbEmbedSnapshot = dbEmbedSnapshot
     }
 
     /// A whole note (the Phase-2 path).
@@ -148,6 +153,10 @@ struct EditorDocument {
             let child = store.createPage(parent: note)
             try? store.context.save()
             return EditorPageRef(id: child.id, title: child.title, emoji: child.emoji)
+        }
+        self.dbEmbedSnapshot = { databaseID, viewID in
+            DatabaseStore(context: store.context)
+                .embedSnapshotJSON(databaseID: databaseID, viewID: viewID)
         }
     }
 }
@@ -247,8 +256,9 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
     // Token only crosses to removeObserver; safe to share.
     nonisolated(unsafe) private var insertLinkToken: (any NSObjectProtocol)?
 
-    // Token only crosses to removeObserver; safe to share.
+    // Tokens only cross to removeObserver; safe to share.
     nonisolated(unsafe) private var insertImageToken: (any NSObjectProtocol)?
+    nonisolated(unsafe) private var insertDBEmbedToken: (any NSObjectProtocol)?
 
     override init() {
         super.init()
@@ -278,6 +288,21 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
                 self?.storeAndInsertImage(from: url)
             }
         }
+        // NotesView answers a requestDBEmbedPicker with the picked view.
+        insertDBEmbedToken = NotificationCenter.default.addObserver(
+            forName: .unifyrInsertDBEmbed,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let id = notification.userInfo?["id"] as? UUID
+            let viewID = notification.userInfo?["viewID"] as? UUID
+            let title = notification.userInfo?["title"] as? String
+            let emoji = notification.userInfo?["emoji"] as? String
+            MainActor.assumeIsolated {
+                guard let id, let title else { return }
+                self?.insertDBEmbed(id: id, viewID: viewID, title: title, emoji: emoji)
+            }
+        }
     }
 
     deinit {
@@ -286,6 +311,9 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         }
         if let insertImageToken {
             NotificationCenter.default.removeObserver(insertImageToken)
+        }
+        if let insertDBEmbedToken {
+            NotificationCenter.default.removeObserver(insertDBEmbedToken)
         }
     }
 
@@ -383,6 +411,25 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         case "requestImage":
             pickImage()
 
+        case "requestDBEmbedPicker":
+            // The picker lives in NotesView (it has the sheet infrastructure).
+            NotificationCenter.default.post(name: .unifyrRequestDBEmbedPicker, object: nil)
+
+        case "requestDBEmbed":
+            // A mounted dbembed block wants its preview data.
+            guard let document,
+                  let idString = body["databaseID"] as? String,
+                  let databaseID = UUID(uuidString: idString),
+                  let ref = body["ref"] as? String else { return }
+            let viewID = (body["viewID"] as? String).flatMap(UUID.init(uuidString:))
+            let snapshot = document.dbEmbedSnapshot?(databaseID, viewID)
+            let refLiteral = Self.jsLiteral(ref)
+            let snapshotLiteral = snapshot.map(Self.jsLiteral) ?? "null"
+            webView?.evaluateJavaScript(
+                "window.hyperview.deliverDBEmbed(\(refLiteral), \(snapshotLiteral));",
+                completionHandler: nil
+            )
+
         case "createSubpage":
             // "/Sub-page": Swift creates the child page, the editor embeds it.
             guard let document, let child = document.createSubpage?() else { return }
@@ -440,6 +487,17 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         guard let data = try? Data(contentsOf: url) else { return }
         let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "image/png"
         insertImageAsset(data: data, filename: url.lastPathComponent, mimeType: mimeType)
+    }
+
+    private func insertDBEmbed(id: UUID, viewID: UUID?, title: String, emoji: String?) {
+        let idLiteral = Self.jsLiteral(id.uuidString)
+        let viewLiteral = viewID.map { Self.jsLiteral($0.uuidString) } ?? "null"
+        let titleLiteral = Self.jsLiteral(title)
+        let emojiLiteral = emoji.map(Self.jsLiteral) ?? "null"
+        webView?.evaluateJavaScript(
+            "window.hyperview.insertDBEmbed(\(idLiteral), \(viewLiteral), \(titleLiteral), \(emojiLiteral));",
+            completionHandler: nil
+        )
     }
 
     private func insertImageAsset(data: Data, filename: String, mimeType: String) {

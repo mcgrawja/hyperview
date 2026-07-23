@@ -299,6 +299,212 @@ struct DatabaseStore {
         }
     }
 
+    // MARK: - Display formatting (shared: board cards, embeds)
+
+    /// The human-readable one-line form of a cell, per the property's kind.
+    func displayText(_ cell: DBCellValue, property: DBProperty) -> String {
+        switch property.propertyKind {
+        case .text: cell.text ?? ""
+        case .number: cell.number.map { $0.formatted(.number.precision(.fractionLength(0...4)).grouping(.never)) } ?? ""
+        case .date: cell.dateValue.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? ""
+        case .checkbox: (cell.checked ?? false) ? "✓" : ""
+        case .url: cell.url ?? ""
+        case .person: (cell.people ?? []).joined(separator: ", ")
+        case .select, .multiSelect:
+            (cell.optionIDs ?? []).compactMap { id in
+                (config(of: property).options ?? []).first { $0.id == id }?.name
+            }.joined(separator: ", ")
+        case .relation:
+            (cell.rowIDs ?? []).isEmpty ? "" : "\(cell.rowIDs?.count ?? 0) linked"
+        case .rollup: ""
+        }
+    }
+
+    // MARK: - Saved views (Phase 4)
+
+    /// Filter + sort `rows` per the view. nil view = everything, row order.
+    func apply(
+        _ view: DBViewConfig?,
+        rows: [DBRow],
+        values: [UUID: [UUID: DBCellValue]],
+        properties: [DBProperty]
+    ) -> [DBRow] {
+        guard let view else { return rows }
+        let byID = Dictionary(uniqueKeysWithValues: properties.map { ($0.id, $0) })
+
+        var result = rows.filter { row in
+            (view.filters ?? []).allSatisfy { filter in
+                guard let propertyID = filter.propertyID, let property = byID[propertyID] else { return true }
+                return matches(filter, cell: values[row.id]?[propertyID] ?? DBCellValue(), property: property)
+            }
+        }
+
+        for sort in (view.sorts ?? []).reversed() {
+            guard let propertyID = sort.propertyID, let property = byID[propertyID] else { continue }
+            // Stable per pass, so applying sorts in reverse yields
+            // primary-first multi-key ordering.
+            result = result.enumerated().sorted { lhs, rhs in
+                let l = sortKey(values[lhs.element.id]?[propertyID] ?? DBCellValue(), property: property)
+                let r = sortKey(values[rhs.element.id]?[propertyID] ?? DBCellValue(), property: property)
+                if l == r { return lhs.offset < rhs.offset }
+                return sort.ascending ? l < r : l > r
+            }.map(\.element)
+        }
+        return result
+    }
+
+    func matches(_ filter: DBFilter, cell: DBCellValue, property: DBProperty) -> Bool {
+        let op = filter.filterOp
+        switch op {
+        case .isEmpty: return cellIsEmpty(cell, property: property)
+        case .isNotEmpty: return !cellIsEmpty(cell, property: property)
+        case .checked: return cell.checked ?? false
+        case .unchecked: return !(cell.checked ?? false)
+        case .hasOption:
+            guard let optionID = filter.optionID else { return true }
+            return (cell.optionIDs ?? []).contains(optionID)
+        case .notHasOption:
+            guard let optionID = filter.optionID else { return true }
+            return !(cell.optionIDs ?? []).contains(optionID)
+        case .contains, .notContains, .equals, .notEquals, .greaterThan, .lessThan:
+            switch property.propertyKind {
+            case .number:
+                guard let target = filter.number else { return true }
+                let value = cell.number
+                switch op {
+                case .equals: return value == target
+                case .notEquals: return value != target
+                case .greaterThan: return (value ?? -.greatestFiniteMagnitude) > target
+                case .lessThan: return (value ?? .greatestFiniteMagnitude) < target
+                default: return true
+                }
+            default:
+                let haystack = displayText(cell, property: property)
+                let needle = filter.text ?? ""
+                guard !needle.isEmpty else { return true }
+                switch op {
+                case .contains: return haystack.localizedCaseInsensitiveContains(needle)
+                case .notContains: return !haystack.localizedCaseInsensitiveContains(needle)
+                case .equals: return haystack.localizedCaseInsensitiveCompare(needle) == .orderedSame
+                case .notEquals: return haystack.localizedCaseInsensitiveCompare(needle) != .orderedSame
+                default: return true
+                }
+            }
+        case .onDate, .beforeDate, .afterDate:
+            guard let target = filter.date, !target.isEmpty else { return true }
+            guard let value = cell.date, !value.isEmpty else { return false }
+            // "yyyy-MM-dd" compares correctly as a string.
+            switch op {
+            case .onDate: return value == target
+            case .beforeDate: return value < target
+            case .afterDate: return value > target
+            default: return true
+            }
+        }
+    }
+
+    private func cellIsEmpty(_ cell: DBCellValue, property: DBProperty) -> Bool {
+        switch property.propertyKind {
+        case .relation: (cell.rowIDs ?? []).isEmpty
+        case .select, .multiSelect: (cell.optionIDs ?? []).isEmpty
+        case .date: (cell.date ?? "").isEmpty
+        case .number: cell.number == nil
+        case .person: (cell.people ?? []).isEmpty
+        case .checkbox: !(cell.checked ?? false)
+        default: displayText(cell, property: property).isEmpty
+        }
+    }
+
+    /// Comparable string per kind (numbers/dates zero-padded ISO-ish so string
+    /// order == value order; selects by option position so board order holds).
+    private func sortKey(_ cell: DBCellValue, property: DBProperty) -> String {
+        switch property.propertyKind {
+        case .number:
+            guard let number = cell.number else { return "~" } // empties last
+            // Offset keeps negatives ordered; 15 digits covers real use.
+            return String(format: "%020.4f", number + 1_000_000_000)
+        case .date:
+            return cell.date ?? "~"
+        case .checkbox:
+            return (cell.checked ?? false) ? "0" : "1"
+        case .select, .multiSelect:
+            let options = config(of: property).options ?? []
+            guard let first = (cell.optionIDs ?? []).first,
+                  let index = options.firstIndex(where: { $0.id == first }) else { return "~" }
+            return String(format: "%04d", index)
+        default:
+            let text = displayText(cell, property: property).lowercased()
+            return text.isEmpty ? "~" : text
+        }
+    }
+
+    // MARK: View CRUD (stored in DatabaseSettings.views)
+
+    func views(of note: Note) -> [DBViewConfig] {
+        settings(of: note).views ?? []
+    }
+
+    func upsertView(_ view: DBViewConfig, on note: Note) {
+        var settings = settings(of: note)
+        var views = settings.views ?? []
+        if let index = views.firstIndex(where: { $0.id == view.id }) {
+            views[index] = view
+        } else {
+            views.append(view)
+        }
+        settings.views = views
+        setSettings(settings, on: note)
+    }
+
+    func deleteView(_ viewID: UUID, on note: Note) {
+        var settings = settings(of: note)
+        settings.views = (settings.views ?? []).filter { $0.id != viewID }
+        if settings.views?.isEmpty == true { settings.views = nil }
+        setSettings(settings, on: note)
+    }
+
+    // MARK: - Embed snapshots (dbembed blocks, Phase 4)
+
+    /// The read-only preview payload a `dbembed` editor block renders:
+    /// {title, view, columns, rows (display strings), more}. nil if the
+    /// database is gone/trashed.
+    func embedSnapshotJSON(databaseID: UUID, viewID: UUID?, rowLimit: Int = 8) -> String? {
+        let kind = NoteKind.database.rawValue
+        var descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { $0.id == databaseID && $0.noteKind == kind && $0.deletedAt == nil }
+        )
+        descriptor.fetchLimit = 1
+        guard let note = ((try? context.fetch(descriptor)) ?? []).first else { return nil }
+
+        let properties = fetchProperties(databaseNoteID: databaseID)
+        let rows = fetchRows(databaseNoteID: databaseID)
+        var values: [UUID: [UUID: DBCellValue]] = [:]
+        for row in rows {
+            for property in properties {
+                let cell = value(rowID: row.id, propertyID: property.id)
+                if !cell.isEmpty { values[row.id, default: [:]][property.id] = cell }
+            }
+        }
+        let view = viewID.flatMap { id in views(of: note).first { $0.id == id } }
+        let visible = apply(view, rows: rows, values: values, properties: properties)
+
+        // First 4 columns keep the preview readable; the full table is a click
+        // away.
+        let columns = Array(properties.prefix(4))
+        let payload: [String: Any] = [
+            "title": note.title.isEmpty ? "Untitled" : note.title,
+            "emoji": note.emoji ?? "📊",
+            "view": view?.name ?? "",
+            "columns": columns.map(\.name),
+            "rows": visible.prefix(rowLimit).map { row in
+                columns.map { displayText(values[row.id]?[$0.id] ?? DBCellValue(), property: $0) }
+            },
+            "more": max(0, visible.count - rowLimit),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     // MARK: - Database settings (Note.schemaJSON)
 
     func settings(of note: Note) -> DatabaseSettings {

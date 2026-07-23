@@ -119,6 +119,8 @@ nonisolated struct DBPropertyConfig: Codable, Equatable {
 nonisolated struct DatabaseSettings: Codable, Equatable {
     /// Which select property the board groups by.
     var boardGroupPropertyID: UUID? = nil
+    /// Saved views (Phase 4): named filter+sort slices of the database.
+    var views: [DBViewConfig]? = nil
 
     static func decode(_ data: Data?) -> DatabaseSettings {
         guard let data else { return DatabaseSettings() }
@@ -130,6 +132,116 @@ nonisolated struct DatabaseSettings: Codable, Equatable {
         encoder.outputFormatting = [.sortedKeys]
         return try? encoder.encode(self)
     }
+}
+
+// MARK: - Saved views (Phase 4)
+
+/// One saved view: a named, filtered, sorted slice of the database, viewable
+/// as a table or board, and embeddable in pages (`dbembed` blocks).
+nonisolated struct DBViewConfig: Codable, Equatable, Identifiable {
+    var id: UUID = UUID()
+    var name: String = "View"
+    /// "table" | "board" (DatabaseViewMode.rawValue).
+    var mode: String = "table"
+    /// AND-combined (Mail-rules style — OR views are just two views).
+    var filters: [DBFilter]? = nil
+    /// Applied in order (first is primary).
+    var sorts: [DBSort]? = nil
+    /// Board grouping override; nil falls back to the database default.
+    var groupPropertyID: UUID? = nil
+}
+
+/// One filter condition on one property. Value fields are flat optionals
+/// (DBCellValue-style): the op decides which one is read.
+nonisolated struct DBFilter: Codable, Equatable, Identifiable {
+    var id: UUID = UUID()
+    var propertyID: UUID? = nil
+    /// See `DBFilterOp`. Stored as String for JSON stability.
+    var op: String = DBFilterOp.contains.rawValue
+    var text: String? = nil
+    var number: Double? = nil
+    var optionID: UUID? = nil
+    /// "yyyy-MM-dd", like DBCellValue.date.
+    var date: String? = nil
+
+    var filterOp: DBFilterOp {
+        get { DBFilterOp(rawValue: op) ?? .contains }
+        set { op = newValue.rawValue }
+    }
+}
+
+nonisolated enum DBFilterOp: String, Sendable, CaseIterable {
+    case contains
+    case notContains
+    case equals
+    case notEquals
+    case greaterThan
+    case lessThan
+    case isEmpty
+    case isNotEmpty
+    case checked
+    case unchecked
+    case hasOption
+    case notHasOption
+    case onDate
+    case beforeDate
+    case afterDate
+
+    var displayName: String {
+        switch self {
+        case .contains: "contains"
+        case .notContains: "does not contain"
+        case .equals: "is"
+        case .notEquals: "is not"
+        case .greaterThan: ">"
+        case .lessThan: "<"
+        case .isEmpty: "is empty"
+        case .isNotEmpty: "is not empty"
+        case .checked: "is checked"
+        case .unchecked: "is unchecked"
+        case .hasOption: "is"
+        case .notHasOption: "is not"
+        case .onDate: "is on"
+        case .beforeDate: "is before"
+        case .afterDate: "is after"
+        }
+    }
+
+    /// Which ops make sense for a property kind (drives the op picker).
+    static func valid(for kind: DBPropertyKind) -> [DBFilterOp] {
+        switch kind {
+        case .text, .url, .person:
+            [.contains, .notContains, .equals, .isEmpty, .isNotEmpty]
+        case .number:
+            [.equals, .notEquals, .greaterThan, .lessThan, .isEmpty, .isNotEmpty]
+        case .checkbox:
+            [.checked, .unchecked]
+        case .select, .multiSelect:
+            [.hasOption, .notHasOption, .isEmpty, .isNotEmpty]
+        case .date:
+            [.onDate, .beforeDate, .afterDate, .isEmpty, .isNotEmpty]
+        case .relation:
+            [.isEmpty, .isNotEmpty]
+        case .rollup:
+            []
+        }
+    }
+
+    /// Whether this op needs a value input (and which flavor comes from the
+    /// property kind).
+    var needsValue: Bool {
+        switch self {
+        case .isEmpty, .isNotEmpty, .checked, .unchecked: false
+        default: true
+        }
+    }
+}
+
+/// One sort key.
+nonisolated struct DBSort: Codable, Equatable, Identifiable {
+    var id: UUID = UUID()
+    var propertyID: UUID? = nil
+    var ascending: Bool = true
 }
 
 // MARK: - Kind presentation
