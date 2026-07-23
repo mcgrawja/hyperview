@@ -13,11 +13,13 @@ import SwiftData
 nonisolated enum DatabaseViewMode: String, CaseIterable {
     case table
     case board
+    case calendar
 
     var displayName: String {
         switch self {
         case .table: "Table"
         case .board: "Board"
+        case .calendar: "Calendar"
         }
     }
 
@@ -25,6 +27,7 @@ nonisolated enum DatabaseViewMode: String, CaseIterable {
         switch self {
         case .table: "tablecells"
         case .board: "square.grid.3x1.below.line.grid.1x2"
+        case .calendar: "calendar"
         }
     }
 }
@@ -175,6 +178,7 @@ struct DatabaseView: View {
                         Menu {
                             Button("New Table View") { createView(mode: .table) }
                             Button("New Board View") { createView(mode: .board) }
+                            Button("New Calendar View") { createView(mode: .calendar) }
                         } label: {
                             Image(systemName: "plus")
                                 .font(Theme.Font.cardCaption)
@@ -264,6 +268,17 @@ struct DatabaseView: View {
                 ) { row in
                     openRowID = row.id
                 }
+            case .calendar:
+                DatabaseCalendarView(
+                    note: note,
+                    properties: properties,
+                    rows: displayRows,
+                    values: valuesByRow,
+                    dateProperty: properties.first { $0.id == selectedView?.datePropertyID }
+                        ?? properties.first { $0.propertyKind == .date }
+                ) { row in
+                    openRowID = row.id
+                }
             }
         }
         .sheet(item: $editingView) { view in
@@ -335,7 +350,7 @@ struct DatabaseView: View {
 
     private func createView(mode: DatabaseViewMode) {
         var view = DBViewConfig()
-        view.name = mode == .table ? "Table view" : "Board view"
+        view.name = "\(mode.displayName) view"
         view.mode = mode.rawValue
         store.upsertView(view, on: note)
         try? context.save()

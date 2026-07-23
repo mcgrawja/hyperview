@@ -152,6 +152,9 @@ nonisolated struct DBViewConfig: Codable, Equatable, Identifiable {
     var sorts: [DBSort]? = nil
     /// Board grouping override; nil falls back to the database default.
     var groupPropertyID: UUID? = nil
+    /// Calendar mode: which date property places rows; nil = first date
+    /// property (round 4).
+    var datePropertyID: UUID? = nil
 }
 
 /// One filter condition on one property. Value fields are flat optionals

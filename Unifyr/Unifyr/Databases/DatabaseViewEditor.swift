@@ -65,6 +65,25 @@ struct DatabaseViewEditor: View {
                         .fixedSize()
                     }
 
+                    if draft.mode == DatabaseViewMode.calendar.rawValue {
+                        let dateProperties = properties.filter { $0.propertyKind == .date }
+                        if dateProperties.isEmpty {
+                            Text("Add a Date property to use a calendar view.")
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                        } else {
+                            Picker("Date property", selection: .init(
+                                get: { draft.datePropertyID ?? dateProperties.first?.id },
+                                set: { draft.datePropertyID = $0 }
+                            )) {
+                                ForEach(dateProperties) { property in
+                                    Text(property.name).tag(Optional(property.id))
+                                }
+                            }
+                            .fixedSize()
+                        }
+                    }
+
                     if draft.mode == DatabaseViewMode.board.rawValue, !selectProperties.isEmpty {
                         Picker("Group by", selection: .init(
                             get: { draft.groupPropertyID ?? selectProperties.first?.id },
