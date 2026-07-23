@@ -24332,8 +24332,17 @@ img.ProseMirror-separator {
       }
     },
     {
+      title: "New database",
+      hint: "Create a database inside this page",
+      keywords: "database new table create inline db",
+      run: (e, r2) => {
+        e.chain().focus().deleteRange(r2).run();
+        post({ type: "createInlineDatabase" });
+      }
+    },
+    {
       title: "Linked database",
-      hint: "Embed a database view",
+      hint: "Embed an existing database view",
       keywords: "database table view embed linked db",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();

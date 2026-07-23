@@ -108,6 +108,9 @@ struct EditorDocument {
     /// "/Sub-page": create a child page of this document's page and return it
     /// for inline embedding. nil = sub-pages unsupported (database row pages).
     let createSubpage: (() -> EditorPageRef?)?
+    /// "/New database": create a seeded sub-database of this page and return
+    /// it for inline embedding (Notion's one-step inline database).
+    let createInlineDatabase: (() -> EditorPageRef?)?
     /// dbembed blocks: (databaseID, viewID) → snapshot JSON (editable payload),
     /// nil when the database is gone.
     let dbEmbedSnapshot: ((UUID, UUID?) -> String?)?
@@ -125,6 +128,7 @@ struct EditorDocument {
         saveAsset: ((Data, String, String) -> UUID?)? = nil,
         pageList: (() -> [EditorPageRef])? = nil,
         createSubpage: (() -> EditorPageRef?)? = nil,
+        createInlineDatabase: (() -> EditorPageRef?)? = nil,
         dbEmbedSnapshot: ((UUID, UUID?) -> String?)? = nil,
         dbEmbedEdit: ((UUID, UUID, UUID, Any) -> Bool)? = nil,
         dbEmbedAddRow: ((UUID, UUID?) -> UUID?)? = nil,
@@ -136,6 +140,7 @@ struct EditorDocument {
         self.saveAsset = saveAsset
         self.pageList = pageList
         self.createSubpage = createSubpage
+        self.createInlineDatabase = createInlineDatabase
         self.dbEmbedSnapshot = dbEmbedSnapshot
         self.dbEmbedEdit = dbEmbedEdit
         self.dbEmbedAddRow = dbEmbedAddRow
@@ -163,6 +168,13 @@ struct EditorDocument {
         self.createSubpage = {
             guard note.kind == .page, !note.isTrashed else { return nil }
             let child = store.createPage(parent: note)
+            try? store.context.save()
+            return EditorPageRef(id: child.id, title: child.title, emoji: child.emoji)
+        }
+        self.createInlineDatabase = {
+            guard note.kind == .page, !note.isTrashed else { return nil }
+            let child = store.createPage(parent: note)
+            DatabaseStore(context: store.context).seedNewDatabase(child)
             try? store.context.save()
             return EditorPageRef(id: child.id, title: child.title, emoji: child.emoji)
         }
@@ -509,6 +521,12 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
                 "window.hyperview.insertSubpage(\(idLiteral), \(titleLiteral), \(emojiLiteral));",
                 completionHandler: nil
             )
+
+        case "createInlineDatabase":
+            // "/New database": Swift creates + seeds a sub-database, the
+            // editor drops an editable embed of it right at the cursor.
+            guard let document, let child = document.createInlineDatabase?() else { return }
+            insertDBEmbed(id: child.id, viewID: nil, title: child.title.isEmpty ? "Untitled" : child.title, emoji: child.emoji)
 
         case "openLink":
             if let href = body["href"] as? String { openLink(href) }
