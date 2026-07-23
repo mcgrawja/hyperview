@@ -24207,8 +24207,137 @@ img.ProseMirror-separator {
     return plugin;
   }
 
-  // src/slash-menu.js
+  // src/bookmark.js
   function post(msg) {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
+      window.webkit.messageHandlers.hyperview.postMessage(msg);
+    }
+  }
+  var bookmarkRequests = { pending: {}, counter: 0 };
+  function deliverBookmark(ref, title) {
+    const apply2 = bookmarkRequests.pending[ref];
+    if (!apply2) return;
+    delete bookmarkRequests.pending[ref];
+    if (title) apply2(title);
+  }
+  function hostOf(url) {
+    try {
+      return new URL(url).host.replace(/^www\./, "");
+    } catch {
+      return url;
+    }
+  }
+  var Bookmark = Node2.create({
+    name: "bookmark",
+    group: "block",
+    atom: true,
+    selectable: true,
+    addAttributes() {
+      return {
+        url: { default: null },
+        title: { default: null }
+      };
+    },
+    parseHTML() {
+      return [{ tag: "div.bookmark-block" }];
+    },
+    renderHTML({ node, HTMLAttributes }) {
+      return ["div", mergeAttributes(HTMLAttributes, { class: "bookmark-block" }), node.attrs.title || node.attrs.url || ""];
+    },
+    addNodeView() {
+      return ({ node, editor: editor2, getPos }) => {
+        let current = node;
+        const dom = document.createElement("div");
+        dom.className = "bookmark-block";
+        const icon = document.createElement("span");
+        icon.className = "bookmark-icon";
+        icon.textContent = "\u{1F517}";
+        const text = document.createElement("div");
+        text.className = "bookmark-text";
+        const title = document.createElement("div");
+        title.className = "bookmark-title";
+        const urlLine = document.createElement("div");
+        urlLine.className = "bookmark-url";
+        text.appendChild(title);
+        text.appendChild(urlLine);
+        const sync = (n) => {
+          title.textContent = n.attrs.title || hostOf(n.attrs.url || "");
+          urlLine.textContent = n.attrs.url || "";
+        };
+        sync(current);
+        dom.appendChild(icon);
+        dom.appendChild(text);
+        dom.addEventListener("click", (event) => {
+          event.preventDefault();
+          if (current.attrs.url) post({ type: "openLink", href: current.attrs.url });
+        });
+        if (current.attrs.url && !current.attrs.title) {
+          const ref = `bookmark-${++bookmarkRequests.counter}`;
+          bookmarkRequests.pending[ref] = (fetchedTitle) => {
+            editor2.chain().command(({ tr: tr2 }) => {
+              tr2.setNodeMarkup(getPos(), void 0, { ...current.attrs, title: fetchedTitle });
+              return true;
+            }).run();
+          };
+          post({ type: "resolveBookmark", url: current.attrs.url, ref });
+        }
+        return {
+          dom,
+          update(updated) {
+            if (updated.type.name !== "bookmark") return false;
+            current = updated;
+            sync(updated);
+            return true;
+          }
+        };
+      };
+    },
+    addCommands() {
+      return {
+        insertBookmark: (url) => ({ chain }) => chain().insertContent({ type: this.name, attrs: { url, title: null } }).run()
+      };
+    }
+  });
+  function promptBookmark(editor2) {
+    const overlay = document.createElement("div");
+    overlay.className = "bookmark-prompt";
+    const box = document.createElement("div");
+    box.className = "bookmark-prompt-box";
+    const label = document.createElement("div");
+    label.className = "bookmark-prompt-label";
+    label.textContent = "Bookmark URL";
+    const input = document.createElement("input");
+    input.className = "emoji-input";
+    input.placeholder = "https://\u2026";
+    const finish = (commit2) => {
+      overlay.remove();
+      const value = input.value.trim();
+      if (!commit2 || !value) return;
+      const url = value.includes("://") ? value : `https://${value}`;
+      editor2.commands.insertBookmark(url);
+    };
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        finish(true);
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finish(false);
+      }
+    });
+    overlay.addEventListener("mousedown", (event) => {
+      if (event.target === overlay) finish(false);
+    });
+    box.appendChild(label);
+    box.appendChild(input);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    input.focus();
+  }
+
+  // src/slash-menu.js
+  function post2(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -24289,7 +24418,7 @@ img.ProseMirror-separator {
       keywords: "image picture photo img",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
-        post({ type: "requestImage" });
+        post2({ type: "requestImage" });
       }
     },
     {
@@ -24328,7 +24457,7 @@ img.ProseMirror-separator {
       keywords: "subpage child page new nested",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
-        post({ type: "createSubpage" });
+        post2({ type: "createSubpage" });
       }
     },
     {
@@ -24337,7 +24466,7 @@ img.ProseMirror-separator {
       keywords: "database new table create inline db",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
-        post({ type: "createInlineDatabase" });
+        post2({ type: "createInlineDatabase" });
       }
     },
     {
@@ -24346,7 +24475,7 @@ img.ProseMirror-separator {
       keywords: "database table view embed linked db",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
-        post({ type: "requestDBEmbedPicker" });
+        post2({ type: "requestDBEmbedPicker" });
       }
     },
     {
@@ -24355,7 +24484,7 @@ img.ProseMirror-separator {
       keywords: "link note wiki [[",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
-        post({ type: "requestNoteLink" });
+        post2({ type: "requestNoteLink" });
       }
     },
     {
@@ -24364,7 +24493,16 @@ img.ProseMirror-separator {
       keywords: "link file attach finder",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
-        post({ type: "requestFileLink" });
+        post2({ type: "requestFileLink" });
+      }
+    },
+    {
+      title: "Bookmark",
+      hint: "Web link as a titled card",
+      keywords: "bookmark web url website card",
+      run: (e, r2) => {
+        e.chain().focus().deleteRange(r2).run();
+        promptBookmark(e);
       }
     },
     // Table editing — these only apply with the cursor inside a table; type
@@ -39745,8 +39883,8 @@ img.ProseMirror-separator {
   }
 
   // node_modules/highlight.js/es/core.js
-  var import_core34 = __toESM(require_core(), 1);
-  var core_default = import_core34.default;
+  var import_core35 = __toESM(require_core(), 1);
+  var core_default = import_core35.default;
 
   // node_modules/lowlight/lib/index.js
   var emptyOptions = {};
@@ -40115,7 +40253,7 @@ img.ProseMirror-separator {
   }
 
   // src/page-mention.js
-  function post2(msg) {
+  function post3(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -40149,7 +40287,7 @@ img.ProseMirror-separator {
         dom.addEventListener("click", (event) => {
           event.preventDefault();
           if (node.attrs.noteID) {
-            post2({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
+            post3({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
           }
         });
         return {
@@ -40212,7 +40350,7 @@ img.ProseMirror-separator {
   });
 
   // src/subpage.js
-  function post3(msg) {
+  function post4(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -40254,7 +40392,7 @@ img.ProseMirror-separator {
         dom.addEventListener("click", (event) => {
           event.preventDefault();
           if (node.attrs.noteID) {
-            post3({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
+            post4({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
           }
         });
         return {
@@ -40271,7 +40409,7 @@ img.ProseMirror-separator {
   });
 
   // src/dbembed.js
-  function post4(msg) {
+  function post5(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -40319,7 +40457,7 @@ img.ProseMirror-separator {
         header.addEventListener("click", (event) => {
           event.preventDefault();
           if (node.attrs.noteID) {
-            post4({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
+            post5({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
           }
         });
         const body = document.createElement("div");
@@ -40335,7 +40473,7 @@ img.ProseMirror-separator {
           }
           const ref = `dbembed-${++dbEmbedRequests.counter}`;
           dbEmbedRequests.pending[ref] = (snapshot) => renderSnapshot(header, body, node, snapshot);
-          post4({
+          post5({
             type: "requestDBEmbed",
             databaseID: node.attrs.noteID,
             viewID: node.attrs.viewID || null,
@@ -40392,7 +40530,7 @@ img.ProseMirror-separator {
     addButton.className = "dbembed-add";
     addButton.textContent = "+ New";
     addButton.addEventListener("click", () => {
-      post4({ type: "dbAddRowEmbed", databaseID: node.attrs.noteID, viewID: node.attrs.viewID || null });
+      post5({ type: "dbAddRowEmbed", databaseID: node.attrs.noteID, viewID: node.attrs.viewID || null });
     });
     footer.appendChild(addButton);
     if ((snapshot.rows || []).length === 0) {
@@ -40418,7 +40556,7 @@ img.ProseMirror-separator {
     openButton.textContent = "\u2197";
     openButton.title = "Open as page";
     openButton.addEventListener("click", () => {
-      post4({ type: "openDBRow", databaseID: node.attrs.noteID, rowID: row.id });
+      post5({ type: "openDBRow", databaseID: node.attrs.noteID, rowID: row.id });
     });
     openTd.appendChild(openButton);
     tr2.appendChild(openTd);
@@ -40431,7 +40569,7 @@ img.ProseMirror-separator {
     return tr2;
   }
   function commit(node, row, column, value) {
-    post4({
+    post5({
       type: "dbSetCell",
       databaseID: node.attrs.noteID,
       rowID: row.id,
@@ -40733,7 +40871,7 @@ img.ProseMirror-separator {
   });
 
   // src/main.js
-  function post5(msg) {
+  function post6(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -40743,13 +40881,13 @@ img.ProseMirror-separator {
   function scheduleChange(editor2) {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function() {
-      post5({ type: "documentChanged", doc: editor2.getJSON() });
+      post6({ type: "documentChanged", doc: editor2.getJSON() });
     }, 500);
   }
   function sendImageFile(file) {
     const reader = new FileReader();
     reader.onload = function() {
-      post5({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
+      post6({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
     };
     reader.readAsDataURL(file);
   }
@@ -40791,6 +40929,7 @@ img.ProseMirror-separator {
         DBEmbed,
         ColumnList,
         Column,
+        Bookmark,
         Placeholder.configure({ placeholder: "Type \u2018/\u2019 for commands\u2026" }),
         SlashCommands
       ],
@@ -40822,13 +40961,13 @@ img.ProseMirror-separator {
     editor = buildEditor();
   } catch (error2) {
     console.error("Unifyr editor failed to initialize:", error2);
-    post5({ type: "editorError", message: String(error2 && error2.message || error2) });
+    post6({ type: "editorError", message: String(error2 && error2.message || error2) });
   }
   document.getElementById("editor").addEventListener("click", function(event) {
     const anchor = event.target.closest("a[href]");
     if (!anchor) return;
     event.preventDefault();
-    post5({ type: "openLink", href: anchor.getAttribute("href") });
+    post6({ type: "openLink", href: anchor.getAttribute("href") });
   });
   window.hyperview = {
     loadDocument: function(docOrJson) {
@@ -40879,12 +41018,14 @@ img.ProseMirror-separator {
     deliverDBEmbed,
     // Swift → JS: after an embed write, every embed of that database refetches.
     refreshDBEmbeds,
+    // Swift → JS: a fetched page <title> answering resolveBookmark.
+    deliverBookmark,
     // Swift → JS: centered column (default) vs full-width (PageProps.wideLayout).
     setWide: function(wide) {
       document.body.classList.toggle("wide", !!wide);
     }
   };
   if (editor) {
-    post5({ type: "ready" });
+    post6({ type: "ready" });
   }
 })();

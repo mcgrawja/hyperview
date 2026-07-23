@@ -502,6 +502,24 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
                 refreshDBEmbeds(databaseID: databaseID)
             }
 
+        case "resolveBookmark":
+            // Fetch the page's <title> for a bookmark card (the WKWebView's
+            // file origin can't fetch cross-origin itself).
+            guard let urlString = body["url"] as? String,
+                  let url = URL(string: urlString),
+                  let ref = body["ref"] as? String,
+                  url.scheme == "https" || url.scheme == "http" else { return }
+            Task { [weak self] in
+                let title = await Self.fetchPageTitle(url: url)
+                guard let self, let title else { return }
+                let refLiteral = Self.jsLiteral(ref)
+                let titleLiteral = Self.jsLiteral(title)
+                self.webView?.evaluateJavaScript(
+                    "window.hyperview.deliverBookmark(\(refLiteral), \(titleLiteral));",
+                    completionHandler: nil
+                )
+            }
+
         case "openDBRow":
             // The embed's ↗: navigate to the database AND latch the row so
             // DatabaseView opens its page once mounted.
@@ -669,6 +687,27 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
 
     private static func jsLiteral(_ string: String) -> String {
         String(decoding: (try? JSONEncoder().encode(string)) ?? Data("\"\"".utf8), as: UTF8.self)
+    }
+
+    /// The <title> of a web page, best effort (bookmark cards). 8s cap; nil on
+    /// any failure — the card falls back to showing the host.
+    nonisolated private static func fetchPageTitle(url: URL) async -> String? {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        request.setValue("Mozilla/5.0 (Macintosh) Unifyr", forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
+        let html = String(decoding: data.prefix(200_000), as: UTF8.self)
+        guard let match = html.range(of: "<title[^>]*>([\\s\\S]*?)</title>", options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let raw = String(html[match])
+            .replacingOccurrences(of: "<title[^>]*>", with: "", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: "</title>", with: "", options: .caseInsensitive)
+        let title = raw
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? nil : String(title.prefix(200))
     }
 
     // MARK: Swift -> JS

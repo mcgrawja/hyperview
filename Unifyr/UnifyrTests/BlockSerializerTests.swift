@@ -73,6 +73,15 @@ struct BlockSerializerTests {
         ], "column layout passes its columns (and their blocks) through whole")
     }
 
+    @Test func bookmarkRoundTrips() {
+        expectRoundTrip([
+            BlockContent(
+                kind: .bookmark,
+                attrs: ["url": .string("https://example.com/a"), "title": .string("Example")]
+            ),
+        ], "bookmark keeps its url and fetched title")
+    }
+
     // MARK: Phase 3 page references
 
     @Test func subpageEmbedRoundTrips() {

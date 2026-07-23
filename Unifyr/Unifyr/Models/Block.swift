@@ -77,6 +77,8 @@ nonisolated enum BlockKind: String, Sendable, CaseIterable {
     case dbembed
     /// Column layout (Phase 5): content = 2–4 column nodes, passed through.
     case columns
+    /// Web bookmark card (integration round): attrs = url + fetched title.
+    case bookmark
 }
 
 extension Block {

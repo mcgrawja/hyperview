@@ -10,6 +10,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 /// Ellipsis menu shown in the message header.
 struct MailActionsMenu: View {
@@ -18,6 +19,9 @@ struct MailActionsMenu: View {
     @Binding var eventSheet: EventFromEmailSheet?
 
     @Environment(\.brokers) private var brokers
+    /// The CloudKit notes container — Mail's subtree \.modelContext is the
+    /// mail cache, so "Save to Notes" goes through this instead.
+    @Environment(\.notesContainer) private var notesContainer
 
     /// The owning account's email (for MCP tool references in handoffs).
     var accountEmail: String = ""
@@ -46,6 +50,11 @@ struct MailActionsMenu: View {
                 Label("Create Calendar Event…", systemImage: "calendar.badge.plus")
             }
             Divider()
+            Button {
+                saveToNotes()
+            } label: {
+                Label("Save to Notes", systemImage: "note.text.badge.plus")
+            }
             Button {
                 Task { await addSenderToContacts() }
             } label: {
@@ -94,6 +103,87 @@ struct MailActionsMenu: View {
         } catch {
             onFeedback("Couldn't add the contact — check Contacts access in System Settings.")
         }
+    }
+
+    /// Clip the email into the Notes page tree: a child page of a top-level
+    /// "Clippings" page (created on first use), titled by subject, holding a
+    /// metadata callout plus the body text.
+    private func saveToNotes() {
+        guard let notesContainer else {
+            onFeedback("Notes storage isn't available.")
+            return
+        }
+        let context = ModelContext(notesContainer)
+        let store = NotesStore(context: context)
+
+        // Find-or-create the 📥 Clippings top-level page.
+        let clippings: Note
+        if let existing = ((try? context.fetch(FetchDescriptor<Note>(
+            predicate: #Predicate { $0.parentNoteID == nil && $0.deletedAt == nil && $0.title == "Clippings" }
+        ))) ?? []).first {
+            clippings = existing
+        } else {
+            clippings = store.createPage(title: "Clippings")
+            clippings.emoji = "📥"
+        }
+
+        let page = store.createPage(
+            title: message.subject.isEmpty ? "(no subject)" : message.subject,
+            parent: clippings
+        )
+        page.emoji = "✉️"
+
+        let sender = message.fromName.isEmpty ? message.fromAddress : message.fromName
+        let meta = "From \(sender) · \(message.date.formatted(date: .abbreviated, time: .shortened)) · \(accountEmail)"
+        var blocks: [PMNode] = [
+            PMNode(type: "callout", attrs: ["emoji": .string("✉️")], content: [
+                PMNode(type: "paragraph", content: [.text(meta)]),
+            ]),
+        ]
+        for line in Self.clipBodyLines(text: message.bodyText, html: message.bodyHTML) {
+            blocks.append(PMNode(type: "paragraph", content: line.isEmpty ? [] : [.text(line)]))
+        }
+        store.save(PMNode(type: "doc", content: blocks), to: page)
+        do {
+            try context.save()
+            onFeedback("Saved to Notes: Clippings › “\(page.title)”")
+        } catch {
+            onFeedback("Couldn't save the note.")
+        }
+    }
+
+    /// Body text for a clipping: prefer the plain part; else strip the HTML
+    /// down crudely (tags out, entities in) — a clipping is a record, not a
+    /// pixel-perfect render. Capped so a 500-message digest doesn't become a
+    /// 500-block note. `nonisolated`: pure, and the tests call it off-main.
+    nonisolated static func clipBodyLines(text: String?, html: String?) -> [String] {
+        var body = text ?? ""
+        if body.isEmpty, let html {
+            body = html
+                .replacingOccurrences(of: "<br[^>]*>", with: "\n", options: [.regularExpression, .caseInsensitive])
+                .replacingOccurrences(of: "</p>", with: "\n", options: [.regularExpression, .caseInsensitive])
+                .replacingOccurrences(of: "<style[^>]*>[\\s\\S]*?</style>", with: "", options: [.regularExpression, .caseInsensitive])
+                .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                .replacingOccurrences(of: "&nbsp;", with: " ")
+                .replacingOccurrences(of: "&amp;", with: "&")
+                .replacingOccurrences(of: "&lt;", with: "<")
+                .replacingOccurrences(of: "&gt;", with: ">")
+                .replacingOccurrences(of: "&#39;", with: "'")
+                .replacingOccurrences(of: "&quot;", with: "\"")
+        }
+        let lines = body
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        // Collapse runs of blank lines; cap at 120 paragraphs.
+        var out: [String] = []
+        for line in lines {
+            if line.isEmpty && out.last?.isEmpty != false { continue }
+            out.append(line)
+            if out.count >= 120 { break }
+        }
+        while out.last?.isEmpty == true { out.removeLast() }
+        return out
     }
 
     private var reminderNotes: String {

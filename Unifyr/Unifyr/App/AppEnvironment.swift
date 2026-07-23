@@ -61,6 +61,10 @@ extension EnvironmentValues {
     /// (the Mail module overrides \.modelContext with the mail cache).
     @Entry var tagsStore: TagsStore? = nil
 
+    /// The main (CloudKit notes) container for consumers outside its view
+    /// subtree — e.g. Mail's "Save to Notes" clipping action.
+    @Entry var notesContainer: ModelContainer? = nil
+
     /// Drives Unifyr's notification hub (scheduling + Dock badge).
     @Entry var notificationCoordinator: NotificationCoordinator? = nil
 

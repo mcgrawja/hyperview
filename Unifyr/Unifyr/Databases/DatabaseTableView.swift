@@ -61,6 +61,10 @@ struct DatabaseTableView: View {
                         rowView(row)
                         Divider().overlay(Theme.Palette.separator)
                     }
+                    if properties.contains(where: { $0.propertyKind == .number }), !rows.isEmpty {
+                        aggregateFooter
+                        Divider().overlay(Theme.Palette.separator)
+                    }
                     newRowButton
                 }
                 .frame(width: tableWidth, alignment: .leading)
@@ -316,6 +320,33 @@ struct DatabaseTableView: View {
             .disabled(rows.last?.id == row.id)
             Divider()
             Button("Delete Row", role: .destructive) { deletingRow = row }
+        }
+    }
+
+    /// Σ sums under number columns (visible rows only, matching what's shown).
+    private var aggregateFooter: some View {
+        HStack(spacing: 0) {
+            Color.clear.frame(width: Self.openColumnWidth, height: 1)
+            ForEach(properties) { property in
+                Group {
+                    if property.propertyKind == .number {
+                        let numbers = rows.compactMap { values[$0.id]?[property.id]?.number }
+                        if numbers.isEmpty {
+                            Text("")
+                        } else {
+                            Text("Σ \(numbers.reduce(0, +).formatted(.number.precision(.fractionLength(0...4)).grouping(.never)))")
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                    } else {
+                        Text("")
+                    }
+                }
+                .padding(.horizontal, Theme.Spacing.sm)
+                .padding(.vertical, Theme.Spacing.xs)
+                .frame(width: width(of: property), alignment: .trailing)
+            }
         }
     }
 

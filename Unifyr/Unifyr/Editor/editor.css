@@ -519,3 +519,53 @@ body.wide .ProseMirror {
 .dbembed-popup-row:hover { background: var(--hv-code-bg); }
 .dbembed-popup-mark { color: var(--hv-accent); font-size: 12px; }
 .dbembed-popup .dbembed-chip { background: var(--hv-code-bg); }
+
+/* ---------- Bookmark cards ---------- */
+.ProseMirror .bookmark-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--hv-rule);
+  border-radius: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+.ProseMirror .bookmark-block:hover { background: var(--hv-code-bg); }
+.ProseMirror .bookmark-icon { font-size: 1.2em; }
+.ProseMirror .bookmark-text { min-width: 0; }
+.ProseMirror .bookmark-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ProseMirror .bookmark-url {
+  color: var(--hv-secondary);
+  font-size: 0.85em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bookmark-prompt {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.18);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 18vh;
+}
+.bookmark-prompt-box {
+  background: Canvas;
+  border: 1px solid var(--hv-rule);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
+  padding: 14px;
+  width: 340px;
+}
+.bookmark-prompt-label {
+  font: 600 13px -apple-system, system-ui, sans-serif;
+  color: var(--hv-secondary);
+  margin-bottom: 8px;
+}

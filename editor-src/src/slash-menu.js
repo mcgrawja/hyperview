@@ -10,6 +10,7 @@
 import { Extension } from "@tiptap/core";
 import Suggestion from "@tiptap/suggestion";
 import { PluginKey } from "@tiptap/pm/state";
+import { promptBookmark } from "./bookmark.js";
 
 function post(msg) {
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -60,6 +61,8 @@ const ITEMS = [
     run: (e, r) => { e.chain().focus().deleteRange(r).run(); post({ type: "requestNoteLink" }); } },
   { title: "Link to file", hint: "Link to a file on this Mac", keywords: "link file attach finder",
     run: (e, r) => { e.chain().focus().deleteRange(r).run(); post({ type: "requestFileLink" }); } },
+  { title: "Bookmark", hint: "Web link as a titled card", keywords: "bookmark web url website card",
+    run: (e, r) => { e.chain().focus().deleteRange(r).run(); promptBookmark(e); } },
   // Table editing — these only apply with the cursor inside a table; type
   // "/table" in a cell to filter down to them.
   { title: "Table: add row", hint: "Insert a row below", keywords: "table row insert below",

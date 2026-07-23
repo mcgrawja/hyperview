@@ -112,6 +112,7 @@ struct UnifyrApp: App {
                 .environment(\.messagesDB, messagesDB)
                 #endif
                 .environment(\.tagsStore, tagsStore)
+                .environment(\.notesContainer, modelContainer)
                 .environment(\.notificationCoordinator, notificationCoordinator)
                 .environment(\.contactPhotos, contactPhotos)
         }

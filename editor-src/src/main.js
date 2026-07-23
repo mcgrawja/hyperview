@@ -34,6 +34,7 @@ import { PageMention, PageMentionSuggestion, pageIndex } from "./page-mention.js
 import { Subpage } from "./subpage.js";
 import { DBEmbed, deliverDBEmbed, refreshDBEmbeds } from "./dbembed.js";
 import { ColumnList, Column } from "./columns.js";
+import { Bookmark, deliverBookmark } from "./bookmark.js";
 
 function post(msg) {
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -105,6 +106,7 @@ function buildEditor() {
     DBEmbed,
     ColumnList,
     Column,
+    Bookmark,
     Placeholder.configure({ placeholder: "Type ‘/’ for commands…" }),
     SlashCommands,
   ],
@@ -217,6 +219,8 @@ window.hyperview = {
   deliverDBEmbed: deliverDBEmbed,
   // Swift → JS: after an embed write, every embed of that database refetches.
   refreshDBEmbeds: refreshDBEmbeds,
+  // Swift → JS: a fetched page <title> answering resolveBookmark.
+  deliverBookmark: deliverBookmark,
   // Swift → JS: centered column (default) vs full-width (PageProps.wideLayout).
   setWide: function (wide) {
     document.body.classList.toggle("wide", !!wide);

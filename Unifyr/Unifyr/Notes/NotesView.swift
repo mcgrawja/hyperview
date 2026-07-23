@@ -105,6 +105,19 @@ struct NotesView: View {
             if let info = DeepLink.take(.unifyrOpenNote), let id = info["id"] as? UUID {
                 openNoteByID(id)
             }
+            // A row deep-link that arrived before this module mounted (⌘K
+            // result): select the database, then RE-latch so DatabaseView —
+            // which mounts after the selection — can consume the row half.
+            if let info = DeepLink.take(.unifyrOpenDBRow), let db = info["db"] as? UUID {
+                openNoteByID(db)
+                DeepLink.send(.unifyrOpenDBRow, userInfo: info)
+            }
+        }
+        // Live case (module already mounted): select the database; the still-
+        // latched row id is consumed by DatabaseView itself.
+        .onReceive(NotificationCenter.default.publisher(for: .unifyrOpenDBRow)) { notification in
+            guard let db = notification.userInfo?["db"] as? UUID else { return }
+            openNoteByID(db)
         }
         .sheet(isPresented: $showingNoteLinkPicker) {
             NoteLinkPicker(notes: notes.filter { !$0.isArchived && !$0.isTrashed && $0.id != selectedNote?.id }) { note in

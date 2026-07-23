@@ -148,6 +148,7 @@ struct UniversalSearchView: View {
         defer { searching = false }
         var results: [SearchHit] = []
         results += searchNotes(text)
+        results += searchDatabaseRows(text)
         results += searchMail(text)
         results += await searchEvents(text)
         results += await searchReminders(text)
@@ -198,6 +199,36 @@ struct UniversalSearchView: View {
                     notification: (.unifyrOpenNote, ["id": note.id])
                 )
             }
+    }
+
+    /// Database rows by cell content — "brake pads" should find the Car
+    /// Maintenance row, not just pages. Cell JSON is a byte-scan like note
+    /// blocks; hits deep-link straight to the row's page (.unifyrOpenDBRow).
+    private func searchDatabaseRows(_ text: String) -> [SearchHit] {
+        let values = (try? notesContext.fetch(FetchDescriptor<DBValue>())) ?? []
+        let store = DatabaseStore(context: notesContext)
+        var matchedRowIDs = Set<UUID>()
+        var hits: [SearchHit] = []
+        for value in values {
+            guard hits.count < 6,
+                  let rowID = value.rowID,
+                  !matchedRowIDs.contains(rowID) else { continue }
+            guard String(decoding: value.valueJSON, as: UTF8.self).localizedCaseInsensitiveContains(text) else { continue }
+            guard let (row, database) = store.rowWithDatabase(id: rowID) else { continue }
+            matchedRowIDs.insert(rowID)
+            let title = store.rowTitle(
+                row.id,
+                titleProperty: store.titleProperty(among: store.fetchProperties(databaseNoteID: database.id))
+            )
+            hits.append(SearchHit(
+                module: .notes,
+                icon: "tablecells",
+                title: title,
+                subtitle: database.title.isEmpty ? "Untitled database" : database.title,
+                notification: (.unifyrOpenDBRow, ["db": database.id, "row": row.id])
+            ))
+        }
+        return hits
     }
 
     /// The containing page's title (Notion-style tree; folders left the UI).
