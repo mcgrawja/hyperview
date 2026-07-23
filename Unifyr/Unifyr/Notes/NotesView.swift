@@ -671,9 +671,10 @@ private struct PageHost: View {
                 PageCoverView(
                     note: note,
                     repositioning: repositioningCover,
-                    onCommitOffset: { fraction in
+                    onCommitOffset: { fractionX, fractionY in
                         var props = note.pageProps
-                        props.coverOffsetY = abs(fraction - 0.5) < 0.01 ? nil : fraction
+                        props.coverOffsetX = abs(fractionX - 0.5) < 0.01 ? nil : fractionX
+                        props.coverOffsetY = abs(fractionY - 0.5) < 0.01 ? nil : fractionY
                         note.pageProps = props
                         try? context.save()
                     }
@@ -712,6 +713,7 @@ private struct PageHost: View {
                         props.coverHex = nil
                         props.coverHex2 = nil
                         props.coverAssetID = nil
+                        props.coverOffsetX = nil
                         props.coverOffsetY = nil
                         note.pageProps = props
                         try? context.save()
@@ -791,6 +793,7 @@ private struct PageHost: View {
                             props.coverHex = nil
                             props.coverHex2 = nil
                             props.coverAssetID = nil
+                            props.coverOffsetX = nil
                             props.coverOffsetY = nil
                             note.pageProps = props
                             try? context.save()
@@ -989,12 +992,13 @@ private struct PageHost: View {
 private struct PageCoverView: View {
     let note: Note
     var repositioning = false
-    /// Called with the final offset when a reposition drag ends.
-    var onCommitOffset: ((Double) -> Void)? = nil
+    /// Called with the final (x, y) fractions when a reposition drag ends.
+    var onCommitOffset: ((Double, Double) -> Void)? = nil
 
     @Environment(\.modelContext) private var context
-    /// Live value while dragging (committed on release).
-    @State private var dragFraction: Double?
+    /// Live values while dragging (committed on release).
+    @State private var dragFractionX: Double?
+    @State private var dragFractionY: Double?
 
     var body: some View {
         let props = note.pageProps
@@ -1013,7 +1017,11 @@ private struct PageCoverView: View {
             .opacity(0.85)
         case "asset":
             if let assetID = props.coverAssetID, let image = coverImage(assetID) {
-                positionedImage(image, storedFraction: props.coverOffsetY ?? 0.5)
+                positionedImage(
+                    image,
+                    storedX: props.coverOffsetX ?? 0.5,
+                    storedY: props.coverOffsetY ?? 0.5
+                )
             } else {
                 Theme.Palette.surfaceRaised
             }
@@ -1022,44 +1030,54 @@ private struct PageCoverView: View {
         }
     }
 
-    /// scaledToFill by hand so the vertical crop is controllable: the image
-    /// covers the band, and `fraction` picks which slice shows (0 top, 1
-    /// bottom). SwiftUI's own scaledToFill always center-crops.
-    private func positionedImage(_ image: PlatformImage, storedFraction: Double) -> some View {
+    /// scaledToFill by hand so the crop is controllable on BOTH axes: the
+    /// image covers the band and the fractions pick the visible slice (0 =
+    /// top/left, 1 = bottom/right). Whichever axis has no overflow ignores
+    /// its fraction. SwiftUI's own scaledToFill always center-crops.
+    private func positionedImage(_ image: PlatformImage, storedX: Double, storedY: Double) -> some View {
         GeometryReader { geo in
-            let bandHeight = geo.size.height
             let imageSize = image.size
             let scale = max(
                 geo.size.width / max(imageSize.width, 1),
-                bandHeight / max(imageSize.height, 1)
+                geo.size.height / max(imageSize.height, 1)
             )
             let displayedWidth = imageSize.width * scale
             let displayedHeight = imageSize.height * scale
-            let range = max(0, displayedHeight - bandHeight)
-            let fraction = dragFraction ?? storedFraction
+            let rangeX = max(0, displayedWidth - geo.size.width)
+            let rangeY = max(0, displayedHeight - geo.size.height)
+            let fractionX = dragFractionX ?? storedX
+            let fractionY = dragFractionY ?? storedY
 
             Image(platformImage: image)
                 .resizable()
                 .frame(width: displayedWidth, height: displayedHeight)
-                .offset(
-                    x: (geo.size.width - displayedWidth) / 2,
-                    y: -fraction * range
+                .offset(x: -fractionX * rangeX, y: -fractionY * rangeY)
+                .gesture(
+                    repositioning
+                        ? repositionGesture(startX: storedX, startY: storedY, rangeX: rangeX, rangeY: rangeY)
+                        : nil
                 )
-                .gesture(repositioning ? repositionGesture(startFraction: storedFraction, range: range) : nil)
         }
     }
 
-    private func repositionGesture(startFraction: Double, range: CGFloat) -> some Gesture {
+    private func repositionGesture(
+        startX: Double, startY: Double, rangeX: CGFloat, rangeY: CGFloat
+    ) -> some Gesture {
         DragGesture()
             .onChanged { value in
-                guard range > 0 else { return }
-                // Dragging DOWN reveals more of the top → smaller fraction.
-                let delta = Double(-value.translation.height / range)
-                dragFraction = min(1, max(0, startFraction + delta))
+                // Dragging DOWN/RIGHT reveals more of the top/left → smaller
+                // fraction on that axis.
+                if rangeY > 0 {
+                    dragFractionY = min(1, max(0, startY + Double(-value.translation.height / rangeY)))
+                }
+                if rangeX > 0 {
+                    dragFractionX = min(1, max(0, startX + Double(-value.translation.width / rangeX)))
+                }
             }
             .onEnded { _ in
-                if let dragFraction { onCommitOffset?(dragFraction) }
-                dragFraction = nil
+                onCommitOffset?(dragFractionX ?? startX, dragFractionY ?? startY)
+                dragFractionX = nil
+                dragFractionY = nil
             }
     }
 

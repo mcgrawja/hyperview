@@ -188,6 +188,7 @@ struct PageTreeTests {
         props.coverHex = "#3E8EF7"
         props.coverHex2 = "#8B7CF6"
         props.coverOffsetY = 0.25
+        props.coverOffsetX = 0.75
         props.wideLayout = true
         let data = props.encoded()
         #expect(data != nil)

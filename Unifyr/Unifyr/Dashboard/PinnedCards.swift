@@ -135,14 +135,16 @@ struct PinnedNotesCard: View {
 /// Tapping opens the database in Notes.
 struct PinnedDatabaseCards: View {
     @Environment(\.modelContext) private var context
-    /// Re-read on every dashboard appearance; pins change rarely.
-    @State private var pins: [(databaseID: UUID, viewID: UUID?)] = []
 
     var body: some View {
+        // Read pins directly in body — an .onAppear on a ForEach applies to
+        // its CHILDREN, so with zero pins at first render it never fired and
+        // the cards could never appear (the bug Jason hit). The dashboard is
+        // recreated on every module switch, so this stays current.
+        let pins = PinStore.pinnedDBViews()
         ForEach(Array(pins.enumerated()), id: \.offset) { _, pin in
             PinnedDatabaseCard(databaseID: pin.databaseID, viewID: pin.viewID)
         }
-        .onAppear { pins = PinStore.pinnedDBViews() }
     }
 }
 

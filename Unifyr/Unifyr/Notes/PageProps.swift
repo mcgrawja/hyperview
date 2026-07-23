@@ -21,6 +21,9 @@ nonisolated struct PageProps: Codable, Equatable {
     /// Vertical focus of an image cover: 0 = top of the photo visible,
     /// 1 = bottom, 0.5/nil = centered ("Reposition Cover").
     var coverOffsetY: Double? = nil
+    /// Horizontal focus: 0 = left edge, 1 = right, 0.5/nil = centered.
+    /// Only bites when the photo overflows sideways (panoramas).
+    var coverOffsetX: Double? = nil
     /// Full-width editor (default is centered column, Notion-style).
     var wideLayout: Bool? = nil
 
