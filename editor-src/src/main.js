@@ -36,6 +36,7 @@ import { DBEmbed, deliverDBEmbed, refreshDBEmbeds } from "./dbembed.js";
 import { ColumnList, Column } from "./columns.js";
 import { Bookmark, deliverBookmark } from "./bookmark.js";
 import { Agenda, deliverAgenda } from "./agenda.js";
+import { askDone, hideToast } from "./ask.js";
 
 function post(msg) {
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -156,6 +157,7 @@ document.getElementById("editor").addEventListener("click", function (event) {
 window.hyperview = {
   loadDocument: function (docOrJson) {
     if (!editor) return;
+    hideToast();
     const doc = typeof docOrJson === "string" ? JSON.parse(docOrJson) : docOrJson;
     const content = doc && Array.isArray(doc.content) && doc.content.length ? doc : EMPTY_DOC;
     // emitUpdate=false so loading a note does not echo back a documentChanged.
@@ -230,6 +232,8 @@ window.hyperview = {
   },
   // Swift → JS: an agenda snapshot answering requestAgenda.
   deliverAgenda: deliverAgenda,
+  // Swift → JS: /ask finished (null = success; the reload shows the answer).
+  askDone: askDone,
   // Swift → JS: centered column (default) vs full-width (PageProps.wideLayout).
   setWide: function (wide) {
     document.body.classList.toggle("wide", !!wide);

@@ -123,6 +123,9 @@ struct EditorDocument {
     var mentionSources: (() async -> String?)? = nil
     /// "/agenda" block snapshot for a scope, as JSON. nil = agenda unsupported.
     var agendaSnapshot: ((String) async -> String?)? = nil
+    /// "/ask": run the prompt against the page and append the answer.
+    /// Returns an error message, or nil on success. nil closure = disabled.
+    var askClaude: ((String) async -> String?)? = nil
     /// Full-width editing (PageProps.wideLayout); default is a centered column.
     var wide: Bool = false
 
@@ -159,6 +162,31 @@ struct EditorDocument {
         if let brokers {
             self.mentionSources = { await EditorIntegrations.mentionSourcesJSON(brokers: brokers) }
             self.agendaSnapshot = { scope in await EditorIntegrations.agendaJSON(brokers: brokers, scope: scope) }
+        }
+        self.askClaude = { prompt in
+            guard let apiKey = ClaudeAuth.apiKey() else {
+                return "No Claude API key — add one in the Claude tab first."
+            }
+            do {
+                let answer = try await EditorIntegrations.askClaude(
+                    apiKey: apiKey,
+                    prompt: prompt,
+                    pageTitle: note.title,
+                    pageText: EditorIntegrations.plainText(of: store.loadDocument(note))
+                )
+                var document = store.loadDocument(note)
+                var children = document.content ?? []
+                children.append(PMNode(type: "callout", attrs: ["emoji": .string("🤖")], content: [
+                    PMNode(type: "paragraph", content: [.text(prompt)]),
+                ]))
+                children.append(contentsOf: EditorIntegrations.blocks(fromText: answer))
+                document.content = children
+                store.save(document, to: note)
+                try? store.context.save()
+                return nil
+            } catch {
+                return "Claude request failed: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -515,6 +543,23 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
             let viewID = (body["viewID"] as? String).flatMap(UUID.init(uuidString:))
             if document.dbEmbedAddRow?(databaseID, viewID) != nil {
                 refreshDBEmbeds(databaseID: databaseID)
+            }
+
+        case "askClaude":
+            // "/ask": run the prompt, append the answer to the page, reload.
+            guard let document, let ask = document.askClaude,
+                  let prompt = body["prompt"] as? String, !prompt.isEmpty else { return }
+            Task { [weak self] in
+                let errorMessage = await ask(prompt)
+                guard let self else { return }
+                let errorLiteral = errorMessage.map(Self.jsLiteral) ?? "null"
+                self.webView?.evaluateJavaScript(
+                    "window.hyperview.askDone(\(errorLiteral));",
+                    completionHandler: nil
+                )
+                if errorMessage == nil, let current = self.document, current.id == document.id {
+                    self.loadDocument(for: current)
+                }
             }
 
         case "requestAgenda":

@@ -591,3 +591,24 @@ body.wide .ProseMirror {
 .ProseMirror .agenda-row:hover { background: var(--hv-code-bg); }
 .ProseMirror .agenda-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ProseMirror .agenda-meta { color: var(--hv-secondary); font-size: 0.85em; margin-left: auto; white-space: nowrap; }
+
+/* ---------- /ask toast ---------- */
+.ask-toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  background: Canvas;
+  border: 1px solid var(--hv-rule);
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 8px 16px;
+  font: 13px -apple-system, system-ui, sans-serif;
+  color: var(--hv-text);
+  max-width: 70%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ask-toast.error { color: #e5624d; }

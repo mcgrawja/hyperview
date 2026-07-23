@@ -24336,8 +24336,74 @@ img.ProseMirror-separator {
     input.focus();
   }
 
-  // src/slash-menu.js
+  // src/ask.js
   function post2(msg) {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
+      window.webkit.messageHandlers.hyperview.postMessage(msg);
+    }
+  }
+  var toast = null;
+  function showToast(text, isError) {
+    hideToast();
+    toast = document.createElement("div");
+    toast.className = "ask-toast" + (isError ? " error" : "");
+    toast.textContent = text;
+    document.body.appendChild(toast);
+    if (isError) setTimeout(hideToast, 6e3);
+  }
+  function hideToast() {
+    if (toast) {
+      toast.remove();
+      toast = null;
+    }
+  }
+  function askDone(errorMessage) {
+    if (errorMessage) {
+      showToast(errorMessage, true);
+    } else {
+      hideToast();
+    }
+  }
+  function promptAsk() {
+    const overlay = document.createElement("div");
+    overlay.className = "bookmark-prompt";
+    const box = document.createElement("div");
+    box.className = "bookmark-prompt-box";
+    const label = document.createElement("div");
+    label.className = "bookmark-prompt-label";
+    label.textContent = "Ask Claude about this page";
+    const input = document.createElement("input");
+    input.className = "emoji-input";
+    input.placeholder = "Summarize \xB7 continue writing \xB7 extract action items\u2026";
+    const finish = (commit2) => {
+      overlay.remove();
+      const value = input.value.trim();
+      if (!commit2 || !value) return;
+      showToast("\u{1F916} Asking Claude\u2026", false);
+      post2({ type: "askClaude", prompt: value });
+    };
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        finish(true);
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finish(false);
+      }
+    });
+    overlay.addEventListener("mousedown", (event) => {
+      if (event.target === overlay) finish(false);
+    });
+    box.appendChild(label);
+    box.appendChild(input);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    input.focus();
+  }
+
+  // src/slash-menu.js
+  function post3(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -24418,7 +24484,7 @@ img.ProseMirror-separator {
       keywords: "image picture photo img",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
-        post2({ type: "requestImage" });
+        post3({ type: "requestImage" });
       }
     },
     {
@@ -24457,7 +24523,7 @@ img.ProseMirror-separator {
       keywords: "subpage child page new nested",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
-        post2({ type: "createSubpage" });
+        post3({ type: "createSubpage" });
       }
     },
     {
@@ -24466,7 +24532,7 @@ img.ProseMirror-separator {
       keywords: "database new table create inline db",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
-        post2({ type: "createInlineDatabase" });
+        post3({ type: "createInlineDatabase" });
       }
     },
     {
@@ -24475,7 +24541,7 @@ img.ProseMirror-separator {
       keywords: "database table view embed linked db",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
-        post2({ type: "requestDBEmbedPicker" });
+        post3({ type: "requestDBEmbedPicker" });
       }
     },
     {
@@ -24484,7 +24550,7 @@ img.ProseMirror-separator {
       keywords: "link note wiki [[",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
-        post2({ type: "requestNoteLink" });
+        post3({ type: "requestNoteLink" });
       }
     },
     {
@@ -24493,7 +24559,7 @@ img.ProseMirror-separator {
       keywords: "link file attach finder",
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
-        post2({ type: "requestFileLink" });
+        post3({ type: "requestFileLink" });
       }
     },
     {
@@ -24512,6 +24578,15 @@ img.ProseMirror-separator {
       run: (e, r2) => {
         e.chain().focus().deleteRange(r2).run();
         e.commands.insertAgenda();
+      }
+    },
+    {
+      title: "Ask Claude",
+      hint: "Answer appended to the page",
+      keywords: "ask claude ai summarize write continue",
+      run: (e, r2) => {
+        e.chain().focus().deleteRange(r2).run();
+        promptAsk();
       }
     },
     // Table editing — these only apply with the cursor inside a table; type
@@ -40262,7 +40337,7 @@ img.ProseMirror-separator {
   }
 
   // src/page-mention.js
-  function post3(msg) {
+  function post4(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -40301,9 +40376,9 @@ img.ProseMirror-separator {
           event.preventDefault();
           if (!node.attrs.noteID) return;
           if ((node.attrs.refKind || "page") === "page") {
-            post3({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
+            post4({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
           } else {
-            post3({
+            post4({
               type: "openMention",
               kind: node.attrs.refKind,
               id: node.attrs.noteID,
@@ -40386,7 +40461,7 @@ img.ProseMirror-separator {
   });
 
   // src/subpage.js
-  function post4(msg) {
+  function post5(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -40428,7 +40503,7 @@ img.ProseMirror-separator {
         dom.addEventListener("click", (event) => {
           event.preventDefault();
           if (node.attrs.noteID) {
-            post4({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
+            post5({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
           }
         });
         return {
@@ -40445,7 +40520,7 @@ img.ProseMirror-separator {
   });
 
   // src/dbembed.js
-  function post5(msg) {
+  function post6(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -40493,7 +40568,7 @@ img.ProseMirror-separator {
         header.addEventListener("click", (event) => {
           event.preventDefault();
           if (node.attrs.noteID) {
-            post5({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
+            post6({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
           }
         });
         const body = document.createElement("div");
@@ -40509,7 +40584,7 @@ img.ProseMirror-separator {
           }
           const ref = `dbembed-${++dbEmbedRequests.counter}`;
           dbEmbedRequests.pending[ref] = (snapshot) => renderSnapshot(header, body, node, snapshot);
-          post5({
+          post6({
             type: "requestDBEmbed",
             databaseID: node.attrs.noteID,
             viewID: node.attrs.viewID || null,
@@ -40566,7 +40641,7 @@ img.ProseMirror-separator {
     addButton.className = "dbembed-add";
     addButton.textContent = "+ New";
     addButton.addEventListener("click", () => {
-      post5({ type: "dbAddRowEmbed", databaseID: node.attrs.noteID, viewID: node.attrs.viewID || null });
+      post6({ type: "dbAddRowEmbed", databaseID: node.attrs.noteID, viewID: node.attrs.viewID || null });
     });
     footer.appendChild(addButton);
     if ((snapshot.rows || []).length === 0) {
@@ -40592,7 +40667,7 @@ img.ProseMirror-separator {
     openButton.textContent = "\u2197";
     openButton.title = "Open as page";
     openButton.addEventListener("click", () => {
-      post5({ type: "openDBRow", databaseID: node.attrs.noteID, rowID: row.id });
+      post6({ type: "openDBRow", databaseID: node.attrs.noteID, rowID: row.id });
     });
     openTd.appendChild(openButton);
     tr2.appendChild(openTd);
@@ -40605,7 +40680,7 @@ img.ProseMirror-separator {
     return tr2;
   }
   function commit(node, row, column, value) {
-    post5({
+    post6({
       type: "dbSetCell",
       databaseID: node.attrs.noteID,
       rowID: row.id,
@@ -40907,7 +40982,7 @@ img.ProseMirror-separator {
   });
 
   // src/agenda.js
-  function post6(msg) {
+  function post7(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -40940,7 +41015,7 @@ img.ProseMirror-separator {
         dom.textContent = "Loading agenda\u2026";
         const ref = `agenda-${++agendaRequests.counter}`;
         agendaRequests.pending[ref] = (snapshot) => render(dom, snapshot);
-        post6({ type: "requestAgenda", scope: node.attrs.scope || "today", ref });
+        post7({ type: "requestAgenda", scope: node.attrs.scope || "today", ref });
         return {
           dom,
           stopEvent(event) {
@@ -40990,7 +41065,7 @@ img.ProseMirror-separator {
         "\u{1F5D3}\uFE0F",
         event.title,
         event.time,
-        () => post6({ type: "openMention", kind: "event", id: event.id, dateISO: event.dateISO })
+        () => post7({ type: "openMention", kind: "event", id: event.id, dateISO: event.dateISO })
       );
     }
     for (const reminder of snapshot.reminders || []) {
@@ -40998,7 +41073,7 @@ img.ProseMirror-separator {
         "\u2705",
         reminder.title,
         reminder.due,
-        () => post6({ type: "openMention", kind: "reminder", id: reminder.id })
+        () => post7({ type: "openMention", kind: "reminder", id: reminder.id })
       );
     }
     if ((snapshot.events || []).length === 0 && (snapshot.reminders || []).length === 0) {
@@ -41010,7 +41085,7 @@ img.ProseMirror-separator {
   }
 
   // src/main.js
-  function post7(msg) {
+  function post8(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -41020,13 +41095,13 @@ img.ProseMirror-separator {
   function scheduleChange(editor2) {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function() {
-      post7({ type: "documentChanged", doc: editor2.getJSON() });
+      post8({ type: "documentChanged", doc: editor2.getJSON() });
     }, 500);
   }
   function sendImageFile(file) {
     const reader = new FileReader();
     reader.onload = function() {
-      post7({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
+      post8({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
     };
     reader.readAsDataURL(file);
   }
@@ -41101,17 +41176,18 @@ img.ProseMirror-separator {
     editor = buildEditor();
   } catch (error2) {
     console.error("Unifyr editor failed to initialize:", error2);
-    post7({ type: "editorError", message: String(error2 && error2.message || error2) });
+    post8({ type: "editorError", message: String(error2 && error2.message || error2) });
   }
   document.getElementById("editor").addEventListener("click", function(event) {
     const anchor = event.target.closest("a[href]");
     if (!anchor) return;
     event.preventDefault();
-    post7({ type: "openLink", href: anchor.getAttribute("href") });
+    post8({ type: "openLink", href: anchor.getAttribute("href") });
   });
   window.hyperview = {
     loadDocument: function(docOrJson) {
       if (!editor) return;
+      hideToast();
       const doc3 = typeof docOrJson === "string" ? JSON.parse(docOrJson) : docOrJson;
       const content = doc3 && Array.isArray(doc3.content) && doc3.content.length ? doc3 : EMPTY_DOC;
       editor.commands.setContent(content, false);
@@ -41167,12 +41243,14 @@ img.ProseMirror-separator {
     },
     // Swift → JS: an agenda snapshot answering requestAgenda.
     deliverAgenda,
+    // Swift → JS: /ask finished (null = success; the reload shows the answer).
+    askDone,
     // Swift → JS: centered column (default) vs full-width (PageProps.wideLayout).
     setWide: function(wide) {
       document.body.classList.toggle("wide", !!wide);
     }
   };
   if (editor) {
-    post7({ type: "ready" });
+    post8({ type: "ready" });
   }
 })();
