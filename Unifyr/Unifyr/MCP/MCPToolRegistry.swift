@@ -76,23 +76,29 @@ nonisolated enum MCPToolRegistry {
     #endif
 
     private static let coreTools: [MCPTool] = [
-        // MARK: Notes (NotesStore)
+        // MARK: Notes (NotesStore — Notion-style page tree)
         MCPTool(
             name: "notes_search",
-            description: "Search Unifyr notes by title and text content. Returns id, title, folder, modified date.",
-            schema: MCPTool.object(["query": MCPTool.prop("string", "Text to search for; empty lists recent notes")])
+            description: "Search Unifyr pages by title and text content. Returns id, title, kind (page|database), parent page, modified date.",
+            schema: MCPTool.object(["query": MCPTool.prop("string", "Text to search for; empty lists recent pages")])
+        ),
+        MCPTool(
+            name: "notes_tree",
+            description: "The full page tree as an indented outline: every page and database with its id, nesting, and favorites. Use it to understand how the user organizes things.",
+            schema: MCPTool.object([:])
         ),
         MCPTool(
             name: "notes_get",
-            description: "Get one note's full plain-text content by id.",
-            schema: MCPTool.object(["id": MCPTool.prop("string", "Note UUID from notes_search")], required: ["id"])
+            description: "Get one page's full plain-text content by id.",
+            schema: MCPTool.object(["id": MCPTool.prop("string", "Page UUID from notes_search/notes_tree")], required: ["id"])
         ),
         MCPTool(
             name: "notes_create",
-            description: "Create a new note. Content lines become paragraph blocks; lines starting with '- ' become bullets.",
+            description: "Create a new page. Content lines become paragraph blocks; lines starting with '- ' become bullets. Optionally nest it under a parent page.",
             schema: MCPTool.object([
-                "title": MCPTool.prop("string", "Note title"),
+                "title": MCPTool.prop("string", "Page title"),
                 "content": MCPTool.prop("string", "Optional body text"),
+                "parent": MCPTool.prop("string", "Optional parent page — its title or UUID (omit for top level)"),
             ], required: ["title"])
         ),
         MCPTool(
@@ -133,11 +139,50 @@ nonisolated enum MCPToolRegistry {
         ),
         MCPTool(
             name: "notes_move",
-            description: "Move a note into a folder by folder name, or to the top level (All Notes) if folder is omitted or empty.",
+            description: "Move a page under another page (Notion-style nesting), or to the top level if parent is omitted or empty. Moving a page into its own sub-page is refused.",
             schema: MCPTool.object([
-                "id": MCPTool.prop("string", "Note UUID"),
-                "folder": MCPTool.prop("string", "Destination folder name (empty = top level)"),
+                "id": MCPTool.prop("string", "Page UUID"),
+                "parent": MCPTool.prop("string", "Destination parent page — its title or UUID (empty = top level)"),
             ], required: ["id"])
+        ),
+
+        // MARK: Databases (DatabaseStore — Notion-style tables)
+        MCPTool(
+            name: "db_list",
+            description: "List the user's databases: id, title, columns (name + kind + select options), saved views, and row counts. Call this before querying or writing rows.",
+            schema: MCPTool.object([:])
+        ),
+        MCPTool(
+            name: "db_query",
+            description: "Read a database's rows with their cell values (display-formatted). Optionally through a saved view, which applies that view's filters and sort order.",
+            schema: MCPTool.object([
+                "database": MCPTool.prop("string", "Database title or UUID (from db_list)"),
+                "view": MCPTool.prop("string", "Optional saved view name or UUID"),
+                "limit": MCPTool.prop("number", "Max rows (default 50)"),
+            ], required: ["database"])
+        ),
+        MCPTool(
+            name: "db_add_row",
+            description: "Add a row to a database. 'values' maps column names to values: strings for text/url/date (yyyy-MM-dd), numbers, booleans for checkboxes, option name(s) for selects (created if new), row titles for relations. Example: {\"Name\": \"Fix roof\", \"Status\": \"In progress\", \"Date\": \"2026-08-01\"}.",
+            schema: MCPTool.object([
+                "database": MCPTool.prop("string", "Database title or UUID"),
+                "values": MCPTool.prop("object", "Column name → value"),
+            ], required: ["database", "values"])
+        ),
+        MCPTool(
+            name: "db_update_row",
+            description: "Update cells of an existing row (row ids come from db_query). Same value format as db_add_row; null or \"\" clears a cell. Only listed columns change.",
+            schema: MCPTool.object([
+                "row_id": MCPTool.prop("string", "Row UUID from db_query"),
+                "values": MCPTool.prop("object", "Column name → new value"),
+            ], required: ["row_id", "values"])
+        ),
+        MCPTool(
+            name: "db_delete_row",
+            description: "Delete a database row and its page content. This is permanent (rows have no trash). The in-app chat asks the user to confirm first.",
+            schema: MCPTool.object([
+                "row_id": MCPTool.prop("string", "Row UUID from db_query"),
+            ], required: ["row_id"])
         ),
 
         // MARK: Calendar (EventKitBroker)

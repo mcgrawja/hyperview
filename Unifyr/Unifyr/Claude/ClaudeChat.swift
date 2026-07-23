@@ -69,6 +69,7 @@ final class ClaudeChatController {
     private static let confirmationRequired: Set<String> = [
         "mail_send", "messages_send", "drive_write",
         "mail_delete", "notes_delete", "calendar_delete_event", "reminders_delete",
+        "db_delete_row",
     ]
 
     @ObservationIgnored private var confirmationContinuation: CheckedContinuation<Bool, Never>?
@@ -323,6 +324,8 @@ final class ClaudeChatController {
             return ("Delete this reminder?", "This can't be undone.")
         case "notes_delete":
             return ("Delete this note?", "It moves to Recently Deleted and can be restored.")
+        case "db_delete_row":
+            return ("Delete this database row?", "Rows have no trash — this is permanent.")
         case "drive_write":
             let path = arg("path")
             return ("Write this file?", "\(arg("location").isEmpty ? "" : arg("location") + " · ")\(path.isEmpty ? "—" : path) — overwrites if it exists.")
@@ -339,6 +342,7 @@ final class ClaudeChatController {
         case "calendar_delete_event": return "deleting the event"
         case "reminders_delete": return "deleting the reminder"
         case "notes_delete": return "deleting the note"
+        case "db_delete_row": return "deleting the row"
         case "drive_write": return "writing the file"
         default: return "the action"
         }
@@ -486,13 +490,19 @@ final class ClaudeChatController {
         app. You have tools for their notes, mail (multiple accounts), \
         calendar, reminders, contacts, and photos. Use them freely to answer \
         questions and take actions; prefer fetching real data over guessing. \
-        You can send mail (mail_send) and iMessages (messages_send), and delete \
-        events/reminders/notes — for all of these the app shows the user a \
-        Confirm/Cancel card before anything actually happens, so don't ask for \
-        permission in text first; just call the tool and let the user confirm. \
-        For email, it's good practice to show the drafted text (mail_draft) \
-        before calling mail_send. Be concise and lead with the answer. The \
-        user's name is Jason. Conversation started: \(conversationDate).
+        Notes are a Notion-style page tree: pages nest inside pages \
+        (notes_tree shows the outline), and databases are pages with typed \
+        columns, rows, and saved filtered views — use db_list to discover \
+        them and db_query/db_add_row/db_update_row to work with their data \
+        (e.g. task trackers, inventories). \
+        You can send mail (mail_send) and iMessages (messages_send), and \
+        delete events/reminders/notes/database rows — for all of these the \
+        app shows the user a Confirm/Cancel card before anything actually \
+        happens, so don't ask for permission in text first; just call the \
+        tool and let the user confirm. For email, it's good practice to show \
+        the drafted text (mail_draft) before calling mail_send. Be concise \
+        and lead with the answer. The user's name is Jason. Conversation \
+        started: \(conversationDate).
         """
     }
 

@@ -530,6 +530,87 @@ struct DatabaseStore {
         setSettings(settings, on: note)
     }
 
+    // MARK: - Tool value coercion (MCP db_* tools, Phase 6)
+
+    /// Coerce a tool-supplied JSON value onto a property's kind. Forgiving by
+    /// design (Claude supplies these): numbers accept strings, checkboxes
+    /// accept "yes"/"true", select option NAMES are created when new, and
+    /// relations resolve target rows by title or uuid. NSNull / "" yields an
+    /// empty cell, which the store treats as "clear".
+    func toolCellValue(_ raw: Any, property: DBProperty) -> DBCellValue {
+        var cell = DBCellValue()
+        if raw is NSNull { return cell }
+        let text = ((raw as? String) ?? "").trimmingCharacters(in: .whitespaces)
+
+        func strings() -> [String] {
+            if let array = raw as? [Any] {
+                return array.compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            }
+            return text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        }
+
+        switch property.propertyKind {
+        case .text:
+            cell.text = text.isEmpty ? nil : text
+        case .url:
+            cell.url = text.isEmpty ? nil : text
+        case .number:
+            cell.number = (raw as? Double)
+                ?? (raw as? Int).map(Double.init)
+                ?? Double(text.replacingOccurrences(of: ",", with: ""))
+        case .checkbox:
+            let truthy = (raw as? Bool) ?? ["true", "yes", "1", "checked", "✓"].contains(text.lowercased())
+            cell.checked = truthy ? true : nil
+        case .date:
+            // Accept "yyyy-MM-dd" or a longer ISO string (keep the date part).
+            cell.date = text.isEmpty ? nil : String(text.prefix(10))
+        case .person:
+            let names = strings()
+            cell.people = names.isEmpty ? nil : names
+        case .select, .multiSelect:
+            var ids: [UUID] = []
+            for name in strings() {
+                let existing = (config(of: property).options ?? [])
+                    .first { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
+                let option = existing ?? addOption(named: name, to: property)
+                ids.append(option.id)
+            }
+            if property.propertyKind == .select { ids = Array(ids.prefix(1)) }
+            cell.optionIDs = ids.isEmpty ? nil : ids
+        case .relation:
+            guard let targetID = config(of: property).relationTargetID else { break }
+            let targets = rowTitles(databaseNoteID: targetID)
+            var ids: [UUID] = []
+            for ref in strings() {
+                if let id = UUID(uuidString: ref), targets.contains(where: { $0.id == id }) {
+                    ids.append(id)
+                } else if let match = targets.first(where: {
+                    $0.title.localizedCaseInsensitiveCompare(ref) == .orderedSame
+                }) {
+                    ids.append(match.id)
+                }
+            }
+            cell.rowIDs = ids.isEmpty ? nil : ids
+        case .rollup:
+            break
+        }
+        return cell
+    }
+
+    /// A row by id, with its owning database note — the db_update/delete tools
+    /// identify rows this way.
+    func rowWithDatabase(id: UUID) -> (row: DBRow, note: Note)? {
+        let rowID = id
+        var descriptor = FetchDescriptor<DBRow>(predicate: #Predicate { $0.id == rowID })
+        descriptor.fetchLimit = 1
+        guard let row = ((try? context.fetch(descriptor)) ?? []).first,
+              let databaseID = row.databaseNoteID else { return nil }
+        var noteDescriptor = FetchDescriptor<Note>(predicate: #Predicate { $0.id == databaseID })
+        noteDescriptor.fetchLimit = 1
+        guard let note = ((try? context.fetch(noteDescriptor)) ?? []).first, !note.isTrashed else { return nil }
+        return (row, note)
+    }
+
     // MARK: - Embed snapshots (dbembed blocks, Phase 4)
 
     /// The read-only preview payload a `dbembed` editor block renders:

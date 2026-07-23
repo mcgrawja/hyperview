@@ -64,15 +64,39 @@ final class MCPToolExecutor {
     private func dispatch(name: String, arguments args: [String: Any]) async throws -> String {
         switch name {
         case "notes_search": return try notesSearch(query: str(args, "query") ?? "")
+        case "notes_tree": return try notesTree()
         case "notes_get": return try notesGet(id: try requireUUID(args, "id"))
-        case "notes_create": return try notesCreate(title: try require(args, "title"), content: str(args, "content"))
+        case "notes_create":
+            return try notesCreate(
+                title: try require(args, "title"),
+                content: str(args, "content"),
+                parentRef: str(args, "parent")
+            )
         case "notes_append_blocks": return try notesAppend(id: try requireUUID(args, "id"), content: try require(args, "content"))
         case "notes_update_block": return try notesUpdateBlock(id: try requireUUID(args, "block_id"), content: try require(args, "content"))
         case "notes_toggle_todo": return try notesToggleTodo(id: try requireUUID(args, "block_id"))
         case "notes_archive": return try notesSetArchived(id: try requireUUID(args, "id"), archived: true)
         case "notes_restore": return try notesSetArchived(id: try requireUUID(args, "id"), archived: false)
         case "notes_delete": return try notesDelete(id: try requireUUID(args, "id"))
-        case "notes_move": return try notesMove(id: try requireUUID(args, "id"), folderName: str(args, "folder"))
+        case "notes_move":
+            // "folder" accepted as a legacy alias (older cached tool schemas).
+            return try notesMove(id: try requireUUID(args, "id"), parentRef: str(args, "parent") ?? str(args, "folder"))
+
+        case "db_list": return try dbList()
+        case "db_query":
+            return try dbQuery(
+                databaseRef: try require(args, "database"),
+                viewRef: str(args, "view"),
+                limit: (args["limit"] as? Double).map(Int.init) ?? 50
+            )
+        case "db_add_row":
+            guard let values = args["values"] as? [String: Any] else { throw MCPError("values must be an object of column name → value") }
+            return try dbAddRow(databaseRef: try require(args, "database"), values: values)
+        case "db_update_row":
+            guard let values = args["values"] as? [String: Any] else { throw MCPError("values must be an object of column name → value") }
+            return try dbUpdateRow(rowID: try requireUUID(args, "row_id"), values: values)
+        case "db_delete_row":
+            return try dbDeleteRow(rowID: try requireUUID(args, "row_id"))
 
         case "calendar_today":
             return try encode(try await brokers.eventKit.fetchTodayEvents())
@@ -341,7 +365,9 @@ final class MCPToolExecutor {
     }
 
     private func notesSearch(query: String) throws -> String {
-        let notes = try allNotes().filter { !$0.isArchived }
+        let all = try allNotes()
+        let byID = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+        let notes = all.filter { !$0.isArchived && !$0.isTrashed }
         let matches = query.isEmpty
             ? notes
             : notes.filter { note in
@@ -357,11 +383,41 @@ final class MCPToolExecutor {
                 [
                     "id": note.id.uuidString,
                     "title": note.title.isEmpty ? "Untitled" : note.title,
+                    "kind": note.noteKind,
                     "modified": iso.string(from: note.modifiedAt),
-                    "folder": note.folder?.name ?? "",
+                    "parent": note.parentNoteID.flatMap { byID[$0]?.title } ?? "",
                 ]
             }
-        return try json(["notes": Array(items)])
+        return try json(["pages": Array(items)])
+    }
+
+    /// The page tree as an indented outline (cheap for Claude to read whole).
+    private func notesTree() throws -> String {
+        let all = try allNotes().filter { !$0.isArchived && !$0.isTrashed }
+        let sorted = all.sorted { $0.sortKey < $1.sortKey }
+        var lines: [String] = []
+        func walk(_ parentID: UUID?, depth: Int) {
+            guard depth < 16 else { return }
+            for note in sorted where note.parentNoteID == parentID {
+                let indent = String(repeating: "  ", count: depth)
+                let kind = note.kind == .database ? " [database]" : ""
+                let favorite = note.isFavorite ? " ★" : ""
+                let title = note.title.isEmpty ? "Untitled" : note.title
+                lines.append("\(indent)- \(title)\(kind)\(favorite) (\(note.id.uuidString))")
+                walk(note.id, depth: depth + 1)
+            }
+        }
+        walk(nil, depth: 0)
+        return try json(["tree": lines.joined(separator: "\n"), "count": all.count])
+    }
+
+    /// A page by uuid or (case-insensitive, then fuzzy) title.
+    private func resolvePage(_ ref: String) throws -> Note {
+        let live = try allNotes().filter { !$0.isTrashed && !$0.isArchived }
+        if let id = UUID(uuidString: ref), let match = live.first(where: { $0.id == id }) { return match }
+        if let match = live.first(where: { $0.title.localizedCaseInsensitiveCompare(ref) == .orderedSame }) { return match }
+        if let match = live.first(where: { $0.title.localizedCaseInsensitiveContains(ref) }) { return match }
+        throw MCPError("No page matching “\(ref)”. Use notes_tree to see the page list.")
     }
 
     private func notesGet(id: UUID) throws -> String {
@@ -382,14 +438,28 @@ final class MCPToolExecutor {
         ])
     }
 
-    private func notesCreate(title: String, content: String?) throws -> String {
+    private func notesCreate(title: String, content: String?, parentRef: String?) throws -> String {
         let store = NotesStore(context: notesContext)
-        let note = store.createNote(title: title)
+        let parent: Note?
+        if let parentRef, !parentRef.isEmpty {
+            let resolved = try resolvePage(parentRef)
+            guard resolved.kind == .page else {
+                throw MCPError("“\(resolved.title)” is a database — pages can only nest under pages. Use db_add_row to add to a database.")
+            }
+            parent = resolved
+        } else {
+            parent = nil
+        }
+        let note = store.createPage(title: title, parent: parent)
         if let content, !content.isEmpty {
             store.save(document(fromText: content), to: note)
         }
         try notesContext.save()
-        return try json(["created": true, "id": note.id.uuidString])
+        return try json([
+            "created": true,
+            "id": note.id.uuidString,
+            "parent": parent?.title ?? "Top Level",
+        ])
     }
 
     private func notesAppend(id: UUID, content: String) throws -> String {
@@ -434,21 +504,152 @@ final class MCPToolExecutor {
         return try json(["deleted": true, "title": title, "note": "Moved to Recently Deleted; can be restored in Notes."])
     }
 
-    private func notesMove(id: UUID, folderName: String?) throws -> String {
-        guard let note = try allNotes().first(where: { $0.id == id }) else { throw MCPError("Note not found") }
-        if let folderName, !folderName.isEmpty {
-            let folders = try notesContext.fetch(FetchDescriptor<Folder>())
-            guard let folder = folders.first(where: { $0.name.caseInsensitiveCompare(folderName) == .orderedSame }) else {
-                let available = folders.map(\.name).sorted().joined(separator: ", ")
-                throw MCPError("No folder named “\(folderName)”. Available folders: \(available.isEmpty ? "(none)" : available)")
+    private func notesMove(id: UUID, parentRef: String?) throws -> String {
+        let all = try allNotes()
+        guard let note = all.first(where: { $0.id == id }) else { throw MCPError("Note not found") }
+        let store = NotesStore(context: notesContext)
+        let parent: Note?
+        if let parentRef, !parentRef.isEmpty {
+            let resolved = try resolvePage(parentRef)
+            guard resolved.kind == .page else {
+                throw MCPError("“\(resolved.title)” is a database — pages can only nest under pages.")
             }
-            note.folder = folder
+            parent = resolved
         } else {
-            note.folder = nil // top level / All Notes
+            parent = nil
         }
-        note.modifiedAt = Date()
+        let before = note.parentNoteID
+        store.move(note, toParent: parent, in: all)
+        // The store refuses cycles silently; surface that as an error here.
+        if let parent, note.parentNoteID == before, before != parent.id {
+            throw MCPError("Can't move “\(note.title)” into its own sub-page.")
+        }
         try notesContext.save()
-        return try json(["moved": true, "title": note.title, "folder": note.folder?.name ?? "All Notes"])
+        return try json(["moved": true, "title": note.title, "parent": parent?.title ?? "Top Level"])
+    }
+
+    // MARK: - Databases (Phase 6)
+
+    private var dbStore: DatabaseStore { DatabaseStore(context: notesContext) }
+
+    private func resolveDatabase(_ ref: String) throws -> Note {
+        let databases = dbStore.databaseNotes()
+        if let id = UUID(uuidString: ref), let match = databases.first(where: { $0.id == id }) { return match }
+        if let match = databases.first(where: { $0.title.localizedCaseInsensitiveCompare(ref) == .orderedSame }) { return match }
+        if let match = databases.first(where: { $0.title.localizedCaseInsensitiveContains(ref) }) { return match }
+        let available = databases.map { $0.title.isEmpty ? "Untitled" : $0.title }.joined(separator: ", ")
+        throw MCPError("No database matching “\(ref)”. Available: \(available.isEmpty ? "(none)" : available)")
+    }
+
+    private func dbList() throws -> String {
+        let items = dbStore.databaseNotes().map { note -> [String: Any] in
+            let properties = dbStore.fetchProperties(databaseNoteID: note.id).map { property -> [String: Any] in
+                var out: [String: Any] = ["name": property.name, "kind": property.kind]
+                if let options = dbStore.config(of: property).options, !options.isEmpty {
+                    out["options"] = options.map(\.name)
+                }
+                if property.propertyKind == .relation,
+                   let targetID = dbStore.config(of: property).relationTargetID,
+                   let target = try? resolveDatabase(targetID.uuidString) {
+                    out["relates_to"] = target.title
+                }
+                return out
+            }
+            return [
+                "id": note.id.uuidString,
+                "title": note.title.isEmpty ? "Untitled" : note.title,
+                "columns": properties,
+                "views": dbStore.views(of: note).map { ["id": $0.id.uuidString, "name": $0.name] },
+                "row_count": dbStore.fetchRows(databaseNoteID: note.id).count,
+            ]
+        }
+        return try json(["databases": items])
+    }
+
+    private func dbQuery(databaseRef: String, viewRef: String?, limit: Int) throws -> String {
+        let note = try resolveDatabase(databaseRef)
+        let properties = dbStore.fetchProperties(databaseNoteID: note.id)
+        let rows = dbStore.fetchRows(databaseNoteID: note.id)
+
+        var view: DBViewConfig?
+        if let viewRef, !viewRef.isEmpty {
+            let views = dbStore.views(of: note)
+            view = views.first { $0.id.uuidString.caseInsensitiveCompare(viewRef) == .orderedSame }
+                ?? views.first { $0.name.localizedCaseInsensitiveCompare(viewRef) == .orderedSame }
+            guard view != nil else {
+                throw MCPError("No view “\(viewRef)” on \(note.title). Views: \(views.map(\.name).joined(separator: ", "))")
+            }
+        }
+
+        var values: [UUID: [UUID: DBCellValue]] = [:]
+        for row in rows {
+            for property in properties {
+                let cell = dbStore.value(rowID: row.id, propertyID: property.id)
+                if !cell.isEmpty { values[row.id, default: [:]][property.id] = cell }
+            }
+        }
+        let visible = dbStore.apply(view, rows: rows, values: values, properties: properties)
+
+        let items = visible.prefix(max(1, limit)).map { row -> [String: Any] in
+            var cells: [String: Any] = [:]
+            for property in properties {
+                let text = dbStore.displayText(values[row.id]?[property.id] ?? DBCellValue(), property: property)
+                if !text.isEmpty { cells[property.name] = text }
+            }
+            return ["row_id": row.id.uuidString, "values": cells]
+        }
+        return try json([
+            "database": note.title,
+            "view": view?.name ?? "",
+            "total": visible.count,
+            "rows": Array(items),
+        ])
+    }
+
+    private func applyValues(_ values: [String: Any], to row: DBRow, in note: Note) throws -> [String] {
+        let properties = dbStore.fetchProperties(databaseNoteID: note.id)
+        var applied: [String] = []
+        for (name, raw) in values {
+            guard let property = properties.first(where: {
+                $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame
+            }) else {
+                let available = properties.map(\.name).joined(separator: ", ")
+                throw MCPError("No column “\(name)” in \(note.title). Columns: \(available)")
+            }
+            let cell = dbStore.toolCellValue(raw, property: property)
+            dbStore.setValue(cell, rowID: row.id, propertyID: property.id, in: note)
+            applied.append(property.name)
+        }
+        return applied
+    }
+
+    private func dbAddRow(databaseRef: String, values: [String: Any]) throws -> String {
+        let note = try resolveDatabase(databaseRef)
+        let row = dbStore.addRow(to: note)
+        let applied = try applyValues(values, to: row, in: note)
+        try notesContext.save()
+        return try json(["added": true, "row_id": row.id.uuidString, "database": note.title, "set": applied])
+    }
+
+    private func dbUpdateRow(rowID: UUID, values: [String: Any]) throws -> String {
+        guard let (row, note) = dbStore.rowWithDatabase(id: rowID) else {
+            throw MCPError("Row not found — ids come from db_query.")
+        }
+        let applied = try applyValues(values, to: row, in: note)
+        try notesContext.save()
+        return try json(["updated": true, "database": note.title, "set": applied])
+    }
+
+    private func dbDeleteRow(rowID: UUID) throws -> String {
+        guard let (row, note) = dbStore.rowWithDatabase(id: rowID) else {
+            throw MCPError("Row not found — ids come from db_query.")
+        }
+        let title = dbStore.rowTitle(row.id, titleProperty: dbStore.titleProperty(
+            among: dbStore.fetchProperties(databaseNoteID: note.id)
+        ))
+        dbStore.deleteRow(row, in: note)
+        try notesContext.save()
+        return try json(["deleted": true, "row": title, "database": note.title])
     }
 
     private func notesToggleTodo(id: UUID) throws -> String {

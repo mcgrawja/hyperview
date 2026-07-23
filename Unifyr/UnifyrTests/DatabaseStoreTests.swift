@@ -334,6 +334,80 @@ struct DatabaseStoreTests {
         #expect(store.embedSnapshotJSON(databaseID: UUID(), viewID: nil) == nil)
     }
 
+    // MARK: Tool value coercion (Phase 6 MCP)
+
+    @Test func toolCellValueCoercesEveryKind() {
+        let context = makeContext()
+        let (store, note) = makeDatabase(context)
+        let properties = store.fetchProperties(databaseNoteID: note.id)
+        let (name, status, date) = (properties[0], properties[1], properties[2])
+
+        // Text.
+        #expect(store.toolCellValue("Fix roof", property: name).text == "Fix roof")
+        // Clearing forms.
+        #expect(store.toolCellValue("", property: name).isEmpty)
+        #expect(store.toolCellValue(NSNull(), property: name).isEmpty)
+
+        // Select by option NAME (existing, case-insensitive).
+        let done = store.toolCellValue("done", property: status)
+        let doneOption = (store.config(of: status).options ?? []).first { $0.name == "Done" }
+        #expect(done.optionIDs == [doneOption!.id])
+        // Unknown option names are created on the fly.
+        let before = (store.config(of: status).options ?? []).count
+        let blocked = store.toolCellValue("Blocked", property: status)
+        #expect((store.config(of: status).options ?? []).count == before + 1)
+        #expect(blocked.optionIDs?.count == 1)
+
+        // Dates keep the date part of longer ISO strings.
+        #expect(store.toolCellValue("2026-08-01T09:00:00Z", property: date).date == "2026-08-01")
+
+        // Numbers accept strings; checkboxes accept "yes".
+        let number = store.addProperty(to: note, kind: .number, name: "Cost")
+        #expect(store.toolCellValue("1,250", property: number).number == 1250)
+        #expect(store.toolCellValue(42.5, property: number).number == 42.5)
+        let flag = store.addProperty(to: note, kind: .checkbox, name: "Paid")
+        #expect(store.toolCellValue("yes", property: flag).checked == true)
+        #expect(store.toolCellValue(false, property: flag).isEmpty)
+    }
+
+    @Test func toolCellValueResolvesRelationsByTitle() {
+        let context = makeContext()
+        let (store, note) = makeDatabase(context)
+        // A second database to relate to, with one titled row.
+        let target = NotesStore(context: context).createPage(title: "People")
+        store.seedNewDatabase(target)
+        let targetName = store.fetchProperties(databaseNoteID: target.id)[0]
+        let targetRow = store.fetchRows(databaseNoteID: target.id)[0]
+        var cell = DBCellValue()
+        cell.text = "Jason"
+        store.setValue(cell, rowID: targetRow.id, propertyID: targetName.id, in: target)
+
+        let relation = store.addProperty(
+            to: note,
+            kind: .relation,
+            name: "Owner",
+            config: DBPropertyConfig(relationTargetID: target.id)
+        )
+        try? context.save()
+
+        // By title, by uuid, and unresolvable.
+        #expect(store.toolCellValue("jason", property: relation).rowIDs == [targetRow.id])
+        #expect(store.toolCellValue(targetRow.id.uuidString, property: relation).rowIDs == [targetRow.id])
+        #expect(store.toolCellValue("Nobody", property: relation).isEmpty)
+    }
+
+    @Test func rowWithDatabaseResolvesOwner() {
+        let context = makeContext()
+        let (store, note) = makeDatabase(context)
+        let row = store.fetchRows(databaseNoteID: note.id)[0]
+        try? context.save()
+
+        let resolved = store.rowWithDatabase(id: row.id)
+        #expect(resolved?.row.id == row.id)
+        #expect(resolved?.note.id == note.id)
+        #expect(store.rowWithDatabase(id: UUID()) == nil)
+    }
+
     // MARK: Purge
 
     @Test func purgeRemovesEverythingTheNoteOwns() {
