@@ -143,8 +143,14 @@ private struct ClaudeContent: View {
 
                     Button("Open Config Folder") {
                         #if os(macOS)
+                        // NSWorkspace.open on a directory silently no-ops from
+                        // the sandbox; revealing in Finder works. Select the
+                        // config file itself when it exists.
                         let dir = ("~/Library/Application Support/Claude" as NSString).expandingTildeInPath
-                        NSWorkspace.shared.open(URL(fileURLWithPath: dir))
+                        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                        let config = dir + "/claude_desktop_config.json"
+                        let target = FileManager.default.fileExists(atPath: config) ? config : dir
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: target)])
                         #endif
                     }
                 }

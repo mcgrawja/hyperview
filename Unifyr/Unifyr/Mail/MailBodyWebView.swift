@@ -20,6 +20,9 @@ struct MailBodyWebView {
     /// Raw message HTML, or nil to render `plainText`.
     let html: String?
     let plainText: String?
+    /// Privacy toggle: neutralize remote (http/https) images — tracking
+    /// pixels included — before load. cid:/data: images still render.
+    var blockRemoteImages: Bool = false
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -45,7 +48,7 @@ struct MailBodyWebView {
     fileprivate var document: String {
         let inner: String
         if let html, !html.isEmpty {
-            inner = html
+            inner = blockRemoteImages ? Self.blockingRemoteImages(html) : html
         } else {
             let escaped = (plainText ?? "")
                 .replacingOccurrences(of: "&", with: "&amp;")
@@ -54,6 +57,27 @@ struct MailBodyWebView {
             inner = "<pre class=\"hv-plain\">\(escaped)</pre>"
         }
         return Self.wrapper(inner)
+    }
+
+    /// Defuse remote <img> loads by renaming their src attribute (the bytes
+    /// stay in the DOM, so "Load Images" is just a re-render without the
+    /// block). Covers src= in both quote styles; CSS background-image URLs
+    /// are rare in mail and left alone (v1).
+    nonisolated static func blockingRemoteImages(_ html: String) -> String {
+        html.replacingOccurrences(
+            of: #"(<img\b[^>]*?)\bsrc\s*=\s*(["'])\s*(https?:[^"']*)\2"#,
+            with: "$1data-hv-blocked-src=$2$3$2",
+            options: [.regularExpression, .caseInsensitive]
+        )
+    }
+
+    /// Whether the HTML references any remote image (drives the banner).
+    nonisolated static func hasRemoteImages(_ html: String?) -> Bool {
+        guard let html else { return false }
+        return html.range(
+            of: #"<img\b[^>]*?\bsrc\s*=\s*["']\s*https?:"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
     }
 
     private static func wrapper(_ body: String) -> String {

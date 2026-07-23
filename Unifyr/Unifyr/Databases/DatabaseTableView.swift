@@ -26,6 +26,8 @@ struct DatabaseTableView: View {
     @State private var deletingRow: DBRow?
     /// Relation properties need a target database picked before creation.
     @State private var choosingRelationTarget = false
+    /// Header currently targeted by a column drag (drop = insert BEFORE it).
+    @State private var columnDropTarget: UUID?
 
     private var store: DatabaseStore { DatabaseStore(context: context) }
     private var titleProperty: DBProperty? { store.titleProperty(among: properties) }
@@ -151,6 +153,18 @@ struct DatabaseTableView: View {
                 headerCell(property)
                     .frame(width: width(of: property), alignment: .leading)
                     .overlay(alignment: .trailing) { resizeGrip(property) }
+                    // Drag a header onto another to reorder (drop = before).
+                    .draggable("column:\(property.id.uuidString)")
+                    .dropDestination(for: String.self) { items, _ in
+                        dropColumn(items, before: property)
+                    } isTargeted: { targeted in
+                        columnDropTarget = targeted ? property.id : (columnDropTarget == property.id ? nil : columnDropTarget)
+                    }
+                    .overlay(alignment: .leading) {
+                        if columnDropTarget == property.id {
+                            Rectangle().fill(Theme.Palette.primary).frame(width: 2)
+                        }
+                    }
             }
             addPropertyButton
         }
@@ -245,6 +259,18 @@ struct DatabaseTableView: View {
         }
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
+    }
+
+    /// A dragged header dropped on `target`: move it to sit before target.
+    private func dropColumn(_ items: [String], before target: DBProperty) -> Bool {
+        guard let raw = items.first, raw.hasPrefix("column:"),
+              let draggedID = UUID(uuidString: String(raw.dropFirst("column:".count))),
+              draggedID != target.id,
+              let source = properties.first(where: { $0.id == draggedID })
+        else { return false }
+        store.moveProperty(source, before: target, within: properties)
+        try? context.save()
+        return true
     }
 
     private var addPropertyButton: some View {

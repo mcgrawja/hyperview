@@ -153,6 +153,10 @@ private struct PinnedDatabaseCard: View {
     let viewID: UUID?
 
     @Environment(\.modelContext) private var context
+    // Unused directly — their presence makes the card LIVE: any row/cell
+    // change re-renders the body while the dashboard sits open.
+    @Query private var liveRows: [DBRow]
+    @Query private var liveValues: [DBValue]
 
     var body: some View {
         let store = DatabaseStore(context: context)

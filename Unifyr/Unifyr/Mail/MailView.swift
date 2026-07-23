@@ -92,6 +92,9 @@ private struct MailModuleContent: View {
     @State private var settingsAccount: MailAccount?
     @State private var smartEditor: SmartMailboxEditorTarget?
     @State private var showingRules = false
+    /// Privacy: strip remote images (tracking pixels) from message bodies;
+    /// a per-message "Load Images" overrides.
+    @AppStorage("mail.blockRemoteImages") private var blockRemoteImages = false
     @State private var showingBlockedSenders = false
     /// Master disclosure for the per-account sections. Collapsed by default so
     /// the sidebar leads with just the unified boxes.
@@ -241,6 +244,8 @@ private struct MailModuleContent: View {
                         Button("Manage Rules…") { showingRules = true }
                         Button("Blocked Senders…") { showingBlockedSenders = true }
                         Divider()
+                        Toggle("Block Remote Images", isOn: $blockRemoteImages)
+                        Divider()
                         Button("Re-download Messages") { Task { await clearCacheAndReload() } }
                     } label: { Image(systemName: "ellipsis.circle") }
                 }
@@ -270,6 +275,8 @@ private struct MailModuleContent: View {
                         Button("New Smart Mailbox…") { smartEditor = SmartMailboxEditorTarget(box: nil) }
                         Button("Manage Rules…") { showingRules = true }
                         Button("Blocked Senders…") { showingBlockedSenders = true }
+                        Divider()
+                        Toggle("Block Remote Images", isOn: $blockRemoteImages)
                     } label: { Image(systemName: "slider.horizontal.3") }
                     .help("Smart Mailboxes & Rules")
                 }
@@ -935,6 +942,9 @@ private struct MessageDetailView: View {
     @Query private var attachments: [MailAttachment]
     @State private var eventSheet: EventFromEmailSheet?
     @State private var feedback: String?
+    @AppStorage("mail.blockRemoteImages") private var blockRemoteImages = false
+    /// Per-message "Load Images" override (reset when the message changes).
+    @State private var loadImagesOverride = false
 
     init(
         message: MailMessage,
@@ -1047,9 +1057,31 @@ private struct MessageDetailView: View {
             }
             Divider().overlay(Theme.Palette.separator)
 
+            // Privacy banner: remote images were stripped from this message.
+            if blockRemoteImages, !loadImagesOverride, MailBodyWebView.hasRemoteImages(inlinedHTML) {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Image(systemName: "eye.slash")
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                    Text("Remote images blocked for privacy.")
+                        .font(Theme.Font.cardCaption)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                    Button("Load Images") { loadImagesOverride = true }
+                        .font(Theme.Font.cardCaption)
+                    Spacer()
+                }
+                .padding(.horizontal, Theme.Spacing.xl)
+                .padding(.vertical, Theme.Spacing.xs)
+                Divider().overlay(Theme.Palette.separator)
+            }
+
             if message.hasFetchedBody {
-                MailBodyWebView(html: inlinedHTML, plainText: message.bodyText)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                MailBodyWebView(
+                    html: inlinedHTML,
+                    plainText: message.bodyText,
+                    blockRemoteImages: blockRemoteImages && !loadImagesOverride
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onChange(of: message.id) { _, _ in loadImagesOverride = false }
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

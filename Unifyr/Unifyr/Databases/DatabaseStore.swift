@@ -208,6 +208,15 @@ struct DatabaseStore {
         touch(note)
     }
 
+    /// Place `source` immediately BEFORE `target` (header drag-reorder).
+    func moveProperty(_ source: DBProperty, before target: DBProperty, within ordered: [DBProperty]) {
+        guard source.id != target.id,
+              let targetIndex = ordered.firstIndex(where: { $0.id == target.id }) else { return }
+        let previous = targetIndex > 0 ? ordered[targetIndex - 1] : nil
+        guard previous?.id != source.id else { return } // already there
+        source.sortKey = FractionalIndex.keyBetween(previous?.sortKey, target.sortKey)
+    }
+
     /// Move a column one slot left/right (`offset` -1 / +1) among `ordered`.
     func moveProperty(_ property: DBProperty, offset: Int, within ordered: [DBProperty]) {
         guard let index = ordered.firstIndex(where: { $0.id == property.id }) else { return }

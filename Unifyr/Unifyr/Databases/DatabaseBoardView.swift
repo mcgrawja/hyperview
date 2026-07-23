@@ -22,6 +22,8 @@ struct DatabaseBoardView: View {
     let openRow: (DBRow) -> Void
 
     @Environment(\.modelContext) private var context
+    /// Column currently targeted by a card drag ("none" = the No-value column).
+    @State private var dropTargetKey: String?
 
     private var store: DatabaseStore { DatabaseStore(context: context) }
     private var titleProperty: DBProperty? { store.titleProperty(among: properties) }
@@ -136,6 +138,14 @@ struct DatabaseBoardView: View {
         .padding(Theme.Spacing.sm)
         .frame(width: 260, alignment: .top)
         .background(Theme.Palette.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
+        // The targeted column glows so drops land with confidence.
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.control)
+                .strokeBorder(
+                    dropTargetKey == columnKey(option) ? Theme.Palette.primary : .clear,
+                    lineWidth: 2
+                )
+        )
         // Dropping a card re-files its row into this column.
         .dropDestination(for: String.self) { items, _ in
             guard let raw = items.first, let rowID = UUID(uuidString: raw) else { return false }
@@ -144,7 +154,14 @@ struct DatabaseBoardView: View {
             store.setValue(cell, rowID: rowID, propertyID: groupProperty.id, in: note)
             try? context.save()
             return true
+        } isTargeted: { targeted in
+            let key = columnKey(option)
+            dropTargetKey = targeted ? key : (dropTargetKey == key ? nil : dropTargetKey)
         }
+    }
+
+    private func columnKey(_ option: DBSelectOption?) -> String {
+        option?.id.uuidString ?? "none"
     }
 
     // MARK: Cards
