@@ -64,6 +64,35 @@ enum EditorIntegrations {
         return inner
     }
 
+    /// A text line as inline nodes with URLs (and emails) carrying live link
+    /// marks — so clipped emails and /ask answers have clickable links
+    /// (Jason's request). NSDataDetector does the finding.
+    nonisolated static func inlineContent(for line: String) -> [PMNode] {
+        guard !line.isEmpty else { return [] }
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return [.text(line)]
+        }
+        let ns = line as NSString
+        var nodes: [PMNode] = []
+        var cursor = line.startIndex
+        for match in detector.matches(in: line, options: [], range: NSRange(location: 0, length: ns.length)) {
+            guard let range = Range(match.range, in: line), let url = match.url else { continue }
+            if range.lowerBound > cursor {
+                nodes.append(.text(String(line[cursor..<range.lowerBound])))
+            }
+            nodes.append(PMNode(
+                type: "text",
+                text: String(line[range]),
+                marks: [PMMark(type: "link", attrs: ["href": .string(url.absoluteString)])]
+            ))
+            cursor = range.upperBound
+        }
+        if cursor < line.endIndex {
+            nodes.append(.text(String(line[cursor...])))
+        }
+        return nodes.isEmpty ? [.text(line)] : nodes
+    }
+
     /// Lines → blocks ("- " bullets, "## " headings, else paragraphs) — the
     /// same shape the MCP notes_create importer uses.
     static func blocks(fromText text: String) -> [PMNode] {
@@ -75,14 +104,14 @@ enum EditorIntegrations {
                 if line.hasPrefix("- ") {
                     return PMNode(type: "bulletList", content: [
                         PMNode(type: "listItem", content: [
-                            PMNode(type: "paragraph", content: [.text(String(line.dropFirst(2)))]),
+                            PMNode(type: "paragraph", content: inlineContent(for: String(line.dropFirst(2)))),
                         ]),
                     ])
                 }
                 if line.hasPrefix("## ") {
                     return PMNode(type: "heading", attrs: ["level": .int(2)], content: [.text(String(line.dropFirst(3)))])
                 }
-                return PMNode(type: "paragraph", content: [.text(line)])
+                return PMNode(type: "paragraph", content: inlineContent(for: line))
             }
     }
 

@@ -141,7 +141,8 @@ struct MailActionsMenu: View {
             ]),
         ]
         for line in Self.clipBodyLines(text: message.bodyText, html: message.bodyHTML) {
-            blocks.append(PMNode(type: "paragraph", content: line.isEmpty ? [] : [.text(line)]))
+            // inlineContent gives URLs in the clip live link marks.
+            blocks.append(PMNode(type: "paragraph", content: EditorIntegrations.inlineContent(for: line)))
         }
         store.save(PMNode(type: "doc", content: blocks), to: page)
         do {

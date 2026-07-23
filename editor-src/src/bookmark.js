@@ -77,15 +77,46 @@ export const Bookmark = Node.create({
       };
       sync(current);
 
+      // ✎ fixes a mistyped URL in place (Jason's request): reopens the
+      // prompt pre-filled; committing rewrites the url and re-resolves.
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "bookmark-edit";
+      edit.contentEditable = "false";
+      edit.textContent = "✎";
+      edit.title = "Edit URL";
+      edit.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        promptBookmark(editor, {
+          title: "Edit bookmark URL",
+          initial: current.attrs.url || "",
+          onSubmit: (url) => {
+            editor
+              .chain()
+              .command(({ tr }) => {
+                tr.setNodeMarkup(getPos(), undefined, { url: url, title: null });
+                return true;
+              })
+              .run();
+          },
+        });
+      });
+
       dom.appendChild(icon);
       dom.appendChild(text);
+      dom.appendChild(edit);
       dom.addEventListener("click", (event) => {
         event.preventDefault();
         if (current.attrs.url) post({ type: "openLink", href: current.attrs.url });
       });
 
-      // No title yet → ask Swift to fetch the page's <title>.
-      if (current.attrs.url && !current.attrs.title) {
+      // Fetch the page's <title> whenever the url has none (fresh insert OR
+      // an edited url — update() re-triggers this).
+      let requestedURL = null;
+      const resolveIfNeeded = () => {
+        if (!current.attrs.url || current.attrs.title || requestedURL === current.attrs.url) return;
+        requestedURL = current.attrs.url;
         const ref = `bookmark-${++bookmarkRequests.counter}`;
         bookmarkRequests.pending[ref] = (fetchedTitle) => {
           editor
@@ -97,7 +128,8 @@ export const Bookmark = Node.create({
             .run();
         };
         post({ type: "resolveBookmark", url: current.attrs.url, ref: ref });
-      }
+      };
+      resolveIfNeeded();
 
       return {
         dom,
@@ -105,6 +137,7 @@ export const Bookmark = Node.create({
           if (updated.type.name !== "bookmark") return false;
           current = updated;
           sync(updated);
+          resolveIfNeeded();
           return true;
         },
       };
@@ -124,8 +157,9 @@ export const Bookmark = Node.create({
 });
 
 // "/bookmark" prompt: a small centered input (window.prompt is unavailable in
-// the WKWebView — modal JS dialogs would wedge the bridge).
-export function promptBookmark(editor) {
+// the WKWebView — modal JS dialogs would wedge the bridge). options.initial
+// pre-fills; options.onSubmit overrides the default insert (the edit path).
+export function promptBookmark(editor, options = {}) {
   const overlay = document.createElement("div");
   overlay.className = "bookmark-prompt";
 
@@ -133,17 +167,22 @@ export function promptBookmark(editor) {
   box.className = "bookmark-prompt-box";
   const label = document.createElement("div");
   label.className = "bookmark-prompt-label";
-  label.textContent = "Bookmark URL";
+  label.textContent = options.title || "Bookmark URL";
   const input = document.createElement("input");
   input.className = "emoji-input";
   input.placeholder = "https://…";
+  if (options.initial) input.value = options.initial;
 
   const finish = (commit) => {
     overlay.remove();
     const value = input.value.trim();
     if (!commit || !value) return;
     const url = value.includes("://") ? value : `https://${value}`;
-    editor.commands.insertBookmark(url);
+    if (options.onSubmit) {
+      options.onSubmit(url);
+    } else {
+      editor.commands.insertBookmark(url);
+    }
   };
 
   input.addEventListener("keydown", (event) => {

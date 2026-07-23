@@ -24265,13 +24265,37 @@ img.ProseMirror-separator {
           urlLine.textContent = n.attrs.url || "";
         };
         sync(current);
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.className = "bookmark-edit";
+        edit.contentEditable = "false";
+        edit.textContent = "\u270E";
+        edit.title = "Edit URL";
+        edit.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          promptBookmark(editor2, {
+            title: "Edit bookmark URL",
+            initial: current.attrs.url || "",
+            onSubmit: (url) => {
+              editor2.chain().command(({ tr: tr2 }) => {
+                tr2.setNodeMarkup(getPos(), void 0, { url, title: null });
+                return true;
+              }).run();
+            }
+          });
+        });
         dom.appendChild(icon);
         dom.appendChild(text);
+        dom.appendChild(edit);
         dom.addEventListener("click", (event) => {
           event.preventDefault();
           if (current.attrs.url) post({ type: "openLink", href: current.attrs.url });
         });
-        if (current.attrs.url && !current.attrs.title) {
+        let requestedURL = null;
+        const resolveIfNeeded = () => {
+          if (!current.attrs.url || current.attrs.title || requestedURL === current.attrs.url) return;
+          requestedURL = current.attrs.url;
           const ref = `bookmark-${++bookmarkRequests.counter}`;
           bookmarkRequests.pending[ref] = (fetchedTitle) => {
             editor2.chain().command(({ tr: tr2 }) => {
@@ -24280,13 +24304,15 @@ img.ProseMirror-separator {
             }).run();
           };
           post({ type: "resolveBookmark", url: current.attrs.url, ref });
-        }
+        };
+        resolveIfNeeded();
         return {
           dom,
           update(updated) {
             if (updated.type.name !== "bookmark") return false;
             current = updated;
             sync(updated);
+            resolveIfNeeded();
             return true;
           }
         };
@@ -24298,23 +24324,28 @@ img.ProseMirror-separator {
       };
     }
   });
-  function promptBookmark(editor2) {
+  function promptBookmark(editor2, options = {}) {
     const overlay = document.createElement("div");
     overlay.className = "bookmark-prompt";
     const box = document.createElement("div");
     box.className = "bookmark-prompt-box";
     const label = document.createElement("div");
     label.className = "bookmark-prompt-label";
-    label.textContent = "Bookmark URL";
+    label.textContent = options.title || "Bookmark URL";
     const input = document.createElement("input");
     input.className = "emoji-input";
     input.placeholder = "https://\u2026";
+    if (options.initial) input.value = options.initial;
     const finish = (commit2) => {
       overlay.remove();
       const value = input.value.trim();
       if (!commit2 || !value) return;
       const url = value.includes("://") ? value : `https://${value}`;
-      editor2.commands.insertBookmark(url);
+      if (options.onSubmit) {
+        options.onSubmit(url);
+      } else {
+        editor2.commands.insertBookmark(url);
+      }
     };
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {

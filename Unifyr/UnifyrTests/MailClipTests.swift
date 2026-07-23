@@ -31,4 +31,18 @@ struct MailClipTests {
         let huge = Array(repeating: "line", count: 500).joined(separator: "\n")
         #expect(MailActionsMenu.clipBodyLines(text: huge, html: nil).count == 120)
     }
+
+    @Test func inlineContentLinksURLs() {
+        let nodes = EditorIntegrations.inlineContent(for: "Track at https://example.com/pkg?id=1 today")
+        #expect(nodes.count == 3)
+        #expect(nodes[0].text == "Track at ")
+        #expect(nodes[1].text == "https://example.com/pkg?id=1")
+        #expect(nodes[1].marks?.first?.type == "link")
+        #expect(nodes[1].marks?.first?.attrs?["href"] == .string("https://example.com/pkg?id=1"))
+        #expect(nodes[2].text == " today")
+
+        // No URL → one plain text node; empty → empty.
+        #expect(EditorIntegrations.inlineContent(for: "plain words").count == 1)
+        #expect(EditorIntegrations.inlineContent(for: "").isEmpty)
+    }
 }
