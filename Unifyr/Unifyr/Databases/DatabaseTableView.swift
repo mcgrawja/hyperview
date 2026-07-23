@@ -50,19 +50,28 @@ struct DatabaseTableView: View {
     private static let openColumnWidth: CGFloat = 32
 
     var body: some View {
-        ScrollView([.horizontal, .vertical]) {
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                Divider().overlay(Theme.Palette.separatorStrong)
-                ForEach(rows) { row in
-                    rowView(row)
-                    Divider().overlay(Theme.Palette.separator)
+        // GeometryReader + minWidth/minHeight: a two-axis ScrollView CENTERS
+        // content smaller than the viewport — the table must hug top-leading.
+        GeometryReader { geo in
+            ScrollView([.horizontal, .vertical]) {
+                VStack(alignment: .leading, spacing: 0) {
+                    header
+                    Divider().overlay(Theme.Palette.separatorStrong)
+                    ForEach(rows) { row in
+                        rowView(row)
+                        Divider().overlay(Theme.Palette.separator)
+                    }
+                    newRowButton
                 }
-                newRowButton
+                .frame(width: tableWidth, alignment: .leading)
+                .padding(.horizontal, Theme.Spacing.lg)
+                .padding(.bottom, Theme.Spacing.xl)
+                .frame(
+                    minWidth: geo.size.width,
+                    minHeight: geo.size.height,
+                    alignment: .topLeading
+                )
             }
-            .frame(width: tableWidth, alignment: .leading)
-            .padding(.horizontal, Theme.Spacing.lg)
-            .padding(.bottom, Theme.Spacing.xl)
         }
         .alert("Rename Property", isPresented: .init(
             get: { renamingProperty != nil },

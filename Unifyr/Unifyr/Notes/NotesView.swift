@@ -833,27 +833,12 @@ private struct PageHost: View {
                 .padding(.bottom, Theme.Spacing.sm)
             }
 
-            // Backlinks — every page that references this one.
-            if !backlinks.isEmpty {
+            // Backlinks — every page that references this one. Database pages
+            // hand these to DatabaseView's control row instead (one less
+            // header line, Jason 2026-07-23).
+            if !backlinks.isEmpty, note.kind == .page {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Label("Linked from", systemImage: "arrow.uturn.backward")
-                            .font(Theme.Font.cardCaption)
-                            .foregroundStyle(Theme.Palette.textSecondary)
-                        ForEach(backlinks) { source in
-                            Button {
-                                open(source)
-                            } label: {
-                                Text("\(source.emoji ?? (source.kind == .database ? "📊" : "📄")) \(source.title.isEmpty ? "Untitled" : source.title)")
-                                    .font(Theme.Font.cardCaption)
-                                    .lineLimit(1)
-                                    .padding(.horizontal, Theme.Spacing.sm)
-                                    .padding(.vertical, Theme.Spacing.xs)
-                                    .background(Theme.Palette.primary.softFill(0.10), in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                    backlinksChips
                 }
                 .padding(.horizontal, Theme.Spacing.xl)
                 .padding(.bottom, Theme.Spacing.sm)
@@ -862,7 +847,11 @@ private struct PageHost: View {
             if note.kind == .database {
                 // .id: DatabaseView's @Query predicates are built in its init,
                 // so switching databases must re-create the view.
-                DatabaseView(note: note).id(note.id)
+                DatabaseView(
+                    note: note,
+                    headerLeading: backlinks.isEmpty ? nil : AnyView(backlinksChips)
+                )
+                .id(note.id)
             } else {
                 // No .id(note.id): the bridge swaps documents into the EXISTING
                 // web view (EditorBridge.show) — re-creating the WKWebView per
@@ -874,6 +863,29 @@ private struct PageHost: View {
         .background(Theme.Palette.background)
         .task(id: note.id) {
             backlinks = NotesStore(context: context).backlinkSources(to: note.id)
+        }
+    }
+
+    /// The "Linked from" chip row — standalone for pages, embedded in the
+    /// database control row for databases.
+    private var backlinksChips: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Label("Linked from", systemImage: "arrow.uturn.backward")
+                .font(Theme.Font.cardCaption)
+                .foregroundStyle(Theme.Palette.textSecondary)
+            ForEach(backlinks) { source in
+                Button {
+                    open(source)
+                } label: {
+                    Text("\(source.emoji ?? (source.kind == .database ? "📊" : "📄")) \(source.title.isEmpty ? "Untitled" : source.title)")
+                        .font(Theme.Font.cardCaption)
+                        .lineLimit(1)
+                        .padding(.horizontal, Theme.Spacing.sm)
+                        .padding(.vertical, Theme.Spacing.xs)
+                        .background(Theme.Palette.primary.softFill(0.10), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 

@@ -32,6 +32,9 @@ nonisolated enum DatabaseViewMode: String, CaseIterable {
 struct DatabaseView: View {
     @Environment(\.modelContext) private var context
     @Bindable var note: Note
+    /// PageHost's meta chips ("Linked from" backlinks) — rendered inline on
+    /// the control row so a database page's header stays one line shorter.
+    let headerLeading: AnyView?
 
     @Query private var properties: [DBProperty]
     @Query private var rows: [DBRow]
@@ -48,8 +51,9 @@ struct DatabaseView: View {
     /// Saved view being edited in the sheet.
     @State private var editingView: DBViewConfig?
 
-    init(note: Note) {
+    init(note: Note, headerLeading: AnyView? = nil) {
         self.note = note
+        self.headerLeading = headerLeading
         let id: UUID? = note.id
         _properties = Query(
             filter: #Predicate<DBProperty> { $0.databaseNoteID == id },
@@ -149,33 +153,39 @@ struct DatabaseView: View {
     }
 
     // No title row here — the Notes module's PageHost owns breadcrumbs, icon,
-    // and title for every page kind (2026-07-22 Notion refocus).
+    // and title for every page kind (2026-07-22 Notion refocus). ONE control
+    // row (Jason, 2026-07-23): backlinks chips + view tabs + mode + count all
+    // share a line, so the header above the data stays short.
     private var databaseBody: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // View tabs: All + saved views (Phase 4).
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Theme.Spacing.xs) {
-                    viewTab(nil)
-                    ForEach(savedViews) { view in
-                        viewTab(view)
-                    }
-                    Menu {
-                        Button("New Table View") { createView(mode: .table) }
-                        Button("New Board View") { createView(mode: .board) }
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(Theme.Font.cardCaption)
-                            .foregroundStyle(Theme.Palette.textSecondary)
-                            .padding(Theme.Spacing.xs)
-                    }
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                }
-            }
-            .padding(.horizontal, Theme.Spacing.xl)
-            .padding(.top, Theme.Spacing.xs)
-
             HStack(spacing: Theme.Spacing.md) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        if let headerLeading {
+                            headerLeading
+                            Divider()
+                                .overlay(Theme.Palette.separator)
+                                .frame(height: 14)
+                                .padding(.horizontal, Theme.Spacing.xs)
+                        }
+                        viewTab(nil)
+                        ForEach(savedViews) { view in
+                            viewTab(view)
+                        }
+                        Menu {
+                            Button("New Table View") { createView(mode: .table) }
+                            Button("New Board View") { createView(mode: .board) }
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(Theme.Font.cardCaption)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                                .padding(Theme.Spacing.xs)
+                        }
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                    }
+                }
+
                 if let selectedView {
                     Button {
                         editingView = selectedView
@@ -224,14 +234,13 @@ struct DatabaseView: View {
                     .fixedSize()
                 }
 
-                Spacer()
-
                 Text(rowCountLabel)
                     .font(Theme.Font.cardCaption)
                     .foregroundStyle(Theme.Palette.textSecondary)
+                    .fixedSize()
             }
             .padding(.horizontal, Theme.Spacing.xl)
-            .padding(.vertical, Theme.Spacing.sm)
+            .padding(.vertical, Theme.Spacing.xs)
 
             Divider().overlay(Theme.Palette.separator)
 

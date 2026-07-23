@@ -61,22 +61,27 @@ struct DatabaseBoardView: View {
     }
 
     private func board(_ groupProperty: DBProperty) -> some View {
-        ScrollView(.horizontal) {
-            HStack(alignment: .top, spacing: Theme.Spacing.md) {
-                ForEach(options) { option in
+        // minWidth/topLeading: a ScrollView centers smaller content — columns
+        // must hug the upper-left like the table does.
+        GeometryReader { geo in
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: Theme.Spacing.md) {
+                    ForEach(options) { option in
+                        column(
+                            groupProperty: groupProperty,
+                            option: option,
+                            rows: rows(withOption: option.id, of: groupProperty)
+                        )
+                    }
                     column(
                         groupProperty: groupProperty,
-                        option: option,
-                        rows: rows(withOption: option.id, of: groupProperty)
+                        option: nil,
+                        rows: rows(withOption: nil, of: groupProperty)
                     )
                 }
-                column(
-                    groupProperty: groupProperty,
-                    option: nil,
-                    rows: rows(withOption: nil, of: groupProperty)
-                )
+                .padding(Theme.Spacing.lg)
+                .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .topLeading)
             }
-            .padding(Theme.Spacing.lg)
         }
     }
 
