@@ -684,8 +684,11 @@ private struct PageHost: View {
                 }
             }
 
-            if !breadcrumbs.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
+            // ONE compact header row (Jason, 2026-07-23): breadcrumbs, icon,
+            // title, and the page controls share the line, so the header's
+            // bottom lands near the sidebar header's divider.
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
+                if !breadcrumbs.isEmpty {
                     HStack(spacing: Theme.Spacing.xs) {
                         ForEach(breadcrumbs) { ancestor in
                             Button {
@@ -702,17 +705,14 @@ private struct PageHost: View {
                                 .foregroundStyle(Theme.Palette.textSecondary)
                         }
                     }
+                    .layoutPriority(-1)
                 }
-                .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.top, Theme.Spacing.md)
-            }
 
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
                 Button {
                     showingIconPicker = true
                 } label: {
                     Text(note.emoji ?? (note.kind == .database ? "📊" : "📄"))
-                        .font(.system(size: 30))
+                        .font(.system(size: 21))
                         .opacity(note.emoji == nil ? 0.45 : 1)
                 }
                 .buttonStyle(.plain)
@@ -723,7 +723,7 @@ private struct PageHost: View {
 
                 TextField("Untitled", text: $note.title)
                     .textFieldStyle(.plain)
-                    .font(Theme.Font.dashboardTitle)
+                    .font(.title2.weight(.bold))
                     .onChange(of: note.title) { _, _ in note.modifiedAt = Date() }
 
                 if note.kind == .page {
@@ -795,8 +795,8 @@ private struct PageHost: View {
                 }
             }
             .padding(.horizontal, Theme.Spacing.xl)
-            .padding(.top, breadcrumbs.isEmpty ? Theme.Spacing.lg : Theme.Spacing.sm)
-            .padding(.bottom, Theme.Spacing.sm)
+            .padding(.top, Theme.Spacing.sm)
+            .padding(.bottom, Theme.Spacing.xs)
 
             // Sub-pages, Notion-style, right under the title. (Inline sub-page
             // BLOCKS are a later phase — this strip is the navigation.)

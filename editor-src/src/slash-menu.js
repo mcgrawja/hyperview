@@ -186,10 +186,12 @@ export const SlashCommands = Extension.create({
         allowSpaces: false,
         items: ({ query }) => {
           const q = query.toLowerCase();
+          // No arbitrary cap (a 13-item slice used to hide Sub-page / New
+          // database on an empty query) — the menu scrolls.
           return ITEMS.filter(
             (item) =>
               item.title.toLowerCase().includes(q) || item.keywords.includes(q)
-          ).slice(0, 13);
+          );
         },
         command: ({ editor, range, props }) => props.run(editor, range),
         render: () => ({

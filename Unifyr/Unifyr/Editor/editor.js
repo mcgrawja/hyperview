@@ -24506,7 +24506,7 @@ img.ProseMirror-separator {
             const q = query.toLowerCase();
             return ITEMS.filter(
               (item) => item.title.toLowerCase().includes(q) || item.keywords.includes(q)
-            ).slice(0, 13);
+            );
           },
           command: ({ editor: editor2, range, props }) => props.run(editor2, range),
           render: () => ({
