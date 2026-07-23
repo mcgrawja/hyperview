@@ -70,6 +70,8 @@ nonisolated enum BlockKind: String, Sendable, CaseIterable {
     case callout
     /// Collapsible toggle (Phase 2, 2026-07-22): content = summary + body.
     case toggle
+    /// Inline child-page embed (Phase 3): attrs = noteID + cached title/emoji.
+    case subpage
 }
 
 extension Block {

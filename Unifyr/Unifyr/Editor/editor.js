@@ -24237,6 +24237,15 @@ img.ProseMirror-separator {
       run: (e, r2) => e.chain().focus().deleteRange(r2).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
     },
     {
+      title: "Sub-page",
+      hint: "Create a page inside this page",
+      keywords: "subpage child page new nested",
+      run: (e, r2) => {
+        e.chain().focus().deleteRange(r2).run();
+        post({ type: "createSubpage" });
+      }
+    },
+    {
       title: "Link to note",
       hint: "Link to another Hyperview note",
       keywords: "link note wiki [[",
@@ -24287,7 +24296,7 @@ img.ProseMirror-separator {
       run: (e, r2) => e.chain().focus().deleteRange(r2).deleteTable().run()
     }
   ];
-  var SlashMenu = class {
+  var CommandMenu = class {
     constructor() {
       this.element = document.createElement("div");
       this.element.className = "slash-menu";
@@ -24393,7 +24402,7 @@ img.ProseMirror-separator {
           command: ({ editor: editor2, range, props }) => props.run(editor2, range),
           render: () => ({
             onStart: (props) => {
-              menu = new SlashMenu();
+              menu = new CommandMenu();
               menu.selected = 0;
               menu.update(props);
             },
@@ -39861,8 +39870,162 @@ img.ProseMirror-separator {
     });
   }
 
-  // src/main.js
+  // src/page-mention.js
   function post2(msg) {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
+      window.webkit.messageHandlers.hyperview.postMessage(msg);
+    }
+  }
+  var pageIndex = { pages: [] };
+  var PageMention = Node2.create({
+    name: "pageMention",
+    group: "inline",
+    inline: true,
+    atom: true,
+    selectable: true,
+    addAttributes() {
+      return {
+        noteID: { default: null },
+        title: { default: "Untitled" },
+        emoji: { default: null }
+      };
+    },
+    parseHTML() {
+      return [{ tag: "span.page-mention" }];
+    },
+    renderHTML({ node, HTMLAttributes }) {
+      const label = `${node.attrs.emoji || "\u{1F4C4}"} ${node.attrs.title || "Untitled"}`;
+      return ["span", mergeAttributes(HTMLAttributes, { class: "page-mention" }), label];
+    },
+    addNodeView() {
+      return ({ node }) => {
+        const dom = document.createElement("span");
+        dom.className = "page-mention";
+        dom.textContent = `${node.attrs.emoji || "\u{1F4C4}"} ${node.attrs.title || "Untitled"}`;
+        dom.addEventListener("click", (event) => {
+          event.preventDefault();
+          if (node.attrs.noteID) {
+            post2({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
+          }
+        });
+        return {
+          dom,
+          update(updated) {
+            if (updated.type.name !== "pageMention") return false;
+            dom.textContent = `${updated.attrs.emoji || "\u{1F4C4}"} ${updated.attrs.title || "Untitled"}`;
+            node = updated;
+            return true;
+          }
+        };
+      };
+    }
+  });
+  var PageMentionSuggestion = Extension.create({
+    name: "pageMentionSuggestion",
+    addProseMirrorPlugins() {
+      let menu = null;
+      return [
+        Suggestion({
+          editor: this.editor,
+          char: "@",
+          allowSpaces: false,
+          items: ({ query }) => {
+            const q = query.toLowerCase();
+            return pageIndex.pages.filter((page) => (page.title || "Untitled").toLowerCase().includes(q)).slice(0, 8).map((page) => ({
+              title: `${page.emoji || "\u{1F4C4}"} ${page.title || "Untitled"}`,
+              hint: "Link page",
+              page,
+              run: (editor2, range) => editor2.chain().focus().deleteRange(range).insertContent([
+                {
+                  type: "pageMention",
+                  attrs: { noteID: page.id, title: page.title, emoji: page.emoji || null }
+                },
+                { type: "text", text: " " }
+              ]).run()
+            }));
+          },
+          command: ({ editor: editor2, range, props }) => props.run(editor2, range),
+          render: () => ({
+            onStart: (props) => {
+              menu = new CommandMenu();
+              menu.selected = 0;
+              menu.update(props);
+            },
+            onUpdate: (props) => menu && menu.update(props),
+            onKeyDown: (props) => menu ? menu.onKeyDown(props.event) : false,
+            onExit: () => {
+              if (menu) {
+                menu.destroy();
+                menu = null;
+              }
+            }
+          })
+        })
+      ];
+    }
+  });
+
+  // src/subpage.js
+  function post3(msg) {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
+      window.webkit.messageHandlers.hyperview.postMessage(msg);
+    }
+  }
+  var Subpage = Node2.create({
+    name: "subpage",
+    group: "block",
+    atom: true,
+    selectable: true,
+    addAttributes() {
+      return {
+        noteID: { default: null },
+        title: { default: "Untitled" },
+        emoji: { default: null }
+      };
+    },
+    parseHTML() {
+      return [{ tag: "div.subpage-block" }];
+    },
+    renderHTML({ node, HTMLAttributes }) {
+      const label = `${node.attrs.emoji || "\u{1F4C4}"} ${node.attrs.title || "Untitled"}`;
+      return ["div", mergeAttributes(HTMLAttributes, { class: "subpage-block" }), label];
+    },
+    addNodeView() {
+      return ({ node }) => {
+        const dom = document.createElement("div");
+        dom.className = "subpage-block";
+        const icon = document.createElement("span");
+        icon.className = "subpage-icon";
+        const title = document.createElement("span");
+        title.className = "subpage-title";
+        const sync = (n) => {
+          icon.textContent = n.attrs.emoji || "\u{1F4C4}";
+          title.textContent = n.attrs.title || "Untitled";
+        };
+        sync(node);
+        dom.appendChild(icon);
+        dom.appendChild(title);
+        dom.addEventListener("click", (event) => {
+          event.preventDefault();
+          if (node.attrs.noteID) {
+            post3({ type: "openLink", href: `hyperview://note/${node.attrs.noteID}` });
+          }
+        });
+        return {
+          dom,
+          update(updated) {
+            if (updated.type.name !== "subpage") return false;
+            sync(updated);
+            node = updated;
+            return true;
+          }
+        };
+      };
+    }
+  });
+
+  // src/main.js
+  function post4(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
       window.webkit.messageHandlers.hyperview.postMessage(msg);
     }
@@ -39872,13 +40035,13 @@ img.ProseMirror-separator {
   function scheduleChange(editor2) {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(function() {
-      post2({ type: "documentChanged", doc: editor2.getJSON() });
+      post4({ type: "documentChanged", doc: editor2.getJSON() });
     }, 500);
   }
   function sendImageFile(file) {
     const reader = new FileReader();
     reader.onload = function() {
-      post2({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
+      post4({ type: "saveImage", dataURL: reader.result, filename: file.name || "image.png" });
     };
     reader.readAsDataURL(file);
   }
@@ -39912,6 +40075,9 @@ img.ProseMirror-separator {
       ToggleSummary,
       ToggleBody,
       DragHandle,
+      PageMention,
+      PageMentionSuggestion,
+      Subpage,
       Placeholder.configure({ placeholder: "Type \u2018/\u2019 for commands\u2026" }),
       SlashCommands
     ],
@@ -39942,7 +40108,7 @@ img.ProseMirror-separator {
     const anchor = event.target.closest("a[href]");
     if (!anchor) return;
     event.preventDefault();
-    post2({ type: "openLink", href: anchor.getAttribute("href") });
+    post4({ type: "openLink", href: anchor.getAttribute("href") });
   });
   window.hyperview = {
     loadDocument: function(docOrJson) {
@@ -39966,7 +40132,17 @@ img.ProseMirror-separator {
     // requestImage results).
     insertImage: function(src, alt) {
       editor.chain().focus().insertContent({ type: "image", attrs: { src, alt: alt || null } }).run();
+    },
+    // Swift → JS: the page list the "@" mention menu searches. Pushed on load
+    // and on document switch so it tracks renames/creates.
+    setPages: function(pagesOrJson) {
+      const pages = typeof pagesOrJson === "string" ? JSON.parse(pagesOrJson) : pagesOrJson;
+      pageIndex.pages = Array.isArray(pages) ? pages : [];
+    },
+    // Swift → JS: a child page was created for "/Sub-page" — embed it here.
+    insertSubpage: function(id, title, emoji2) {
+      editor.chain().focus().insertContent({ type: "subpage", attrs: { noteID: id, title: title || "Untitled", emoji: emoji2 || null } }).run();
     }
   };
-  post2({ type: "ready" });
+  post4({ type: "ready" });
 })();

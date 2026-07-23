@@ -96,6 +96,12 @@ struct DatabaseRowPage: View {
                     context.insert(asset)
                     try? context.save()
                     return asset.id
+                },
+                // Mentions work in row pages; "/Sub-page" doesn't (a row is
+                // not a Note, so it can't parent one) — createSubpage stays nil.
+                pageList: { [context] in
+                    NotesStore(context: context).mentionablePages()
+                        .map { EditorPageRef(id: $0.id, title: $0.title, emoji: $0.emoji) }
                 }
             ))
             .frame(maxWidth: .infinity, maxHeight: .infinity)

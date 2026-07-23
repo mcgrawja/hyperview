@@ -58,6 +58,50 @@ struct BlockSerializerTests {
         ], "code block keeps the picked language")
     }
 
+    // MARK: Phase 3 page references
+
+    @Test func subpageEmbedRoundTrips() {
+        expectRoundTrip([
+            BlockContent(
+                kind: .subpage,
+                attrs: ["noteID": .string("11111111-2222-3333-4444-555555555555"), "title": .string("Child"), "emoji": .null]
+            ),
+        ], "subpage embed keeps its target and cached label")
+    }
+
+    @Test func inlineMentionPassesThroughParagraphContent() {
+        // Mentions are inline atoms INSIDE content — no serializer case needed;
+        // this pins that passthrough so a refactor can't silently drop them.
+        expectRoundTrip([
+            BlockContent(kind: .paragraph, content: [
+                .text("see "),
+                PMNode(type: "pageMention", attrs: ["noteID": .string("aaaa"), "title": .string("Other page")]),
+                .text(" for details"),
+            ]),
+        ], "inline pageMention nodes survive inside paragraph content")
+    }
+
+    @Test func refreshingPageRefsUpdatesLabelsEverywhere() {
+        let id = UUID()
+        let doc = PMNode(type: "doc", content: [
+            PMNode(type: "subpage", attrs: ["noteID": .string(id.uuidString), "title": .string("Old title")]),
+            PMNode(type: "paragraph", content: [
+                PMNode(type: "pageMention", attrs: ["noteID": .string(id.uuidString), "title": .string("Old title")]),
+            ]),
+            PMNode(type: "paragraph", content: [
+                PMNode(type: "pageMention", attrs: ["noteID": .string(UUID().uuidString), "title": .string("Gone page")]),
+            ]),
+        ])
+        let refreshed = BlockSerializer.refreshingPageRefs(doc) { requested in
+            requested == id ? (title: "New title", emoji: "🎯") : nil
+        }
+        #expect(refreshed.content?[0].attrs?["title"] == .string("New title"))
+        #expect(refreshed.content?[0].attrs?["emoji"] == .string("🎯"))
+        #expect(refreshed.content?[1].content?[0].attrs?["title"] == .string("New title"))
+        // Unresolvable (trashed/deleted) refs keep their last-known label.
+        #expect(refreshed.content?[2].content?[0].attrs?["title"] == .string("Gone page"))
+    }
+
     // MARK: Helpers
 
     /// Inline content for a plain text run.

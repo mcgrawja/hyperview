@@ -557,6 +557,9 @@ private struct PageHost: View {
 
     @State private var showingCheatsheet = false
     @State private var showingIconPicker = false
+    /// Pages whose content links here (link hrefs, @-mentions, subpage
+    /// embeds). Computed on page open, not live — cheap and good enough.
+    @State private var backlinks: [Note] = []
 
     private var byID: [UUID: Note] {
         Dictionary(uniqueKeysWithValues: allNotes.map { ($0.id, $0) })
@@ -677,6 +680,32 @@ private struct PageHost: View {
                 .padding(.bottom, Theme.Spacing.sm)
             }
 
+            // Backlinks — every page that references this one.
+            if !backlinks.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Label("Linked from", systemImage: "arrow.uturn.backward")
+                            .font(Theme.Font.cardCaption)
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                        ForEach(backlinks) { source in
+                            Button {
+                                open(source)
+                            } label: {
+                                Text("\(source.emoji ?? (source.kind == .database ? "📊" : "📄")) \(source.title.isEmpty ? "Untitled" : source.title)")
+                                    .font(Theme.Font.cardCaption)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, Theme.Spacing.sm)
+                                    .padding(.vertical, Theme.Spacing.xs)
+                                    .background(Theme.Palette.primary.softFill(0.10), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(.horizontal, Theme.Spacing.xl)
+                .padding(.bottom, Theme.Spacing.sm)
+            }
+
             if note.kind == .database {
                 // .id: DatabaseView's @Query predicates are built in its init,
                 // so switching databases must re-create the view.
@@ -690,6 +719,9 @@ private struct PageHost: View {
             }
         }
         .background(Theme.Palette.background)
+        .task(id: note.id) {
+            backlinks = NotesStore(context: context).backlinkSources(to: note.id)
+        }
     }
 }
 

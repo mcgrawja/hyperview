@@ -282,3 +282,29 @@ html, body {
 }
 .drag-handle:hover { background: var(--hv-code-bg); }
 .drag-handle:active { cursor: grabbing; }
+
+/* ---------- Phase 3: page links (Notion refocus) ---------- */
+
+/* Inline @-mention chip */
+.ProseMirror .page-mention {
+  display: inline;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--hv-code-bg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ProseMirror .page-mention:hover { text-decoration: underline; }
+
+/* Sub-page embed row */
+.ProseMirror .subpage-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.ProseMirror .subpage-block:hover { background: var(--hv-code-bg); }
+.ProseMirror .subpage-block .subpage-title { text-decoration: underline; text-decoration-color: var(--hv-rule); text-underline-offset: 3px; }

@@ -82,9 +82,60 @@ struct NotesStore {
     // MARK: Document load / save (editor bridge, §5)
 
     /// Assemble the note's blocks into a TipTap document (Swift → JS
-    /// `loadDocument`).
+    /// `loadDocument`), with page-reference labels refreshed from live data.
     func loadDocument(_ note: Note) -> PMNode {
-        BlockSerializer.document(from: note.blocks ?? [])
+        BlockSerializer.refreshingPageRefs(
+            BlockSerializer.document(from: note.blocks ?? []),
+            resolve: pageRefResolver()
+        )
+    }
+
+    /// Live title/emoji for a referenced page (subpage embeds, @-mentions).
+    /// Shared with DatabaseStore for row-page documents.
+    func pageRefResolver() -> (UUID) -> (title: String, emoji: String?)? {
+        { id in
+            var descriptor = FetchDescriptor<Note>(predicate: #Predicate { $0.id == id })
+            descriptor.fetchLimit = 1
+            guard let note = ((try? self.context.fetch(descriptor)) ?? []).first,
+                  !note.isTrashed else { return nil }
+            return (note.title, note.emoji)
+        }
+    }
+
+    /// The pages the editor's "@" mention menu can link (recency-ordered).
+    func mentionablePages(excluding excludedID: UUID? = nil) -> [(id: UUID, title: String, emoji: String?)] {
+        let descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { $0.deletedAt == nil && !$0.isArchived },
+            sortBy: [SortDescriptor(\.modifiedAt, order: .reverse)]
+        )
+        return ((try? context.fetch(descriptor)) ?? [])
+            .filter { $0.id != excludedID }
+            .map { ($0.id, $0.title, $0.emoji) }
+    }
+
+    /// Pages whose content references `noteID` — link hrefs, @-mentions, and
+    /// subpage embeds all carry the target's uuid inside block JSON, so one
+    /// byte-scan finds every kind. Personal-scale data keeps this cheap; an
+    /// index can come later if it ever isn't.
+    func backlinkSources(to noteID: UUID) -> [Note] {
+        let upper = noteID.uuidString
+        let lower = upper.lowercased()
+        let blocks = (try? context.fetch(FetchDescriptor<Block>(
+            predicate: #Predicate { $0.note?.deletedAt == nil }
+        ))) ?? []
+        var seen = Set<UUID>()
+        var sources: [Note] = []
+        for block in blocks {
+            guard let note = block.note,
+                  note.id != noteID,
+                  !note.isArchived,
+                  !seen.contains(note.id) else { continue }
+            let json = String(decoding: block.contentJSON, as: UTF8.self)
+            guard json.contains(upper) || json.contains(lower) else { continue }
+            seen.insert(note.id)
+            sources.append(note)
+        }
+        return sources.sorted { $0.modifiedAt > $1.modifiedAt }
     }
 
     /// Reconcile a full document back into the note's blocks (JS → Swift

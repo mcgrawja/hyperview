@@ -87,6 +87,13 @@ enum FileLinkBookmarks {
 /// (Unifyr 1.5) load/save the blocks scoped to one row. The bridge itself only
 /// ever sees this handle. `save` is responsible for persistence end to end
 /// (reconcile AND context.save).
+/// A page the editor can reference (mention menu entries, new sub-pages).
+nonisolated struct EditorPageRef {
+    let id: UUID
+    let title: String
+    let emoji: String?
+}
+
 @MainActor
 struct EditorDocument {
     let id: UUID
@@ -96,17 +103,26 @@ struct EditorDocument {
     /// note; returns the new asset id (image blocks reference it as
     /// `unifyr-asset://<uuid>`). nil = images unsupported in this context.
     let saveAsset: ((_ data: Data, _ filename: String, _ mimeType: String) -> UUID?)?
+    /// The pages the "@" mention menu can link. nil = mentions disabled.
+    let pageList: (() -> [EditorPageRef])?
+    /// "/Sub-page": create a child page of this document's page and return it
+    /// for inline embedding. nil = sub-pages unsupported (database row pages).
+    let createSubpage: (() -> EditorPageRef?)?
 
     init(
         id: UUID,
         load: @escaping () -> PMNode,
         save: @escaping (PMNode) -> Void,
-        saveAsset: ((Data, String, String) -> UUID?)? = nil
+        saveAsset: ((Data, String, String) -> UUID?)? = nil,
+        pageList: (() -> [EditorPageRef])? = nil,
+        createSubpage: (() -> EditorPageRef?)? = nil
     ) {
         self.id = id
         self.load = load
         self.save = save
         self.saveAsset = saveAsset
+        self.pageList = pageList
+        self.createSubpage = createSubpage
     }
 
     /// A whole note (the Phase-2 path).
@@ -122,6 +138,16 @@ struct EditorDocument {
             store.context.insert(asset)
             try? store.context.save()
             return asset.id
+        }
+        self.pageList = {
+            store.mentionablePages(excluding: note.id)
+                .map { EditorPageRef(id: $0.id, title: $0.title, emoji: $0.emoji) }
+        }
+        self.createSubpage = {
+            guard note.kind == .page, !note.isTrashed else { return nil }
+            let child = store.createPage(parent: note)
+            try? store.context.save()
+            return EditorPageRef(id: child.id, title: child.title, emoji: child.emoji)
         }
     }
 }
@@ -357,6 +383,17 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         case "requestImage":
             pickImage()
 
+        case "createSubpage":
+            // "/Sub-page": Swift creates the child page, the editor embeds it.
+            guard let document, let child = document.createSubpage?() else { return }
+            let idLiteral = Self.jsLiteral(child.id.uuidString)
+            let titleLiteral = Self.jsLiteral(child.title)
+            let emojiLiteral = child.emoji.map(Self.jsLiteral) ?? "null"
+            webView?.evaluateJavaScript(
+                "window.hyperview.insertSubpage(\(idLiteral), \(titleLiteral), \(emojiLiteral));",
+                completionHandler: nil
+            )
+
         case "openLink":
             if let href = body["href"] as? String { openLink(href) }
 
@@ -489,5 +526,18 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         // window.hyperview: bundled-JS wire name (see insertLink).
         webView?.evaluateJavaScript("window.hyperview.loadDocument(\(literal));", completionHandler: nil)
         loadedDocumentID = document.id
+        pushPages(for: document)
+    }
+
+    /// Refresh the "@" mention menu's page index (per document load, so it
+    /// tracks creates/renames without a live feed).
+    private func pushPages(for document: EditorDocument) {
+        guard let pages = document.pageList?() else { return }
+        let array: [[String: String]] = pages.map {
+            ["id": $0.id.uuidString, "title": $0.title, "emoji": $0.emoji ?? ""]
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: array) else { return }
+        let literal = Self.jsLiteral(String(decoding: data, as: UTF8.self))
+        webView?.evaluateJavaScript("window.hyperview.setPages(\(literal));", completionHandler: nil)
     }
 }

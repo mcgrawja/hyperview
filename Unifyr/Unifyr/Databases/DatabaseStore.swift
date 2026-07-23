@@ -320,7 +320,11 @@ struct DatabaseStore {
         let blocks = (note.blocks ?? [])
             .filter { $0.rowID == row.id }
             .sorted { $0.sortKey < $1.sortKey }
-        return BlockSerializer.document(from: blocks)
+        // Same live-label refresh as note pages (mentions work in row pages).
+        return BlockSerializer.refreshingPageRefs(
+            BlockSerializer.document(from: blocks),
+            resolve: NotesStore(context: context).pageRefResolver()
+        )
     }
 
     func saveRowDocument(_ document: PMNode, row: DBRow, in note: Note) {

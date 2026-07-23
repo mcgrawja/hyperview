@@ -45,6 +45,8 @@ const ITEMS = [
     run: (e, r) => e.chain().focus().deleteRange(r).setHorizontalRule().run() },
   { title: "Table", hint: "3×3 table with header row", keywords: "table grid cells",
     run: (e, r) => e.chain().focus().deleteRange(r).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() },
+  { title: "Sub-page", hint: "Create a page inside this page", keywords: "subpage child page new nested",
+    run: (e, r) => { e.chain().focus().deleteRange(r).run(); post({ type: "createSubpage" }); } },
   { title: "Link to note", hint: "Link to another Hyperview note", keywords: "link note wiki [[",
     run: (e, r) => { e.chain().focus().deleteRange(r).run(); post({ type: "requestNoteLink" }); } },
   { title: "Link to file", hint: "Link to a file on this Mac", keywords: "link file attach finder",
@@ -63,7 +65,8 @@ const ITEMS = [
     run: (e, r) => e.chain().focus().deleteRange(r).deleteTable().run() },
 ];
 
-class SlashMenu {
+// Shared by the "/" command menu and the "@" page-mention menu (page-mention.js).
+export class CommandMenu {
   constructor() {
     this.element = document.createElement("div");
     this.element.className = "slash-menu";
@@ -177,7 +180,7 @@ export const SlashCommands = Extension.create({
         command: ({ editor, range, props }) => props.run(editor, range),
         render: () => ({
           onStart: (props) => {
-            menu = new SlashMenu();
+            menu = new CommandMenu();
             menu.selected = 0;
             menu.update(props);
           },

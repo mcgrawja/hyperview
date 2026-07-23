@@ -30,6 +30,8 @@ import { Callout } from "./callout.js";
 import { Toggle, ToggleSummary, ToggleBody } from "./toggle.js";
 import { CodeBlock } from "./code-block.js";
 import { DragHandle } from "./drag-handle.js";
+import { PageMention, PageMentionSuggestion, pageIndex } from "./page-mention.js";
+import { Subpage } from "./subpage.js";
 
 function post(msg) {
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -90,6 +92,9 @@ const editor = new Editor({
     ToggleSummary,
     ToggleBody,
     DragHandle,
+    PageMention,
+    PageMentionSuggestion,
+    Subpage,
     Placeholder.configure({ placeholder: "Type ‘/’ for commands…" }),
     SlashCommands,
   ],
@@ -158,6 +163,20 @@ window.hyperview = {
       .chain()
       .focus()
       .insertContent({ type: "image", attrs: { src: src, alt: alt || null } })
+      .run();
+  },
+  // Swift → JS: the page list the "@" mention menu searches. Pushed on load
+  // and on document switch so it tracks renames/creates.
+  setPages: function (pagesOrJson) {
+    const pages = typeof pagesOrJson === "string" ? JSON.parse(pagesOrJson) : pagesOrJson;
+    pageIndex.pages = Array.isArray(pages) ? pages : [];
+  },
+  // Swift → JS: a child page was created for "/Sub-page" — embed it here.
+  insertSubpage: function (id, title, emoji) {
+    editor
+      .chain()
+      .focus()
+      .insertContent({ type: "subpage", attrs: { noteID: id, title: title || "Untitled", emoji: emoji || null } })
       .run();
   },
 };

@@ -116,6 +116,9 @@ nonisolated enum BlockSerializer {
                 // through whole, like a table.
                 result.append(BlockContent(kind: .toggle, attrs: node.attrs, content: node.content ?? []))
 
+            case "subpage":
+                result.append(BlockContent(kind: .subpage, attrs: node.attrs))
+
             default:
                 // Unknown node: preserve its inline content as a paragraph so no
                 // text is silently dropped.
@@ -223,6 +226,8 @@ nonisolated enum BlockSerializer {
             return PMNode(type: "callout", attrs: block.attrs, content: block.content)
         case .toggle:
             return PMNode(type: "toggle", attrs: block.attrs, content: block.content)
+        case .subpage:
+            return PMNode(type: "subpage", attrs: block.attrs)
         case .bullet, .numbered, .todo:
             // Handled by the list-grouping path in `document(from:)`; a lone list
             // block still serializes sensibly as a single-item list.
@@ -252,6 +257,34 @@ nonisolated enum BlockSerializer {
 
     private static func encodePayload(_ payload: BlockPayload) -> Data {
         (try? encoder.encode(payload)) ?? Data()
+    }
+}
+
+// MARK: - Page-reference refresh (Phase 3)
+
+nonisolated extension BlockSerializer {
+    /// Rewrite the cached title/emoji attrs of page-reference nodes (subpage
+    /// blocks, inline pageMention chips) from live data, so renames and icon
+    /// changes propagate every time a document loads. `resolve` returns nil
+    /// for unknown/trashed pages — those keep their last-known label.
+    static func refreshingPageRefs(
+        _ node: PMNode,
+        resolve: (UUID) -> (title: String, emoji: String?)?
+    ) -> PMNode {
+        var out = node
+        if node.type == "subpage" || node.type == "pageMention",
+           let idString = node.attrs?["noteID"]?.stringValue,
+           let id = UUID(uuidString: idString),
+           let live = resolve(id) {
+            var attrs = out.attrs ?? [:]
+            attrs["title"] = .string(live.title.isEmpty ? "Untitled" : live.title)
+            attrs["emoji"] = live.emoji.map { PMValue.string($0) } ?? .null
+            out.attrs = attrs
+        }
+        if let content = node.content {
+            out.content = content.map { refreshingPageRefs($0, resolve: resolve) }
+        }
+        return out
     }
 }
 
