@@ -61,6 +61,73 @@ struct DatabaseStore {
         }
     }
 
+    /// Copy a database's payload onto a freshly duplicated note (Phase 5):
+    /// properties, rows, cells — new UUIDs throughout — plus saved views with
+    /// their property references remapped. Relations and relationTargetIDs
+    /// keep pointing at the ORIGINAL targets (a duplicated tracker still
+    /// relates to the same other databases). Returns oldRowID → newRowID so
+    /// the caller can re-home row-page blocks.
+    func duplicateData(from source: Note, to copy: Note) -> [UUID: UUID] {
+        var propertyIDMap: [UUID: UUID] = [:]
+        for property in fetchProperties(databaseNoteID: source.id) {
+            let propertyCopy = DBProperty(
+                databaseNoteID: copy.id,
+                name: property.name,
+                kind: property.propertyKind,
+                configJSON: property.configJSON,
+                sortKey: property.sortKey
+            )
+            context.insert(propertyCopy)
+            propertyIDMap[property.id] = propertyCopy.id
+        }
+
+        var rowIDMap: [UUID: UUID] = [:]
+        for row in fetchRows(databaseNoteID: source.id) {
+            let rowCopy = DBRow(databaseNoteID: copy.id, sortKey: row.sortKey)
+            context.insert(rowCopy)
+            rowIDMap[row.id] = rowCopy.id
+        }
+
+        for (oldRowID, newRowID) in rowIDMap {
+            for (oldPropertyID, newPropertyID) in propertyIDMap {
+                let cell = value(rowID: oldRowID, propertyID: oldPropertyID)
+                guard !cell.isEmpty else { continue }
+                context.insert(DBValue(rowID: newRowID, propertyID: newPropertyID, valueJSON: cell.encoded()))
+            }
+        }
+
+        // Saved views / board grouping reference property ids — remap them
+        // onto the copies or every view filter goes silently inert.
+        var settings = settings(of: copy)
+        settings.boardGroupPropertyID = settings.boardGroupPropertyID.flatMap { propertyIDMap[$0] }
+        settings.views = settings.views.map { views in
+            views.map { view in
+                var v = view
+                v.id = UUID()
+                v.groupPropertyID = view.groupPropertyID.flatMap { propertyIDMap[$0] }
+                v.filters = view.filters.map { filters in
+                    filters.map { filter in
+                        var f = filter
+                        f.id = UUID()
+                        f.propertyID = filter.propertyID.flatMap { propertyIDMap[$0] }
+                        return f
+                    }
+                }
+                v.sorts = view.sorts.map { sorts in
+                    sorts.map { sort in
+                        var s = sort
+                        s.id = UUID()
+                        s.propertyID = sort.propertyID.flatMap { propertyIDMap[$0] }
+                        return s
+                    }
+                }
+                return v
+            }
+        }
+        setSettings(settings, on: copy)
+        return rowIDMap
+    }
+
     /// Everything a database owns besides its Note + Blocks (those cascade with
     /// the Note). Called from NotesStore's permanent delete; a no-op for pages.
     func purgeDatabaseData(noteID: UUID) {

@@ -114,6 +114,87 @@ struct PageTreeTests {
         #expect(root.parentNoteID == other.id)
     }
 
+    @Test func duplicateDeepCopiesSubtreeAndRemapsReferences() throws {
+        let context = makeContext()
+        let store = NotesStore(context: context)
+        let root = store.createPage(title: "Template")
+        let child = store.createPage(title: "Child", parent: root)
+
+        // Root content: a paragraph + a subpage embed referencing the child.
+        let doc = PMNode(type: "doc", content: [
+            PMNode(type: "paragraph", content: [.text("hello")]),
+            PMNode(type: "subpage", attrs: [
+                "noteID": .string(child.id.uuidString),
+                "title": .string("Child"),
+            ]),
+        ])
+        store.save(doc, to: root)
+
+        // Child is a database with one filled cell and a saved view.
+        let dbStore = DatabaseStore(context: context)
+        dbStore.seedNewDatabase(child)
+        let name = dbStore.fetchProperties(databaseNoteID: child.id)[0]
+        let row = dbStore.fetchRows(databaseNoteID: child.id)[0]
+        var cell = DBCellValue()
+        cell.text = "cell"
+        dbStore.setValue(cell, rowID: row.id, propertyID: name.id, in: child)
+        var view = DBViewConfig()
+        view.name = "Mine"
+        var sort = DBSort()
+        sort.propertyID = name.id
+        view.sorts = [sort]
+        dbStore.upsertView(view, on: child)
+        try context.save()
+
+        let propertiesBefore = try context.fetchCount(FetchDescriptor<DBProperty>())
+        let copy = store.duplicate(root, in: allNotes(context))
+        try context.save()
+
+        #expect(copy.title == "Template copy")
+        #expect(copy.id != root.id)
+
+        // The subtree came along, as new notes.
+        let all = allNotes(context)
+        let copiedChild = try #require(all.first { $0.parentNoteID == copy.id })
+        #expect(copiedChild.id != child.id)
+        #expect(copiedChild.kind == .database)
+
+        // Database payload doubled, with remapped ids.
+        #expect(try context.fetchCount(FetchDescriptor<DBProperty>()) == propertiesBefore * 2)
+        let copiedTitles = dbStore.rowTitles(databaseNoteID: copiedChild.id).map(\.title)
+        #expect(copiedTitles.contains("cell"))
+        // The saved view's sort re-points at the COPIED property.
+        let copiedView = try #require(dbStore.views(of: copiedChild).first)
+        let copiedName = dbStore.fetchProperties(databaseNoteID: copiedChild.id)[0]
+        #expect(copiedView.sorts?.first?.propertyID == copiedName.id)
+
+        // The copied subpage embed points at the COPIED child, not the original.
+        let copiedJSON = (copy.blocks ?? [])
+            .map { String(decoding: $0.contentJSON, as: UTF8.self) }
+            .joined()
+        #expect(copiedJSON.contains(copiedChild.id.uuidString))
+        #expect(!copiedJSON.contains(child.id.uuidString))
+
+        // The original is untouched.
+        #expect((root.blocks ?? []).count == 2)
+        #expect(store.descendants(of: root, in: all).count == 1)
+    }
+
+    @Test func pagePropsRoundTripAndEmptyEncodesNil() {
+        var props = PageProps()
+        #expect(props.encoded() == nil) // untouched pages stay byte-identical
+
+        props.coverKind = "gradient"
+        props.coverHex = "#3E8EF7"
+        props.coverHex2 = "#8B7CF6"
+        props.wideLayout = true
+        let data = props.encoded()
+        #expect(data != nil)
+        let decoded = PageProps.decode(data)
+        #expect(decoded == props)
+        #expect(decoded.hasCover)
+    }
+
     @Test func permanentDeletePurgesSubtreeIncludingDatabases() {
         let context = makeContext()
         let (store, root, child, _, _) = makeTree(context)

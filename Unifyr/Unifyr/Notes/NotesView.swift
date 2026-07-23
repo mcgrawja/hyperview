@@ -28,6 +28,8 @@ struct NotesView: View {
     @State private var showingTrash = false
     /// Collapsed page ids, comma-separated — a per-device view preference.
     @AppStorage("notes.collapsedPages") private var collapsedPagesRaw = ""
+    /// Tags section fold (Jason, 2026-07-22) — per-device.
+    @AppStorage("notes.tagsCollapsed") private var tagsCollapsed = false
     @State private var showingNoteLinkPicker = false
     @Environment(\.isCompactLayout) private var isCompact
     // iOS file links: the editor can't open a modal panel, so this view owns
@@ -207,25 +209,48 @@ struct NotesView: View {
                 }
 
                 if !allTags.isEmpty {
-                    Section("Tags") {
-                        ForEach(allTags) { tag in
-                            Button {
-                                selectedTagID = selectedTagID == tag.id ? nil : tag.id
-                            } label: {
-                                HStack(spacing: Theme.Spacing.sm) {
-                                    Circle()
-                                        .fill(Color(hexString: tag.colorHex) ?? Theme.Palette.primary)
-                                        .frame(width: 9, height: 9)
-                                    Text(tag.name).lineLimit(1)
-                                    Spacer()
+                    Section {
+                        if !tagsCollapsed {
+                            ForEach(allTags) { tag in
+                                Button {
+                                    selectedTagID = selectedTagID == tag.id ? nil : tag.id
+                                } label: {
+                                    HStack(spacing: Theme.Spacing.sm) {
+                                        Circle()
+                                            .fill(Color(hexString: tag.colorHex) ?? Theme.Palette.primary)
+                                            .frame(width: 9, height: 9)
+                                        Text(tag.name).lineLimit(1)
+                                        Spacer()
+                                    }
+                                    .contentShape(Rectangle())
                                 }
-                                .contentShape(Rectangle())
+                                .buttonStyle(.plain)
+                                .listRowBackground(
+                                    selectedTagID == tag.id ? Theme.Palette.primary.softFill(0.12) : Color.clear
+                                )
                             }
-                            .buttonStyle(.plain)
-                            .listRowBackground(
-                                selectedTagID == tag.id ? Theme.Palette.primary.softFill(0.12) : Color.clear
-                            )
                         }
+                    } header: {
+                        // Collapsible (Jason): the twist folds the whole tag
+                        // list; collapsing also clears an active tag filter so
+                        // the tree doesn't stay silently filtered.
+                        Button {
+                            tagsCollapsed.toggle()
+                            if tagsCollapsed { selectedTagID = nil }
+                        } label: {
+                            HStack(spacing: Theme.Spacing.xs) {
+                                Text("Tags")
+                                Image(systemName: tagsCollapsed ? "chevron.right" : "chevron.down")
+                                    .font(.system(size: 9, weight: .semibold))
+                                Spacer()
+                                if tagsCollapsed {
+                                    Text("\(allTags.count)")
+                                        .foregroundStyle(Theme.Palette.textSecondary)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
 
@@ -414,6 +439,11 @@ struct NotesView: View {
                 }
             }
             moveUpDownButtons(note)
+            Button("Duplicate") {
+                let copy = store.duplicate(note, in: notes)
+                try? context.save()
+                selectedNote = copy
+            }
             Divider()
             TagMenu(kind: TagKind.note, key: note.id.uuidString)
             Button(PinStore.isPinned(note: note.id) ? "Unpin from Dashboard" : "Pin to Dashboard") {
@@ -571,6 +601,8 @@ private struct PageHost: View {
 
     @State private var showingCheatsheet = false
     @State private var showingIconPicker = false
+    @State private var showingCoverPicker = false
+    @State private var showingCoverImporter = false
     /// Pages whose content links here (link hrefs, @-mentions, subpage
     /// embeds). Computed on page open, not live — cheap and good enough.
     @State private var backlinks: [Note] = []
@@ -598,6 +630,27 @@ private struct PageHost: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if note.pageProps.hasCover {
+                PageCoverView(note: note)
+                    .frame(height: 140)
+                    .frame(maxWidth: .infinity)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture { showingCoverPicker = true }
+                    .contextMenu {
+                        Button("Change Cover…") { showingCoverPicker = true }
+                        Button("Remove Cover", role: .destructive) {
+                            var props = note.pageProps
+                            props.coverKind = nil
+                            props.coverHex = nil
+                            props.coverHex2 = nil
+                            props.coverAssetID = nil
+                            note.pageProps = props
+                            try? context.save()
+                        }
+                    }
+            }
+
             if !breadcrumbs.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Theme.Spacing.xs) {
@@ -653,6 +706,55 @@ private struct PageHost: View {
                     .popover(isPresented: $showingCheatsheet, arrowEdge: .top) {
                         MarkdownCheatsheet()
                     }
+                }
+
+                // Page options: cover, layout, duplicate.
+                Menu {
+                    Button(note.pageProps.hasCover ? "Change Cover…" : "Add Cover…") {
+                        showingCoverPicker = true
+                    }
+                    if note.pageProps.hasCover {
+                        Button("Remove Cover", role: .destructive) {
+                            var props = note.pageProps
+                            props.coverKind = nil
+                            props.coverHex = nil
+                            props.coverHex2 = nil
+                            props.coverAssetID = nil
+                            note.pageProps = props
+                            try? context.save()
+                        }
+                    }
+                    if note.kind == .page {
+                        Divider()
+                        Button((note.pageProps.wideLayout ?? false) ? "Centered Layout" : "Full-Width Layout") {
+                            var props = note.pageProps
+                            props.wideLayout = (props.wideLayout ?? false) ? nil : true
+                            note.pageProps = props
+                            try? context.save()
+                        }
+                    }
+                    Divider()
+                    Button("Duplicate Page") {
+                        let copy = NotesStore(context: context).duplicate(note, in: allNotes)
+                        try? context.save()
+                        open(copy)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title3)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .popover(isPresented: $showingCoverPicker) {
+                    CoverPicker(note: note) {
+                        showingCoverImporter = true
+                    }
+                }
+                .fileImporter(isPresented: $showingCoverImporter, allowedContentTypes: [.image]) { result in
+                    guard case .success(let url) = result else { return }
+                    setImageCover(from: url)
                 }
             }
             .padding(.horizontal, Theme.Spacing.xl)
@@ -736,6 +838,135 @@ private struct PageHost: View {
         .task(id: note.id) {
             backlinks = NotesStore(context: context).backlinkSources(to: note.id)
         }
+    }
+
+    /// Picked cover image → Asset → asset cover.
+    private func setImageCover(from url: URL) {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else { return }
+        let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "image/png"
+        let asset = Asset(noteID: note.id, filename: url.lastPathComponent, mimeType: mimeType, data: data)
+        context.insert(asset)
+        var props = note.pageProps
+        props.coverKind = "asset"
+        props.coverHex = nil
+        props.coverHex2 = nil
+        props.coverAssetID = asset.id
+        note.pageProps = props
+        try? context.save()
+    }
+}
+
+// MARK: - Page covers (Phase 5)
+
+/// The cover band: preset color, gradient, or an Asset image.
+private struct PageCoverView: View {
+    let note: Note
+    @Environment(\.modelContext) private var context
+
+    var body: some View {
+        let props = note.pageProps
+        switch props.coverKind {
+        case "color":
+            (Color(hexString: props.coverHex ?? "") ?? Theme.Palette.primary).opacity(0.85)
+        case "gradient":
+            LinearGradient(
+                colors: [
+                    Color(hexString: props.coverHex ?? "") ?? Theme.Palette.primary,
+                    Color(hexString: props.coverHex2 ?? "") ?? Theme.Palette.claude,
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .opacity(0.85)
+        case "asset":
+            if let assetID = props.coverAssetID, let image = coverImage(assetID) {
+                Image(platformImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Theme.Palette.surfaceRaised
+            }
+        default:
+            Theme.Palette.surfaceRaised
+        }
+    }
+
+    private func coverImage(_ id: UUID) -> PlatformImage? {
+        var descriptor = FetchDescriptor<Asset>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        guard let asset = ((try? context.fetch(descriptor)) ?? []).first else { return nil }
+        return PlatformImage(data: asset.data)
+    }
+}
+
+/// Preset cover picker: gradients, solids, or an image from disk.
+private struct CoverPicker: View {
+    @Bindable var note: Note
+    let chooseImage: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            Text("Gradients")
+                .font(Theme.Font.cardCaption)
+                .foregroundStyle(Theme.Palette.textSecondary)
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(72)), count: 3), spacing: Theme.Spacing.sm) {
+                ForEach(Array(CoverPresets.gradients.enumerated()), id: \.offset) { _, pair in
+                    Button {
+                        apply(kind: "gradient", hex: pair.0, hex2: pair.1)
+                    } label: {
+                        LinearGradient(
+                            colors: [Color(hexString: pair.0) ?? .blue, Color(hexString: pair.1) ?? .purple],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                        .frame(width: 72, height: 36)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Text("Colors")
+                .font(Theme.Font.cardCaption)
+                .foregroundStyle(Theme.Palette.textSecondary)
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(72)), count: 3), spacing: Theme.Spacing.sm) {
+                ForEach(CoverPresets.colors, id: \.self) { hex in
+                    Button {
+                        apply(kind: "color", hex: hex, hex2: nil)
+                    } label: {
+                        (Color(hexString: hex) ?? .blue)
+                            .frame(width: 72, height: 36)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Button {
+                dismiss()
+                chooseImage()
+            } label: {
+                Label("Choose Image…", systemImage: "photo")
+            }
+        }
+        .padding(Theme.Spacing.md)
+        .frame(width: 270)
+    }
+
+    private func apply(kind: String, hex: String?, hex2: String?) {
+        var props = note.pageProps
+        props.coverKind = kind
+        props.coverHex = hex
+        props.coverHex2 = hex2
+        props.coverAssetID = nil
+        note.pageProps = props
+        try? context.save()
+        dismiss()
     }
 }
 

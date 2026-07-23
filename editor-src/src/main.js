@@ -33,6 +33,7 @@ import { DragHandle } from "./drag-handle.js";
 import { PageMention, PageMentionSuggestion, pageIndex } from "./page-mention.js";
 import { Subpage } from "./subpage.js";
 import { DBEmbed, deliverDBEmbed } from "./dbembed.js";
+import { ColumnList, Column } from "./columns.js";
 
 function post(msg) {
   if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -97,6 +98,8 @@ const editor = new Editor({
     PageMentionSuggestion,
     Subpage,
     DBEmbed,
+    ColumnList,
+    Column,
     Placeholder.configure({ placeholder: "Type ‘/’ for commands…" }),
     SlashCommands,
   ],
@@ -194,6 +197,10 @@ window.hyperview = {
   },
   // Swift → JS: a dbembed snapshot answering requestDBEmbed.
   deliverDBEmbed: deliverDBEmbed,
+  // Swift → JS: centered column (default) vs full-width (PageProps.wideLayout).
+  setWide: function (wide) {
+    document.body.classList.toggle("wide", !!wide);
+  },
 };
 
 post({ type: "ready" });

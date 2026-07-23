@@ -24225,6 +24225,24 @@ img.ProseMirror-separator {
       }
     },
     {
+      title: "2 Columns",
+      hint: "Side-by-side layout",
+      keywords: "columns two layout side",
+      run: (e, r2) => {
+        e.chain().focus().deleteRange(r2).run();
+        e.commands.setColumns(2);
+      }
+    },
+    {
+      title: "3 Columns",
+      hint: "Three-column layout",
+      keywords: "columns three layout side",
+      run: (e, r2) => {
+        e.chain().focus().deleteRange(r2).run();
+        e.commands.setColumns(3);
+      }
+    },
+    {
       title: "Divider",
       hint: "Horizontal rule",
       keywords: "hr rule line ---",
@@ -40141,6 +40159,43 @@ img.ProseMirror-separator {
     }
   }
 
+  // src/columns.js
+  var Column = Node2.create({
+    name: "column",
+    content: "block+",
+    defining: true,
+    isolating: true,
+    parseHTML() {
+      return [{ tag: "div.column" }];
+    },
+    renderHTML() {
+      return ["div", { class: "column" }, 0];
+    }
+  });
+  var ColumnList = Node2.create({
+    name: "columnList",
+    group: "block",
+    content: "column{2,4}",
+    defining: true,
+    parseHTML() {
+      return [{ tag: "div.column-list" }];
+    },
+    renderHTML() {
+      return ["div", { class: "column-list" }, 0];
+    },
+    addCommands() {
+      return {
+        setColumns: (count) => ({ chain }) => {
+          const columns = [];
+          for (let i = 0; i < count; i++) {
+            columns.push({ type: "column", content: [{ type: "paragraph" }] });
+          }
+          return chain().insertContent({ type: this.name, content: columns }).run();
+        }
+      };
+    }
+  });
+
   // src/main.js
   function post5(msg) {
     if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hyperview) {
@@ -40196,6 +40251,8 @@ img.ProseMirror-separator {
       PageMentionSuggestion,
       Subpage,
       DBEmbed,
+      ColumnList,
+      Column,
       Placeholder.configure({ placeholder: "Type \u2018/\u2019 for commands\u2026" }),
       SlashCommands
     ],
@@ -40269,7 +40326,11 @@ img.ProseMirror-separator {
       }).run();
     },
     // Swift → JS: a dbembed snapshot answering requestDBEmbed.
-    deliverDBEmbed
+    deliverDBEmbed,
+    // Swift → JS: centered column (default) vs full-width (PageProps.wideLayout).
+    setWide: function(wide) {
+      document.body.classList.toggle("wide", !!wide);
+    }
   };
   post5({ type: "ready" });
 })();

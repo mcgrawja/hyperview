@@ -235,6 +235,94 @@ struct NotesStore {
         note.modifiedAt = Date()
     }
 
+    // MARK: Duplicate (Phase 5)
+
+    /// Deep-copy a page: its content, its database data, and its whole
+    /// subtree. References BETWEEN duplicated pages (subpage embeds, mentions,
+    /// dbembeds) are remapped onto the copies; references OUT of the subtree
+    /// keep pointing at the originals. This is also the poor-man's template:
+    /// keep a template page anywhere and Duplicate it.
+    @discardableResult
+    func duplicate(_ note: Note, in all: [Note]) -> Note {
+        var idMap: [UUID: UUID] = [:]
+        var copies: [Note] = []
+        let copy = duplicateSubtree(note, under: note.parentNoteID, all: all, idMap: &idMap, copies: &copies, isRoot: true)
+        remapReferences(in: copies, idMap: idMap)
+        return copy
+    }
+
+    private func duplicateSubtree(
+        _ source: Note,
+        under parentID: UUID?,
+        all: [Note],
+        idMap: inout [UUID: UUID],
+        copies: inout [Note],
+        isRoot: Bool
+    ) -> Note {
+        let copy = Note(
+            title: isRoot && !source.title.isEmpty ? "\(source.title) copy" : source.title,
+            emoji: source.emoji,
+            sortKey: FractionalIndex.keyAfter(lastChildSortKey(parentID: parentID))
+        )
+        copy.parentNoteID = parentID
+        copy.noteKind = source.noteKind
+        copy.pagePropsJSON = source.pagePropsJSON
+        copy.schemaJSON = source.schemaJSON
+        context.insert(copy)
+        idMap[source.id] = copy.id
+        copies.append(copy)
+
+        // Database payload first — row copies mint the id map page blocks need.
+        var rowIDMap: [UUID: UUID] = [:]
+        if source.kind == .database {
+            rowIDMap = DatabaseStore(context: context).duplicateData(from: source, to: copy)
+        }
+
+        for block in (source.blocks ?? []).sorted(by: { $0.sortKey < $1.sortKey }) {
+            // A row block whose row didn't copy (stale rowID) is dropped.
+            var newRowID: UUID? = nil
+            if let rowID = block.rowID {
+                guard let mapped = rowIDMap[rowID] else { continue }
+                newRowID = mapped
+            }
+            let blockCopy = Block(
+                note: copy,
+                parentBlockID: nil,
+                sortKey: block.sortKey,
+                kind: block.blockKind,
+                contentJSON: block.contentJSON
+            )
+            blockCopy.isChecked = block.isChecked
+            blockCopy.rowID = newRowID
+            context.insert(blockCopy)
+        }
+
+        for child in all where child.parentNoteID == source.id && !child.isTrashed {
+            _ = duplicateSubtree(child, under: copy.id, all: all, idMap: &idMap, copies: &copies, isRoot: false)
+        }
+        return copy
+    }
+
+    /// Rewrite uuid references inside copied block JSON so links between
+    /// duplicated pages land on the copies (subpage/mention/dbembed attrs and
+    /// hyperview://note/ hrefs all embed the uuid string).
+    private func remapReferences(in copies: [Note], idMap: [UUID: UUID]) {
+        for copy in copies {
+            for block in copy.blocks ?? [] {
+                var json = String(decoding: block.contentJSON, as: UTF8.self)
+                guard !json.isEmpty else { continue }
+                var changed = false
+                for (old, new) in idMap where json.contains(old.uuidString) {
+                    json = json.replacingOccurrences(of: old.uuidString, with: new.uuidString)
+                    changed = true
+                }
+                if changed {
+                    block.contentJSON = Data(json.utf8)
+                }
+            }
+        }
+    }
+
     // MARK: Delete / archive
     //
     // Deleting a page takes its WHOLE subtree to the trash (Notion semantics):

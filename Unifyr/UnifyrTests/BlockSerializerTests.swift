@@ -58,6 +58,18 @@ struct BlockSerializerTests {
         ], "code block keeps the picked language")
     }
 
+    @Test func columnsRoundTripWholeLayout() {
+        expectRoundTrip([
+            BlockContent(kind: .columns, content: [
+                PMNode(type: "column", content: [PMNode(type: "paragraph", content: text("left"))]),
+                PMNode(type: "column", content: [
+                    PMNode(type: "paragraph", content: text("right")),
+                    PMNode(type: "callout", attrs: ["emoji": .string("💡")], content: [PMNode(type: "paragraph", content: text("nested"))]),
+                ]),
+            ]),
+        ], "column layout passes its columns (and their blocks) through whole")
+    }
+
     // MARK: Phase 3 page references
 
     @Test func subpageEmbedRoundTrips() {

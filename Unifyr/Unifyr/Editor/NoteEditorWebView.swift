@@ -111,6 +111,8 @@ struct EditorDocument {
     /// dbembed blocks: (databaseID, viewID) → snapshot JSON for the read-only
     /// preview, nil when the database is gone.
     let dbEmbedSnapshot: ((UUID, UUID?) -> String?)?
+    /// Full-width editing (PageProps.wideLayout); default is a centered column.
+    var wide: Bool = false
 
     init(
         id: UUID,
@@ -119,7 +121,8 @@ struct EditorDocument {
         saveAsset: ((Data, String, String) -> UUID?)? = nil,
         pageList: (() -> [EditorPageRef])? = nil,
         createSubpage: (() -> EditorPageRef?)? = nil,
-        dbEmbedSnapshot: ((UUID, UUID?) -> String?)? = nil
+        dbEmbedSnapshot: ((UUID, UUID?) -> String?)? = nil,
+        wide: Bool = false
     ) {
         self.id = id
         self.load = load
@@ -128,6 +131,7 @@ struct EditorDocument {
         self.pageList = pageList
         self.createSubpage = createSubpage
         self.dbEmbedSnapshot = dbEmbedSnapshot
+        self.wide = wide
     }
 
     /// A whole note (the Phase-2 path).
@@ -158,6 +162,7 @@ struct EditorDocument {
             DatabaseStore(context: store.context)
                 .embedSnapshotJSON(databaseID: databaseID, viewID: viewID)
         }
+        self.wide = note.pageProps.wideLayout ?? false
     }
 }
 
@@ -325,8 +330,21 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         // one — persist them before its content is swapped out.
         if document.id != loadedDocumentID { flushPendingSave() }
         self.document = document
+        // Layout can change without a document switch (the ••• menu toggle).
+        if isReady { applyWide(document.wide) }
         guard isReady, document.id != loadedDocumentID else { return }
         loadDocument(for: document)
+    }
+
+    private var appliedWide: Bool?
+
+    private func applyWide(_ wide: Bool) {
+        guard appliedWide != wide else { return }
+        appliedWide = wide
+        webView?.evaluateJavaScript(
+            "window.hyperview.setWide(\(wide ? "true" : "false"));",
+            completionHandler: nil
+        )
     }
 
     /// Final teardown from the representable's dismantle: persist anything
@@ -585,6 +603,7 @@ final class EditorBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate
         webView?.evaluateJavaScript("window.hyperview.loadDocument(\(literal));", completionHandler: nil)
         loadedDocumentID = document.id
         pushPages(for: document)
+        applyWide(document.wide)
     }
 
     /// Refresh the "@" mention menu's page index (per document load, so it

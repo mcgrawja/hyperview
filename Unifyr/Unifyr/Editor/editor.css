@@ -349,3 +349,27 @@ html, body {
   color: var(--hv-secondary);
   font-size: 0.85em;
 }
+
+/* ---------- Phase 5: layout ---------- */
+
+/* Centered column by default (Notion); body.wide = full width. */
+.ProseMirror {
+  max-width: 760px;
+  margin: 0 auto;
+}
+body.wide .ProseMirror {
+  max-width: none;
+  margin: 0;
+}
+
+/* Columns */
+.ProseMirror .column-list {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+.ProseMirror .column {
+  flex: 1;
+  min-width: 0;
+}
+.ProseMirror .column > * + * { margin-top: 0.55em; }
